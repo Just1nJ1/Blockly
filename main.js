@@ -55,8 +55,8 @@ function findPython() {
   const possibilities = [
     // In packaged app – extraResources land under process.resourcesPath
     path.join(process.resourcesPath, relativePath),
-    // In development – relative to project root
-    path.join(__dirname, relativePath),
+    // In development – resources/python (downloaded via scripts/download-python.js)
+    path.join(__dirname, 'resources', relativePath),
   ];
   for (const p of possibilities) {
     log(`Checking for Python at: ${p}`);

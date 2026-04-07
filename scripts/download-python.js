@@ -30,24 +30,22 @@ const DOWNLOADS = {
   'macos-arm64': {
     url: `${STANDALONE_BASE}/${STANDALONE_VERSION}/cpython-${STANDALONE_PYTHON}+${STANDALONE_VERSION}-aarch64-apple-darwin-install_only.tar.gz`,
     extractDir: 'python',
-    targetDir: `python-${STANDALONE_PYTHON}-macos-arm64`,
     type: 'tar.gz',
   },
   'macos-x64': {
     url: `${STANDALONE_BASE}/${STANDALONE_VERSION}/cpython-${STANDALONE_PYTHON}+${STANDALONE_VERSION}-x86_64-apple-darwin-install_only.tar.gz`,
     extractDir: 'python',
-    targetDir: `python-${STANDALONE_PYTHON}-macos-x64`,
     type: 'tar.gz',
   },
   'windows-x64': {
     url: `${STANDALONE_BASE}/${STANDALONE_VERSION}/cpython-${STANDALONE_PYTHON}+${STANDALONE_VERSION}-x86_64-pc-windows-msvc-install_only.tar.gz`,
     extractDir: 'python',
-    targetDir: `python-${STANDALONE_PYTHON}-windows-x64`,
     type: 'tar.gz',
   },
 };
 
-const DIST_DIR = path.join(__dirname, '..', '..', 'dist');
+const PROJECT_ROOT = path.join(__dirname, '..');
+const RESOURCES_DIR = path.join(PROJECT_ROOT, 'resources');
 
 /**
  * Follow redirects and download a file.
@@ -131,24 +129,24 @@ async function setupPlatform(platformKey) {
     return;
   }
 
-  const targetPath = path.join(DIST_DIR, config.targetDir);
+  // Target: resources/python (matches CI workflow and package.json extraResources)
+  const targetPath = path.join(RESOURCES_DIR, 'python');
 
   // Check if already exists
   if (fs.existsSync(targetPath)) {
-    console.log(`  ✓ ${config.targetDir} already exists, skipping download.`);
+    console.log(`  ✓ resources/python already exists, skipping download.`);
     return;
   }
 
   console.log(`\n--- Setting up Python for ${platformKey} ---`);
 
-  // Ensure dist directory exists
-  if (!fs.existsSync(DIST_DIR)) {
-    fs.mkdirSync(DIST_DIR, { recursive: true });
+  // Ensure resources directory exists
+  if (!fs.existsSync(RESOURCES_DIR)) {
+    fs.mkdirSync(RESOURCES_DIR, { recursive: true });
   }
 
   // Download
-  const archiveExt = config.type === 'tar.gz' ? '.tar.gz' : '.zip';
-  const archivePath = path.join(DIST_DIR, `${config.targetDir}${archiveExt}`);
+  const archivePath = path.join(RESOURCES_DIR, 'python.tar.gz');
 
   if (!fs.existsSync(archivePath)) {
     await downloadFile(config.url, archivePath);
@@ -157,7 +155,7 @@ async function setupPlatform(platformKey) {
   }
 
   // Extract
-  const tempExtractDir = path.join(DIST_DIR, `_temp_${platformKey}`);
+  const tempExtractDir = path.join(RESOURCES_DIR, `_temp_${platformKey}`);
   if (fs.existsSync(tempExtractDir)) {
     fs.rmSync(tempExtractDir, { recursive: true });
   }
@@ -166,18 +164,20 @@ async function setupPlatform(platformKey) {
     extractTarGz(archivePath, tempExtractDir);
   }
 
-  // Move the extracted directory to the target name
+  // Move the extracted directory to resources/python
   const extractedDir = path.join(tempExtractDir, config.extractDir);
   if (fs.existsSync(extractedDir)) {
     fs.renameSync(extractedDir, targetPath);
   } else {
-    // If the archive extracts directly without a subdirectory
     fs.renameSync(tempExtractDir, targetPath);
   }
 
-  // Cleanup temp directory
+  // Cleanup
   if (fs.existsSync(tempExtractDir)) {
     fs.rmSync(tempExtractDir, { recursive: true });
+  }
+  if (fs.existsSync(archivePath)) {
+    fs.unlinkSync(archivePath);
   }
 
   // Make Python executable (macOS/Linux)
@@ -193,7 +193,26 @@ async function setupPlatform(platformKey) {
     }
   }
 
-  console.log(`  ✓ ${config.targetDir} is ready.`);
+  console.log(`  ✓ resources/python is ready.`);
+}
+
+/**
+ * Install required Python packages into the embedded runtime.
+ */
+function installPythonPackages() {
+  const targetPath = path.join(RESOURCES_DIR, 'python');
+  const isWin = process.platform === 'win32';
+  const pip = isWin
+    ? `"${path.join(targetPath, 'python.exe')}" -m pip`
+    : `"${path.join(targetPath, 'bin', 'pip3')}"`;
+  const packages = 'wlkatapython flask flask-cors';
+
+  console.log(`\n--- Installing Python packages ---`);
+  console.log(`  ${pip} install ${packages}`);
+
+  execSync(`${pip} install ${packages}`, { stdio: 'inherit', cwd: PROJECT_ROOT });
+
+  console.log(`  ✓ Python packages installed.`);
 }
 
 async function main() {
@@ -232,6 +251,8 @@ async function main() {
     console.error(`  Unknown platform: ${platform}`);
     process.exit(1);
   }
+
+  installPythonPackages();
 
   console.log('\n=== Setup complete ===');
 }

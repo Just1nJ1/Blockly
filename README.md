@@ -1,113 +1,81 @@
-# Blockly Desktop App
+# WLKATA Blockly
 
-A visual programming desktop application built with Electron and Blockly, featuring a Python backend for code execution. Supports both Windows and macOS.
+A visual programming desktop application built with Electron and Blockly, featuring an embedded Python backend for code execution. Supports both Windows and macOS.
 
-## Features
+## Prerequisites
 
-- **Visual Block Programming**: Drag and drop blocks to create programs
-- **Python Code Generation**: Automatically generates Python code from blocks
-- **Code Execution**: Execute generated Python code in a sandboxed environment
-- **Cross-Platform**: Works on Windows and macOS
-- **Export/Import**: Save and load your block workspaces
+- [Node.js](https://nodejs.org/) (v18 or higher)
+
+> **Note:** You do **not** need Python installed on your system. The app uses a standalone embedded Python runtime that is downloaded automatically during setup.
+
+## Development Setup
+
+```bash
+git clone <repo-url>
+cd blockly
+npm install
+npm start
+```
+
+`npm install` automatically runs `postinstall` which:
+1. Installs Electron native dependencies
+2. Downloads a standalone Python runtime into `resources/python/`
+3. Installs Python packages (`wlkatapython`, `flask`, `flask-cors`) into it
+
+Your system Python is not used or affected.
+
+To re-run the Python setup independently (e.g. after a clean or to update packages):
+
+```bash
+npm run setup
+```
+
+Use `npm run dev` instead of `npm start` to launch with DevTools enabled.
+
+## Building for Distribution
+
+```bash
+# macOS
+npm run build:mac
+
+# Windows
+npm run build:win
+
+# Both platforms
+npm run build:all
+```
+
+Built artifacts (`.dmg`, `.exe`) are output to the `dist/` directory.
 
 ## Project Structure
 
 ```
-blockly-desktop-app/
-├── main.js           # Electron main process
-├── index.html        # Main application window
-├── renderer.js       # Frontend logic and Blockly integration
-├── server.py         # Python backend for code execution
-└── package.json      # Project configuration
+blockly/
+├── main.js                  # Electron main process
+├── index.html               # Application window
+├── server.py                # Python backend entry point
+├── server/                  # Flask backend package
+├── js/                      # Frontend modules
+│   ├── blocks/              # Custom Blockly block definitions
+│   ├── generators/          # Python code generators
+│   ├── ui/                  # Dialogs and toolbox
+│   └── workspace/           # Workspace management
+├── scripts/
+│   └── download-python.js   # Downloads embedded Python runtime
+├── resources/
+│   ├── python/              # Embedded Python (gitignored, downloaded on demand)
+│   └── icons/               # App icons
+└── package.json
 ```
 
-## Prerequisites
+## CI/CD
 
-- [Node.js](https://nodejs.org/) (v18 or higher recommended)
-- [Python](https://python.org/) (v3.7 or higher)
+The GitHub Actions workflow (`.github/workflow/build.yml`) builds the Electron app for macOS (arm64 + x64) and Windows (x64), then uploads the artifacts to the [SDK repo](https://github.com/wlkata/WLKATA-Python-SDK-wlkatapython) release.
 
-## Installation
-
-1. Clone or download this repository
-2. Install Node.js dependencies:
-
-```bash
-npm install
-```
-
-## Running the Application
-
-### Development Mode
-
-Start the application in development mode:
-
-```bash
-npm start
-# or
-npm run dev
-```
-
-This will:
-1. Start the Python backend server on port 5000
-2. Launch the Electron application with Blockly interface
-
-### Building for Production
-
-Build the application for distribution:
-
-```bash
-# Build for Windows
-npm run build:win
-
-# Build for macOS
-npm run build:mac
-
-# Build for both platforms
-npm run build:all
-```
-
-Built applications will be in the `dist/` directory.
-
-## Usage
-
-1. **Create Programs**: Drag blocks from the toolbox on the left to the workspace
-2. **View Generated Code**: The Python code is shown in the right panel
-3. **Run Code**: Click the "Run Code" button to execute your program
-4. **See Output**: Results and print statements appear in the Output panel
-5. **Save/Load**: Use Export/Import buttons to save and load your workspaces
-
-## Available Block Categories
-
-- **Logic**: If statements, comparisons, boolean operations
-- **Loops**: For loops, while loops, repeat blocks
-- **Math**: Arithmetic operations, mathematical functions
-- **Text**: String manipulation and operations
-- **Lists**: List creation and manipulation
-- **Variables**: Create and use variables
-- **Functions**: Define and call custom functions
-
-## Python Backend API
-
-The Python server provides a simple REST API:
-
-- `GET /health` - Check server status
-- `POST /execute` - Execute Python code
-  - Request body: `{ "code": "print('Hello World')" }`
-  - Response: `{ "success": true, "stdout": "", "stderr": "", "result": null }`
-
-## Troubleshooting
-
-### Python Server Not Starting
-- Ensure Python 3.7+ is installed and available in your PATH
-- On Windows, use `python`; on macOS/Linux, use `python3`
-
-### Port 5000 Already in Use
-- The Python server uses port 5000 by default
-- If this port is occupied, modify the port in `server.py` and `renderer.js`
-
-### Blockly Not Loading
-- Ensure all npm dependencies are installed
-- Check the browser console for JavaScript errors
+Builds are triggered by:
+- **Tag push (`v*`)** on this repo — uploads to the latest SDK release
+- **SDK release** — the SDK repo dispatches a `repository_dispatch` event, triggering a rebuild with the latest SDK version
+- **Push to `main`** — creates a rolling `dev` pre-release on this repo for internal testing
 
 ## License
 
