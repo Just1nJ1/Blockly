@@ -1,0 +1,160 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  repository_dispatch:
+    types: [sdk-release]
+
+jobs:
+  build-blockly:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-aarch64-apple-darwin-install_only.tar.gz
+            pip: resources/python/bin/pip3
+            build_cmd: npm run build:mac -- --arm64
+            artifact_name: blockly-mac-arm64
+
+          - os: macos-latest
+            arch: x64
+            python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-x86_64-apple-darwin-install_only.tar.gz
+            pip: resources/python/bin/pip3
+            build_cmd: npm run build:mac -- --x64
+            artifact_name: blockly-mac-x64
+
+          - os: windows-latest
+            arch: x64
+            python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-x86_64-pc-windows-msvc-install_only.tar.gz
+            pip: resources/python/python.exe -m pip
+            build_cmd: npm run build:win -- --x64
+            artifact_name: blockly-win-x64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 23
+
+    - name: Download standalone Python
+      shell: bash
+      run: |
+        mkdir -p resources
+        curl -L "${{ matrix.python_url }}" -o python.tar.gz
+        tar -xzf python.tar.gz -C resources
+        rm python.tar.gz
+        echo "Python extracted to resources/python"
+        ls resources/python
+
+    - name: Install wlkatapython SDK into embedded Python
+      shell: bash
+      run: |
+        ${{ matrix.pip }} install wlkatapython
+
+    - name: Install flask into embedded Python
+      shell: bash
+      run: |
+        ${{ matrix.pip }} install flask flask-cors
+
+    - name: Install Node.js dependencies
+      run: npm ci || npm install
+
+    - name: Build Electron app
+      run: ${{ matrix.build_cmd }}
+
+    - name: Upload blockly artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: |
+          dist/*.dmg
+          dist/*.exe
+          dist/*.zip
+
+  # Dev release on this repo for every push to main (internal testing)
+  release-dev:
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    needs: [build-blockly]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-assets/
+
+    - name: Flatten release assets
+      run: |
+        mkdir -p dist
+        find release-assets/ -type f | while read f; do
+          cp "$f" dist/
+        done
+        echo "Release contents:"
+        ls -la dist/
+
+    - name: Create or update dev release
+      run: |
+        gh release delete dev --yes || true
+        git tag -f dev
+        git push -f origin dev
+        gh release create dev dist/* \
+          --title "Dev Build (${GITHUB_SHA::7})" \
+          --notes "Automated dev build from \`main\` at ${GITHUB_SHA::7}" \
+          --prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish to SDK repo for tag pushes and SDK dispatches
+  release-to-sdk:
+    if: github.event_name != 'push' || github.ref_type == 'tag'
+    needs: [build-blockly]
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-assets/
+
+    - name: Flatten release assets
+      run: |
+        mkdir -p dist
+        find release-assets/ -type f | while read f; do
+          cp "$f" dist/
+        done
+        echo "Release contents:"
+        ls -la dist/
+
+    - name: Determine SDK release tag
+      id: tag
+      run: |
+        if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          echo "tag=${{ github.event.client_payload.sdk_version }}" >> "$GITHUB_OUTPUT"
+        else
+          # Blockly tag push: upload to the latest SDK release
+          LATEST=$(gh release view --repo wlkata/WLKATA-Python-SDK-wlkatapython --json tagName -q .tagName)
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.SDK_REPO_PAT }}
+
+    - name: Upload assets to SDK release
+      run: |
+        for file in dist/*; do
+          echo "Uploading $file to SDK release ${{ steps.tag.outputs.tag }}"
+          gh release upload "${{ steps.tag.outputs.tag }}" "$file" \
+            --repo wlkata/WLKATA-Python-SDK-wlkatapython \
+            --clobber
+        done
+      env:
+        GH_TOKEN: ${{ secrets.SDK_REPO_PAT }}
