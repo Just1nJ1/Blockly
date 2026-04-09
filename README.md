@@ -11,8 +11,8 @@ A visual programming desktop application built with Electron and Blockly, featur
 ## Development Setup
 
 ```bash
-git clone <repo-url>
-cd blockly
+git clone https://github.com/wlkata/Blockly
+cd Blockly
 npm install
 npm start
 ```
