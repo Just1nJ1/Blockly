@@ -14,6 +14,7 @@ import traceback
 import uuid
 import copy
 from .executor import CodeExecutor
+from .serial_manager import SerialManager
 
 
 class DebugSession:
@@ -171,6 +172,25 @@ class DebugSession:
             sys.stderr = self.stderr_buffer
 
             safe_globals = CodeExecutor._safe_globals()
+
+            # Patch serial.Serial to use the shared connection
+            mgr = SerialManager.get_instance()
+            if mgr.connected:
+                mgr.busy = True
+                for conn in mgr.all_connected():
+                    conn.add_history('sys', 'Blockly started (step mode)')
+                import serial as _serial_module
+                _patched_serial = type(_serial_module)('_patched_serial')
+                _patched_serial.__dict__.update(_serial_module.__dict__)
+                _patched_serial.Serial = mgr.get_proxy_serial_class()
+                _orig_import = __import__
+                _proxy = _patched_serial
+                def _patched_import(name, *args, **kwargs):
+                    if name == 'serial':
+                        return _proxy
+                    return _orig_import(name, *args, **kwargs)
+                safe_globals['__builtins__']['__import__'] = _patched_import
+
             sys.settrace(self._trace_dispatch)
             try:
                 exec(self._compiled, safe_globals)
@@ -185,6 +205,13 @@ class DebugSession:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.finished = True
+            try:
+                mgr = SerialManager.get_instance()
+                for conn in mgr.all_connected():
+                    conn.add_history('sys', 'Blockly stopped')
+                mgr.busy = False
+            except Exception:
+                pass
             # Signal state-ready so any waiting /step call unblocks
             self._state_ready.set()
 

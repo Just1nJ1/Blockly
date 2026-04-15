@@ -7,6 +7,7 @@ import inspect
 import builtins
 import importlib
 from .executor import CodeExecutor
+from .serial_manager import SerialManager
 
 
 class FunctionInspector:
@@ -179,14 +180,32 @@ class InstanceInspector:
 
     @staticmethod
     def _build_safe_globals(code: str) -> dict:
-        """Build safe globals dict by executing code and extracting imports."""
-        # Extract imports to load third-party libraries in advance
+        """Build safe globals dict by executing code and extracting imports.
+        Uses the SerialManager's proxy so serial.Serial() reuses
+        the shared connection instead of opening a new one."""
         import_lines = []
         for line in code.split('\n'):
             if line.strip().startswith(('import ', 'from ')):
                 import_lines.append(line)
 
         safe_globals = CodeExecutor._safe_globals()
+
+        # Patch serial.Serial to use the proxy if a managed port is connected
+        mgr = SerialManager.get_instance()
+        if mgr.connected:
+            import serial as _serial_module
+            _patched_serial = type(_serial_module)('_patched_serial')
+            _patched_serial.__dict__.update(_serial_module.__dict__)
+            _patched_serial.Serial = mgr.get_proxy_serial_class()
+
+            _orig_import = __import__
+            _proxy = _patched_serial
+            def _patched_import(name, *args, **kwargs):
+                if name == 'serial':
+                    return _proxy
+                return _orig_import(name, *args, **kwargs)
+            safe_globals['__builtins__']['__import__'] = _patched_import
+
         for imp in import_lines:
             try:
                 exec(imp, safe_globals)

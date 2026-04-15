@@ -84,7 +84,27 @@ function initPythonGenerator() {
     if (defs && defs.variables !== undefined) {
       delete defs.variables;
     }
-    return _origPythonFinish(code);
+
+    // Check if there are any function definitions (keys starting with '%')
+    const hasFunctions = defs && Object.keys(defs).some(k => k.charAt(0) === '%');
+
+    let result = _origPythonFinish(code);
+
+    // Insert function section markers around function definitions
+    if (hasFunctions) {
+      result = result.replace(
+        /^(def \w+\s*\()/m,
+        '##### Functions #####\n\n$1'
+      );
+      // Insert end marker after the last function definition, before main code.
+      // The definitions block and main code are separated by "\n\n\n".
+      result = result.replace(
+        /\n\n\n/,
+        '\n\n##### End of Functions #####\n\n\n'
+      );
+    }
+
+    return result;
   };
 
   /**
@@ -102,7 +122,36 @@ function initPythonGenerator() {
    */
   generatorTarget['import_module'] = function(block) {
     const moduleName = block.getFieldValue('MODULE_NAME');
+    // If the import is at the top level (not nested inside if/try/def/etc.),
+    // hoist it to the top of the generated code via definitions_.
+    // Nested imports (lazy imports) stay inline.
+    const surroundParent = block.getSurroundParent();
+    if (!surroundParent) {
+      Blockly.Python.definitions_['import_' + moduleName] = `import ${moduleName}`;
+      return '';
+    }
     return `import ${moduleName}\n`;
+  };
+
+  /**
+   * Generator for setup_robot block.
+   * Hoists "import wlkatapython" to the top and generates the constructor call.
+   */
+  generatorTarget['setup_robot'] = function(block) {
+    const varField = block.getField('VARIABLE');
+    const varModel = varField.getVariable();
+    const varName = Blockly.Python.getVariableName
+      ? Blockly.Python.getVariableName(varModel.getId())
+      : varModel.name;
+    const port = block.getFieldValue('PORT');
+    const model = block.getFieldValue('MODEL');
+
+    // Hoist imports to top (deduplicated by key)
+    Blockly.Python.definitions_['import_wlkatapython'] = 'import wlkatapython';
+    Blockly.Python.definitions_['import_serial'] = 'import serial';
+
+    return varName + ' = wlkatapython.' + model + '()\n' +
+           varName + '.init(serial.Serial(\'' + port + '\', 115200), -1)\n';
   };
 
   /**

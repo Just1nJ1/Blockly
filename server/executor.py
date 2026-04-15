@@ -6,6 +6,7 @@ Handles safe execution of Python code and captures stdout/stderr.
 import sys
 import io
 import traceback
+from .serial_manager import SerialManager
 
 
 class CodeExecutor:
@@ -112,8 +113,31 @@ class CodeExecutor:
             # Create a sandboxed globals dict with basic safe builtins
             safe_globals = CodeExecutor._safe_globals()
 
+            # Patch serial.Serial so SDK reuses the shared connection
+            mgr = SerialManager.get_instance()
+            if mgr.connected:
+                mgr.busy = True
+                for conn in mgr.all_connected():
+                    conn.add_history('sys', 'Blockly started')
+                import serial as _serial_module
+                _patched_serial = type(_serial_module)('_patched_serial')
+                _patched_serial.__dict__.update(_serial_module.__dict__)
+                _patched_serial.Serial = mgr.get_proxy_serial_class()
+                safe_globals['__serial_proxy__'] = _patched_serial
+
             # Compile and execute the code
             try:
+                # Inject proxy: replace "import serial" with our patched module
+                if mgr.connected and '__serial_proxy__' in safe_globals:
+                    import importlib
+                    _orig_import = __import__
+                    _proxy = safe_globals['__serial_proxy__']
+                    def _patched_import(name, *args, **kwargs):
+                        if name == 'serial':
+                            return _proxy
+                        return _orig_import(name, *args, **kwargs)
+                    safe_globals['__builtins__']['__import__'] = _patched_import
+
                 compiled = compile(code, '<blockly>', 'exec')
                 exec(compiled, safe_globals)
 
@@ -158,3 +182,12 @@ class CodeExecutor:
             # Restore original streams
             sys.stdout = old_stdout
             sys.stderr = old_stderr
+
+            # Release busy flag and log stop
+            try:
+                mgr = SerialManager.get_instance()
+                for conn in mgr.all_connected():
+                    conn.add_history('sys', 'Blockly stopped')
+                mgr.busy = False
+            except Exception:
+                pass

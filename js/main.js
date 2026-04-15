@@ -1,42 +1,64 @@
 /**
  * Main Entry Point for Blockly Application
- * Initializes all modules and sets up the workspace.
  *
  * Flow:
- *   1. Show workspace selection dialog
- *   2. Set the chosen workspace as current
- *   3. Initialize Blockly and all modules
- *   4. Load saved blocks from the workspace folder
- *   5. Set up Ctrl+S save shortcut
+ *   1. App starts on the Command tab (no workspace needed)
+ *   2. When user clicks the Blockly sidebar tab:
+ *      a. If no workspace selected yet, show the workspace dialog
+ *      b. Initialize Blockly (once), load blocks
+ *   3. Switching back to Command tab preserves Blockly state
  */
 
-document.addEventListener('DOMContentLoaded', async () => {
+var _blocklyInitialized = false;
+
+document.addEventListener('DOMContentLoaded', () => {
   // Init blocks & generators first (no workspace needed)
   initCustomBlocks();
   initPythonGenerator();
   setupCustomPrompts();
 
-  // Show workspace picker and wait for selection
-  var wsPath = await showWorkspaceDialog();
-  setCurrentWorkspace(wsPath);
+  // Set up sidebar tab switching
+  initSidebar();
 
-  // Now inject Blockly
-  initBlockly();
-
-  // Load blocks from the workspace folder
-  loadWorkspaceBlocks();
-
-  // Init saved functions panel
-  initSavedFunctions();
-
-  // Ctrl+S / Cmd+S to save
+  // Ctrl+S / Cmd+S to save (only when blockly is active)
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
-      saveWorkspaceBlocks();
+      if (_blocklyInitialized) saveWorkspaceBlocks();
     }
   });
 });
+
+/**
+ * Called when the user switches to the Blockly tab.
+ * Ensures workspace is selected and Blockly is initialized.
+ */
+async function ensureBlocklyReady() {
+  // If no workspace selected, ask the user to pick one
+  if (!getCurrentWorkspacePath()) {
+    var wsPath = await showWorkspaceDialog();
+    setCurrentWorkspace(wsPath);
+  }
+
+  // Initialize Blockly once
+  if (!_blocklyInitialized) {
+    initBlockly();
+    loadWorkspaceBlocks();
+    initSavedFunctions();
+    _blocklyInitialized = true;
+  }
+
+  // Blockly needs a resize after becoming visible
+  if (typeof getWorkspace === 'function' && typeof Blockly !== 'undefined') {
+    setTimeout(function() {
+      Blockly.svgResize(getWorkspace());
+      // Apply theme overrides to Blockly's inline styles
+      if (typeof applyBlocklyThemeOverrides === 'function') {
+        applyBlocklyThemeOverrides();
+      }
+    }, 50);
+  }
+}
 
 /**
  * Initialize the Blockly workspace with toolbox and event listeners.

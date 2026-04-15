@@ -29,165 +29,115 @@
  */
 function preprocessCodeForInspection(code, instanceName) {
   const lines = code.split('\n');
+  const escaped = instanceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // Phase 1: Find what function (if any) is assigned to instanceName
-  // e.g. "asd = do_something()" -> funcName = "do_something"
-  let assignedFunc = null;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const escaped = instanceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const assignMatch = trimmed.match(new RegExp('^' + escaped + '\\s*=\\s*(\\w+)\\s*\\('));
-    if (assignMatch) {
-      assignedFunc = assignMatch[1];
-      break;
+  // Step 1: Find how instanceName is assigned.
+  //   Case A: direct constructor — "x = wlkatapython.Mirobot_UART(...)"
+  //   Case B: function return   — "x = GetMirobot(...)"
+  //   Case C: variable alias    — "x = otherVar" (trace back to otherVar's origin)
+  let assignmentLine = null;   // the constructor line to keep (possibly extracted from a function)
+  let assignedFunc = null;     // function name if Case B
+
+  // Resolve variable aliases: follow "x = y" chains to find the original source.
+  // Always uses the LAST assignment to the variable (handles reassignment like
+  // x = A() ... x = B() — the last one wins).
+  let targetVar = instanceName;
+  const seen = new Set();
+  while (!seen.has(targetVar)) {
+    seen.add(targetVar);
+    const esc = targetVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('^' + esc + '\\s*=\\s*(.+)');
+
+    // Scan ALL lines and keep the last match
+    let lastRhs = null;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      const m = trimmed.match(pattern);
+      if (m) lastRhs = m[1].trim();
     }
-  }
 
-  // If no function call assignment found, or it's a known constructor, return as-is
-  if (!assignedFunc) {
-    console.log('[preprocessCodeForInspection] No function-return assignment found for "' + instanceName + '", using raw code');
-    return code;
-  }
-  console.log('[preprocessCodeForInspection] Found "' + instanceName + ' = ' + assignedFunc + '()", flattening...');
+    if (!lastRhs) break;
 
-  // Phase 2: Find the function definition and extract its body
-  let inFunc = false;
-  let funcIndent = 0;
-  let bodyLines = [];
-  let internalVar = null;  // the variable that gets the instance inside the function
-  let returnsVar = null;   // what the function returns
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (!inFunc) {
-      const defMatch = trimmed.match(new RegExp('^def\\s+' + assignedFunc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\('));
-      if (defMatch) {
-        inFunc = true;
-        funcIndent = line.search(/\S/);
-      }
+    const beforeParen = lastRhs.split('(')[0];
+    if (beforeParen.includes('.')) {
+      // Case A: direct constructor — rewrite to use the original instanceName
+      assignmentLine = instanceName + ' = ' + lastRhs;
+    } else if (/^\w+\s*\(/.test(lastRhs)) {
+      // Case B: function call
+      const funcMatch = lastRhs.match(/^(\w+)\s*\(/);
+      if (funcMatch) assignedFunc = funcMatch[1];
+    } else if (/^\w+$/.test(lastRhs)) {
+      // Case C: bare variable alias — follow the chain
+      targetVar = lastRhs;
       continue;
     }
-
-    // Inside the function
-    const lineIndent = line.search(/\S/);
-    if (trimmed.length > 0 && lineIndent <= funcIndent) {
-      break; // left the function
-    }
-
-    // Track the return statement
-    const retMatch = trimmed.match(/^return\s+(\w+)/);
-    if (retMatch) {
-      returnsVar = retMatch[1];
-      continue; // don't include return in body
-    }
-
-    // Skip global declarations
-    if (trimmed.startsWith('global ')) continue;
-
-    // Track instance creation
-    const createMatch = trimmed.match(/^(\w+)\s*=\s*\w+\.\w+\s*\(/);
-    if (createMatch) {
-      internalVar = createMatch[1];
-      // Only keep the creation line — method calls on the instance
-      // (e.g. a.homing()) can crash exec() and aren't needed for inspection
-      bodyLines.push(trimmed);
-      continue;
-    }
-
-    // Skip method calls inside the function body (a.homing(), a.gripper(), etc.)
-    // For inspection we only need the instance creation, not its usage
-    if (/^\w+\.\w+\s*\(/.test(trimmed)) continue;
-
-    bodyLines.push(trimmed);
+    break;
   }
 
-  // If the function doesn't return a tracked variable, can't flatten
-  if (!returnsVar || !internalVar) {
-    console.log('[preprocessCodeForInspection] Cannot flatten: returnsVar=' + returnsVar + ', internalVar=' + internalVar);
-    return code;
-  }
+  // Step 2: If Case B, find the constructor line inside the function body
+  if (assignedFunc) {
+    console.log('[preprocessCodeForInspection] Found "' + instanceName + ' = ' + assignedFunc + '()", inlining function body');
+    let inFunc = false;
+    let funcIndent = 0;
+    let internalVar = null;
+    let creationLine = null;
+    let returnsVar = null;
 
-  // Phase 3: Build flattened code
-  // First, collect all user-defined function names (their defs will be stripped)
-  const strippedFuncNames = new Set();
-  {
-    let sf = false, si = 0;
-    for (const l of lines) {
-      const t = l.trim();
-      if (sf) {
-        const li = l.search(/\S/);
-        if (t.length > 0 && li <= si) sf = false; else continue;
-      }
-      const dm = t.match(/^def\s+(\w+)\s*\(/);
-      if (dm) { strippedFuncNames.add(dm[1]); sf = true; si = l.search(/\S/); }
-    }
-  }
-
-  // Now collect top-level lines, skipping:
-  //   - function definitions and their bodies
-  //   - any line that calls a stripped function (e.g. asd = do_something())
-  //   - varName = None declarations
-  //   - comments
-  const topLines = [];
-  let skipFunc = false;
-  let skipFuncIndent = 0;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (skipFunc) {
-      const lineIndent = line.search(/\S/);
-      if (trimmed.length > 0 && lineIndent <= skipFuncIndent) {
-        skipFunc = false;
-      } else {
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!inFunc) {
+        if (trimmed.match(new RegExp('^def\\s+' + assignedFunc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\('))) {
+          inFunc = true;
+          funcIndent = line.search(/\S/);
+        }
         continue;
       }
-    }
+      // Inside function body
+      const lineIndent = line.search(/\S/);
+      if (trimmed.length > 0 && lineIndent <= funcIndent) break;
 
-    if (trimmed.match(/^def\s+\w+\s*\(/)) {
-      skipFunc = true;
-      skipFuncIndent = line.search(/\S/);
-      continue;
-    }
-
-    // Skip comments
-    if (trimmed.startsWith('#')) continue;
-
-    // Skip "varName = None" declarations
-    if (/^\w+\s*=\s*None\s*$/.test(trimmed)) continue;
-
-    // Skip any line that calls a stripped user-defined function
-    let callsStripped = false;
-    for (const fn of strippedFuncNames) {
-      const esc = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (new RegExp('(^|=\\s*)' + esc + '\\s*\\(').test(trimmed)) {
-        callsStripped = true;
-        break;
+      const createMatch = trimmed.match(/^(\w+)\s*=\s*\w+\.\w+\s*\(/);
+      if (createMatch) {
+        internalVar = createMatch[1];
+        creationLine = trimmed;
       }
+      const retMatch = trimmed.match(/^return\s+(\w+)/);
+      if (retMatch) returnsVar = retMatch[1];
     }
-    if (callsStripped) continue;
 
-    // Skip method calls on any variable (e.g. ad.cancellation())
-    // These can crash exec() if the method tries to use hardware.
-    // For inspection we only need imports and instance creation lines.
-    if (/^\w+\.\w+\s*\(/.test(trimmed)) continue;
-
-    if (trimmed.length > 0) {
-      topLines.push(line);
+    if (internalVar && returnsVar && creationLine) {
+      // Rename internal variable to instanceName
+      const re = new RegExp('\\b' + internalVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
+      assignmentLine = creationLine.replace(re, instanceName);
     }
   }
 
-  // Replace internal variable name with the instance name in body lines
-  const renamedBody = bodyLines.map(function(bline) {
-    // Replace occurrences of internalVar with instanceName
-    // Use word boundary replacement
-    const re = new RegExp('\\b' + internalVar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g');
-    return bline.replace(re, instanceName);
-  });
+  if (!assignmentLine) {
+    console.log('[preprocessCodeForInspection] Could not find constructor for "' + instanceName + '", returning imports only');
+    // Return only import lines — never return the full raw code, as it
+    // would be exec'd on the server and could trigger hardware side effects.
+    var importOnly = [];
+    for (var ii = 0; ii < lines.length; ii++) {
+      var tl = lines[ii].trim();
+      if (tl.match(/^(import\s+|from\s+\S+\s+import\s+)/)) {
+        importOnly.push(tl);
+      }
+    }
+    return importOnly.join('\n');
+  }
 
-  const result = topLines.join('\n') + '\n' + renamedBody.join('\n');
-  console.log('[preprocessCodeForInspection] Flattened code for "' + instanceName + '":\n' + result);
+  // Step 3: Build minimal safe code — only imports + the one assignment line.
+  const safeLines = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.match(/^(import\s+|from\s+\S+\s+import\s+)/)) {
+      safeLines.push(trimmed);
+    }
+  }
+  safeLines.push(assignmentLine);
+
+  const result = safeLines.join('\n');
+  console.log('[preprocessCodeForInspection] Safe code for "' + instanceName + '":\n' + result);
   return result;
 }
 

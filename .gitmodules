@@ -1,0 +1,3 @@
+[submodule "resources/wlkata_arm_virtual-reality"]
+	path = resources/wlkata_arm_virtual-reality
+	url = https://github.com/wlkata/wlkata_arm_virtual-reality

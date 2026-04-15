@@ -7,6 +7,8 @@ from flask_cors import CORS
 from .executor import CodeExecutor
 from .inspector import FunctionInspector, InstanceInspector
 from .debugger import StepDebugger
+from .detector import scan_devices
+from .serial_manager import SerialManager
 
 app = Flask(__name__)
 CORS(app, resources={
@@ -216,6 +218,90 @@ def debug_stop():
 
     except Exception as e:
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/cmd/connect', methods=['POST'])
+def cmd_connect():
+    """Connect to a serial port."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+
+        port = data.get('port', '')
+        model = data.get('model', None)
+        baudrate = data.get('baudrate', 115200)
+
+        if not port:
+            return jsonify({'success': False, 'error': 'No port provided'}), 400
+
+        mgr = SerialManager.get_instance()
+        result = mgr.connect(port, model=model, baudrate=baudrate)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/disconnect', methods=['POST'])
+def cmd_disconnect():
+    """Disconnect from the serial port."""
+    try:
+        mgr = SerialManager.get_instance()
+        result = mgr.disconnect()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/send', methods=['POST'])
+def cmd_send():
+    """Send a raw command to the connected device."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+
+        command = data.get('command', '')
+        if not command:
+            return jsonify({'success': False, 'error': 'No command provided'}), 400
+
+        mgr = SerialManager.get_instance()
+        result = mgr.send_raw(command, source='command')
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/history', methods=['GET'])
+def cmd_history():
+    """Get message history since a given ID."""
+    try:
+        since = request.args.get('since', 0, type=int)
+        mgr = SerialManager.get_instance()
+        messages = mgr.get_history(since=since)
+        return jsonify({'success': True, 'messages': messages})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/status', methods=['GET'])
+def cmd_status():
+    """Get current connection status."""
+    try:
+        mgr = SerialManager.get_instance()
+        return jsonify({'success': True, **mgr.status()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/detect-devices', methods=['GET'])
+def detect_devices():
+    """Scan serial ports and identify connected robotic arms."""
+    try:
+        result = scan_devices()
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Detection error: {str(e)}', 'ports': []})
 
 
 @app.errorhandler(404)

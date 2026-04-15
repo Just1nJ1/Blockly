@@ -105,6 +105,14 @@ function getToolboxConfig() {
       },
       {
         kind: 'category',
+        name: 'Robot',
+        colour: '#E67E22',
+        contents: [
+          { kind: 'block', type: 'setup_robot' },
+        ],
+      },
+      {
+        kind: 'category',
         name: 'Python',
         colour: '#4B8BBE',
         contents: [
