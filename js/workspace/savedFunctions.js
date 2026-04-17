@@ -521,6 +521,11 @@ function initOutputPanelTabs() {
       contents.forEach(function(pc) { pc.classList.remove('active'); });
       var target = document.getElementById('panel-content-' + panel);
       if (target) target.classList.add('active');
+
+      // Refresh control panel when its tab becomes active (only if stale)
+      if (panel === 'control-panel' && typeof window.controlPanelCheckAndRefresh === 'function') {
+        window.controlPanelCheckAndRefresh();
+      }
     });
   });
 }

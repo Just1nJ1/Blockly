@@ -35,6 +35,11 @@
         clearOutput();
         _lastMessageId = 0;
         startPolling();
+
+        // Notify control panel that connection is ready
+        if (typeof window.controlPanelOnConnected === 'function') {
+          window.controlPanelOnConnected(port, model);
+        }
       }
       return data;
     });
@@ -64,6 +69,13 @@
       body: JSON.stringify({ command: command })
     })
     .then(function(r) { return r.json(); })
+    .then(function(data) {
+      // Mark control panel as stale after sending a command
+      if (typeof window.controlPanelMarkStale === 'function') {
+        window.controlPanelMarkStale();
+      }
+      return data;
+    })
     .catch(function(err) {
       appendSystemMessage('Send failed: ' + err.message);
     });

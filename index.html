@@ -18,6 +18,9 @@
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>
         <span>Blockly</span>
       </div>
+      <button id="settings-btn" class="sidebar-bottom-btn" title="Settings" onclick="if(typeof openSettings==='function')openSettings();">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      </button>
       <button id="theme-toggle" title="Toggle theme"></button>
     </div>
 
@@ -53,6 +56,8 @@
           <button id="clearBtn" onclick="clearWorkspace()">Clear Workspace</button>
           <button id="exportBtn" onclick="exportBlocks()">Export Blocks</button>
           <button id="importBtn" onclick="importBlocks()">Import Blocks</button>
+          <span style="flex:1;"></span>
+          <button id="stopAllBtn" onclick="stopAllRobots()" style="background:#f44336;font-weight:700;">STOP</button>
         </div>
 
         <!-- Top-level view tabs: Blockly + dynamic robot variable tabs -->
@@ -70,6 +75,7 @@
               <div id="output-tabs">
                 <button class="panel-tab-btn active" data-panel="code-output">Code & Output</button>
                 <button class="panel-tab-btn" data-panel="saved-functions">Saved Functions</button>
+                <button class="panel-tab-btn" data-panel="control-panel">Control</button>
               </div>
 
               <!-- Tab 1: Code & Output (default) -->
@@ -92,6 +98,69 @@
               <!-- Tab 2: Saved Functions -->
               <div id="panel-content-saved-functions" class="panel-tab-content">
                 <div id="saved-functions-list"></div>
+              </div>
+
+              <!-- Tab 3: Control Panel -->
+              <div id="panel-content-control-panel" class="panel-tab-content">
+                <div class="ctrl-panel">
+                  <!-- Port selector -->
+                  <div class="ctrl-port-row">
+                    <span class="ctrl-joint-label">Port</span>
+                    <select id="ctrl-port-select">
+                      <option value="" disabled selected>No Connection</option>
+                    </select>
+                  </div>
+
+                  <!-- Home / Zero buttons -->
+                  <div class="ctrl-action-row">
+                    <button class="ctrl-action-btn ctrl-btn-home" id="ctrl-home-btn">Home</button>
+                    <button class="ctrl-action-btn ctrl-btn-zero" id="ctrl-zero-btn">Zero Pos</button>
+                  </div>
+
+                  <!-- Mode toggle: Joint / Coordinate -->
+                  <div class="ctrl-mode-toggle">
+                    <span class="ctrl-mode-label ctrl-mode-active" data-mode="joint">Joint</span>
+                    <div class="ctrl-toggle-track" id="ctrl-mode-switch">
+                      <div class="ctrl-toggle-thumb"></div>
+                    </div>
+                    <span class="ctrl-mode-label" data-mode="coord">Coordinate</span>
+                  </div>
+
+                  <!-- Dynamic axis rows (populated by JS) -->
+                  <div id="ctrl-axis-rows"></div>
+
+                  <!-- Capture position button -->
+                  <div class="ctrl-action-row">
+                    <button class="ctrl-action-btn" id="ctrl-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">Capture Position</button>
+                  </div>
+
+                  <!-- Step size -->
+                  <div class="ctrl-step-row">
+                    <span class="ctrl-joint-label">Step</span>
+                    <button class="ctrl-step-btn ctrl-step-preset" data-step="1">1</button>
+                    <button class="ctrl-step-btn ctrl-step-preset" data-step="5">5</button>
+                    <button class="ctrl-step-btn ctrl-step-preset active" data-step="10">10</button>
+                    <button class="ctrl-step-btn ctrl-step-preset" data-step="15">15</button>
+                    <input type="number" class="ctrl-step-input" value="10" min="1" step="1">
+                  </div>
+
+                  <!-- End effector divider -->
+                  <div class="ctrl-divider">
+                    <span>END EFFECTOR CONTROL</span>
+                  </div>
+
+                  <!-- End effector selector + dynamic buttons -->
+                  <div class="ctrl-effector-row">
+                    <select id="ctrl-effector-select">
+                      <option value="none">None</option>
+                      <option value="suction">Suction Cup</option>
+                      <option value="gripper">Gripper</option>
+                      <option value="ball">Ball Gripper</option>
+                      <option value="soft">Soft Gripper</option>
+                    </select>
+                  </div>
+                  <div id="ctrl-effector-buttons"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -127,6 +196,7 @@
   <script src="js/blocks/instanceFunctionCall.js"></script>
   <script src="js/blocks/functionParam.js"></script>
   <script src="js/blocks/setupRobot.js"></script>
+  <script src="js/blocks/moveRobot.js"></script>
   <script src="js/blocks/index.js"></script>
 
   <!-- Code Generators -->
@@ -137,6 +207,7 @@
   <script src="js/ui/toolbox.js"></script>
   <script src="js/ui/sidebar.js"></script>
   <script src="js/ui/commandTab.js"></script>
+  <script src="js/ui/controlPanel.js"></script>
 
   <!-- Workspace Features -->
   <script src="js/workspace/instanceMethods.js"></script>

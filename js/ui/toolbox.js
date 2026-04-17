@@ -109,6 +109,8 @@ function getToolboxConfig() {
         colour: '#E67E22',
         contents: [
           { kind: 'block', type: 'setup_robot' },
+          { kind: 'block', type: 'write_coordinate' },
+          { kind: 'block', type: 'write_angle' },
         ],
       },
       {

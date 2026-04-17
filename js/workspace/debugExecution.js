@@ -309,6 +309,11 @@ function _endDebugSession(message) {
   if (message) {
     appendOutput(message, 'result');
   }
+
+  // Mark control panel as stale after debug session ends
+  if (typeof window.controlPanelMarkStale === 'function') {
+    window.controlPanelMarkStale();
+  }
 }
 
 /**

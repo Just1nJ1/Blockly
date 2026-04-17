@@ -23,6 +23,10 @@ function initSidebar() {
       // When switching to Blockly, ensure workspace + Blockly are ready
       if (targetTab === 'blockly') {
         ensureBlocklyReady();
+        // Refresh control panel if it was marked stale while on another tab
+        if (typeof window.controlPanelCheckAndRefresh === 'function') {
+          window.controlPanelCheckAndRefresh();
+        }
       }
     });
   });

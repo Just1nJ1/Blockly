@@ -284,6 +284,174 @@ def cmd_history():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/cmd/get-status', methods=['POST'])
+def cmd_get_status():
+    """Query the robot's current status using the SDK's getStatus()."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', None)
+
+        mgr = SerialManager.get_instance()
+
+        # Find the connection for the requested port
+        conn = None
+        if port and port in mgr._ports:
+            conn = mgr._ports[port]
+        elif mgr.active_connection:
+            conn = mgr.active_connection
+
+        if not conn or not conn.connected:
+            return jsonify({'success': False, 'error': 'Not connected'})
+
+        if not conn.robot:
+            return jsonify({'success': False, 'error': 'No SDK instance for this port'})
+
+        # Call the SDK's getStatus() which sends '?' and parses the response
+        status = conn.robot.getStatus()
+
+        if status == "error" or status == "parse error" or status == -1:
+            return jsonify({'success': False, 'error': 'Failed to get status'})
+
+        # status is a dict with keys like 'state', 'angle_A', 'coordinate_X', etc.
+        result = {
+            'success': True,
+            'state': str(status.get('state', '')),
+            'model': conn.model,
+            'angles': {
+                'A': float(status.get('angle_A', 0)),
+                'B': float(status.get('angle_B', 0)),
+                'C': float(status.get('angle_C', 0)),
+                'D': float(status.get('angle_D', 0)),
+                'X': float(status.get('angle_X', 0)),
+                'Y': float(status.get('angle_Y', 0)),
+                'Z': float(status.get('angle_Z', 0)),
+            },
+            'coordinates': {
+                'X': float(status.get('coordinate_X', 0)),
+                'Y': float(status.get('coordinate_Y', 0)),
+                'Z': float(status.get('coordinate_Z', 0)),
+                'Rx': float(status.get('coordinate_RX', 0)),
+                'Ry': float(status.get('coordinate_RY', 0)),
+                'Rz': float(status.get('coordinate_RZ', 0)),
+            },
+            'pump': float(status.get('pump', 0)),
+            'valve': float(status.get('valve', 0)),
+            'mode': float(status.get('mode', 0)),
+        }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/home', methods=['POST'])
+def cmd_home():
+    """Call homing() on the robot at the specified port."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', None)
+
+        mgr = SerialManager.get_instance()
+        conn = None
+        if port and port in mgr._ports:
+            conn = mgr._ports[port]
+        elif mgr.active_connection:
+            conn = mgr.active_connection
+
+        if not conn or not conn.connected or not conn.robot:
+            return jsonify({'success': False, 'error': 'Not connected'})
+
+        conn.robot.homing()
+        conn.add_history('sys', 'Homing started')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/zero', methods=['POST'])
+def cmd_zero():
+    """Call zero() on the robot at the specified port."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', None)
+
+        mgr = SerialManager.get_instance()
+        conn = None
+        if port and port in mgr._ports:
+            conn = mgr._ports[port]
+        elif mgr.active_connection:
+            conn = mgr.active_connection
+
+        if not conn or not conn.connected or not conn.robot:
+            return jsonify({'success': False, 'error': 'Not connected'})
+
+        conn.robot.zero()
+        conn.add_history('sys', 'Move to zero position')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/stop-all', methods=['POST'])
+def cmd_stop_all():
+    """Emergency stop: call cancellation() on all connected robots."""
+    try:
+        mgr = SerialManager.get_instance()
+        stopped = []
+        errors = []
+        for conn in mgr.all_connected():
+            try:
+                if conn.robot:
+                    conn.robot.cancellation()
+                    conn.add_history('sys', 'STOP — cancellation sent')
+                    stopped.append(conn.port)
+            except Exception as e:
+                errors.append({'port': conn.port, 'error': str(e)})
+        return jsonify({'success': True, 'stopped': stopped, 'errors': errors})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/jog', methods=['POST'])
+def cmd_jog():
+    """Jog a single axis by a step amount using the SDK."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+
+        port = data.get('port', None)
+        mode = data.get('mode', 'joint')       # 'joint' or 'coord'
+        axis = data.get('axis', '').upper()     # e.g. 'X', 'Y', 'Z', 'A', 'B', 'C'
+        step = float(data.get('step', 0))
+
+        if not axis or step == 0:
+            return jsonify({'success': False, 'error': 'Invalid axis or step'}), 400
+
+        mgr = SerialManager.get_instance()
+        conn = None
+        if port and port in mgr._ports:
+            conn = mgr._ports[port]
+        elif mgr.active_connection:
+            conn = mgr.active_connection
+
+        if not conn or not conn.connected or not conn.robot:
+            return jsonify({'success': False, 'error': 'Not connected'})
+
+        # Build keyword args: only the target axis gets the step value
+        kwargs = {axis.lower(): step}
+
+        if mode == 'coord':
+            # writeCoordinate(motion=0 fast, position=1 incremental, axis=step)
+            conn.robot.writeCoordinate(0, 1, **kwargs)
+        else:
+            # writeAngle(position=1 incremental, axis=step)
+            conn.robot.writeAngle(1, **kwargs)
+
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/cmd/status', methods=['GET'])
 def cmd_status():
     """Get current connection status."""

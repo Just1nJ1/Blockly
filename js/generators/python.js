@@ -155,6 +155,59 @@ function initPythonGenerator() {
   };
 
   /**
+   * Helper: get axis value from a ValueInput, returning 'None' if empty.
+   */
+  function getAxisValue(block, key) {
+    var input = block.getInput('AXIS_' + key);
+    if (!input) return null;  // axis doesn't exist on this block
+    var val = Blockly.Python.valueToCode(block, 'AXIS_' + key, Blockly.Python.ORDER_NONE);
+    return val || 'None';
+  }
+
+  /**
+   * Generator for write_coordinate block.
+   */
+  generatorTarget['write_coordinate'] = function(block) {
+    const varField = block.getField('VARIABLE');
+    const varModel = varField.getVariable();
+    const varName = Blockly.Python.getVariableName
+      ? Blockly.Python.getVariableName(varModel.getId())
+      : varModel.name;
+    const motion = block.getFieldValue('MOTION');
+    const position = block.getFieldValue('POSITION');
+
+    var axisKeys = ['X', 'Y', 'Z', 'A', 'B', 'C'];
+    var args = [motion, position];
+    for (var i = 0; i < axisKeys.length; i++) {
+      var val = getAxisValue(block, axisKeys[i]);
+      if (val !== null) args.push(val);
+    }
+
+    return varName + '.writeCoordinate(' + args.join(', ') + ')\n';
+  };
+
+  /**
+   * Generator for write_angle block.
+   */
+  generatorTarget['write_angle'] = function(block) {
+    const varField = block.getField('VARIABLE');
+    const varModel = varField.getVariable();
+    const varName = Blockly.Python.getVariableName
+      ? Blockly.Python.getVariableName(varModel.getId())
+      : varModel.name;
+    const position = block.getFieldValue('POSITION');
+
+    var axisKeys = ['X', 'Y', 'Z', 'A', 'B', 'C'];
+    var args = [position];
+    for (var i = 0; i < axisKeys.length; i++) {
+      var val = getAxisValue(block, axisKeys[i]);
+      if (val !== null) args.push(val);
+    }
+
+    return varName + '.writeAngle(' + args.join(', ') + ')\n';
+  };
+
+  /**
    * Collect arguments from a block's parameters, handling dynamic *args/**kwargs
    * value-input slots.  Returns an array of argument strings.
    */

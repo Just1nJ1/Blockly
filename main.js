@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -153,6 +153,137 @@ async function findAvailablePort(startPort) {
   throw new Error(`No available port found in range ${startPort}-${startPort + 99}`);
 }
 
+function buildAppMenu() {
+  const isMac = process.platform === 'darwin';
+
+  const template = [
+    // App menu (macOS only)
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        {
+          label: 'Settings...',
+          accelerator: 'Cmd+,',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.executeJavaScript(
+                'if (typeof openSettings === "function") openSettings();'
+              ).catch(() => {});
+            }
+          }
+        },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    }] : []),
+    // File menu
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Open Workspace...',
+          accelerator: isMac ? 'Cmd+O' : 'Ctrl+O',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.executeJavaScript(
+                'if (typeof switchWorkspace === "function") switchWorkspace();'
+              ).catch(() => {});
+            }
+          }
+        },
+        {
+          label: 'Save',
+          accelerator: isMac ? 'Cmd+S' : 'Ctrl+S',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.executeJavaScript(
+                'if (typeof saveWorkspaceBlocks === "function") saveWorkspaceBlocks();'
+              ).catch(() => {});
+            }
+          }
+        },
+        { type: 'separator' },
+        ...(!isMac ? [{
+          label: 'Settings...',
+          accelerator: 'Ctrl+,',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.executeJavaScript(
+                'if (typeof openSettings === "function") openSettings();'
+              ).catch(() => {});
+            }
+          }
+        }] : []),
+        ...(!isMac ? [{ type: 'separator' }] : []),
+        isMac ? { role: 'close' } : { role: 'quit' }
+      ]
+    },
+    // Edit menu
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    // View menu
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    // Window menu
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac ? [
+          { type: 'separator' },
+          { role: 'front' }
+        ] : [
+          { role: 'close' }
+        ])
+      ]
+    },
+    // Help menu
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'WLKATA Website',
+          click: () => { shell.openExternal('https://www.wlkata.com'); }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -164,6 +295,7 @@ function createWindow() {
     },
   });
 
+  buildAppMenu();
   mainWindow.loadFile('index.html');
 
   // Open DevTools to see errors (remove this line for production)

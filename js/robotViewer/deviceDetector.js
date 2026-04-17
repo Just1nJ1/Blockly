@@ -59,6 +59,7 @@
         if (changed) {
           console.log('[DeviceDetector] Ports updated:', newPorts, 'Model map:', newMap);
           updateCommandPortSelect(data.ports);
+          updateControlPortSelect(data.ports);
         }
       })
       .catch(function(err) {
@@ -173,6 +174,47 @@
     }
 
     updateRemoveButton();
+  }
+
+  // Update the control panel's port dropdown
+  function updateControlPortSelect(ports) {
+    var select = document.getElementById('ctrl-port-select');
+    if (!select) return;
+
+    var currentValue = select.value;
+    select.innerHTML = '';
+
+    if (!ports || ports.length === 0) {
+      var noConn = document.createElement('option');
+      noConn.value = '';
+      noConn.textContent = 'No Connection';
+      noConn.disabled = true;
+      noConn.selected = true;
+      select.appendChild(noConn);
+      return;
+    }
+
+    for (var i = 0; i < ports.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = ports[i].port;
+      opt.textContent = ports[i].port + ' (' + ports[i].model + ')';
+      select.appendChild(opt);
+    }
+
+    // Restore previous selection
+    var restored = false;
+    for (var j = 0; j < select.options.length; j++) {
+      if (select.options[j].value === currentValue) {
+        select.selectedIndex = j;
+        restored = true;
+        break;
+      }
+    }
+    if (!restored && ports.length > 0) {
+      select.selectedIndex = 0;
+      // Trigger change so control panel picks up the new port
+      select.dispatchEvent(new Event('change'));
+    }
   }
 
   // Show a custom modal prompt (Electron doesn't support window.prompt)

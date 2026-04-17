@@ -11,9 +11,26 @@ Provides:
 - The active port is the one currently selected in the Command tab
 """
 
+import sys
+import os
 import serial
 import threading
 import time
+
+# Add the bundled wlkatapython SDK to the path
+_SDK_PATH = os.path.join(os.path.dirname(__file__), '..', 'resources', 'python',
+                         'lib', 'python3.12', 'site-packages')
+if _SDK_PATH not in sys.path:
+    sys.path.insert(0, os.path.abspath(_SDK_PATH))
+
+import wlkatapython
+
+# Map model names to SDK classes
+_MODEL_CLASSES = {
+    'Mirobot': wlkatapython.Mirobot_UART,
+    'MT4': wlkatapython.MT4_UART,
+    'E4': wlkatapython.E4_UART,
+}
 
 
 class PortConnection:
@@ -46,6 +63,9 @@ class PortConnection:
         self._rx_event = threading.Event()  # signaled when a new line arrives
         self._rx_cursor = 0        # SDK's read position in _rx_lines
 
+        # SDK robot instance (initialized on connect)
+        self.robot = None
+
     # ── Connection lifecycle ──
 
     def connect(self):
@@ -58,12 +78,23 @@ class PortConnection:
             self._read_thread = threading.Thread(
                 target=self._read_loop, daemon=True)
             self._read_thread.start()
+
+            # Create SDK robot instance with a ProxySerial
+            self._init_robot()
+
             self.add_history('sys', f'Connected to {self.port} ({self.model or "unknown"})')
             return True
         except Exception as e:
             self.connected = False
             self.add_history('sys', f'Connection failed: {e}')
             return False
+
+    def _init_robot(self):
+        """Create and initialize the SDK robot instance for this port."""
+        cls = _MODEL_CLASSES.get(self.model, wlkatapython.Mirobot_UART)
+        self.robot = cls()
+        proxy = ProxySerial(self)
+        self.robot.init(proxy, -1)
 
     def disconnect(self):
         self._stop_event.set()
@@ -276,11 +307,10 @@ class SerialManager:
 
     # ── Connection lifecycle ──
 
-    def connect(self, port, model=None, baudrate=115200):
-        """Connect to a port (registers it if needed).
-        Does NOT disconnect the previous active port — both stay
-        connected so their read threads keep capturing data.
-        If the port is already connected, just switches active without reconnecting."""
+    def ensure_connected(self, port, model=None, baudrate=115200):
+        """Ensure a port is connected (register + connect if needed).
+        Does NOT change the active port. Used by the detector for
+        auto-connecting discovered robots in the background."""
         if port not in self._ports:
             self.register_port(port, model=model, baudrate=baudrate)
 
@@ -289,14 +319,18 @@ class SerialManager:
             conn.model = model
 
         if conn.connected:
-            # Already connected — just switch active port
-            self._active_port = port
             return {'success': True, 'port': port, 'model': conn.model}
 
         success = conn.connect()
-        if success:
-            self._active_port = port
         return {'success': success, 'port': port, 'model': conn.model}
+
+    def connect(self, port, model=None, baudrate=115200):
+        """Connect to a port and set it as the active port.
+        Called when the user explicitly selects a port in the UI."""
+        result = self.ensure_connected(port, model=model, baudrate=baudrate)
+        if result['success']:
+            self._active_port = port
+        return result
 
     def disconnect(self, port=None):
         """Disconnect a port (default: active port)."""

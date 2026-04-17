@@ -94,6 +94,27 @@ async function runCode() {
   } finally {
     runBtn.disabled = false;
     runBtn.textContent = '▶ Run';
+
+    // Mark control panel as stale after execution
+    if (typeof window.controlPanelMarkStale === 'function') {
+      window.controlPanelMarkStale();
+    }
+  }
+}
+
+/**
+ * Emergency stop all connected robots.
+ */
+async function stopAllRobots() {
+  const serverUrl = getServerUrl ? getServerUrl() : 'http://127.0.0.1:5080';
+  try {
+    await fetch(`${serverUrl}/cmd/stop-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(5000)
+    });
+  } catch (e) {
+    // Best effort — don't block on errors
   }
 }
 

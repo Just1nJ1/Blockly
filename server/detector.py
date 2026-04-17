@@ -87,14 +87,15 @@ def _is_ignored_port(device):
 
 def _dedup_macos_ports(ports):
     """On macOS, /dev/cu.X and /dev/tty.X are the same device.
-    Prefer /dev/tty.X when both exist, keep /dev/cu.X if tty is missing."""
-    tty_set = {p.device for p in ports if p.device.startswith('/dev/tty.')}
+    Prefer /dev/cu.X (opens without waiting for carrier detect).
+    Drop /dev/tty.X when a matching /dev/cu.X exists."""
+    cu_set = {p.device for p in ports if p.device.startswith('/dev/cu.')}
     result = []
     for p in ports:
-        if p.device.startswith('/dev/cu.'):
-            tty_equiv = '/dev/tty.' + p.device[len('/dev/cu.'):]
-            if tty_equiv in tty_set:
-                continue  # skip cu, tty variant will be kept
+        if p.device.startswith('/dev/tty.'):
+            cu_equiv = '/dev/cu.' + p.device[len('/dev/tty.'):]
+            if cu_equiv in cu_set:
+                continue  # skip tty, cu variant will be kept
         result.append(p)
     return result
 
@@ -164,7 +165,9 @@ def scan_devices():
 
     for device, info in _cache.items():
         if info['model'] is not None:
-            mgr.register_port(device, model=info['model'])
+            # Auto-connect detected robots (creates SDK instance + read thread)
+            # Uses ensure_connected so it doesn't change the active port
+            mgr.ensure_connected(device, model=info['model'])
             current_robot_ports.add(device)
             results.append({
                 'port': device,

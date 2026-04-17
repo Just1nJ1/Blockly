@@ -15,6 +15,7 @@ function initCustomBlocks() {
   initInstanceFunctionCallBlock();
   initFunctionParamBlock();
   initSetupRobotBlock();
+  initMoveRobotBlocks();
   initLocalVariablesIcon();
   initProcedureOverrides();
   installFilteredVariableDropdown();
