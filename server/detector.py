@@ -13,6 +13,7 @@ Caching strategy:
 """
 import time
 
+import sys
 import serial
 import serial.tools.list_ports
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -57,7 +58,9 @@ def detect_model(port):
                     return "Mirobot"
                 if message.startswith("E4"):
                     return "MT4"
-    except (serial.SerialException, OSError):
+    except (serial.SerialException, OSError, PermissionError):
+        # PermissionError: on Linux/Chromebook, user may not have serial access.
+        # Fix: add user to 'dialout' group: sudo usermod -aG dialout $USER
         return None
 
     return None
@@ -85,10 +88,13 @@ def _is_ignored_port(device):
     return False
 
 
-def _dedup_macos_ports(ports):
-    """On macOS, /dev/cu.X and /dev/tty.X are the same device.
-    Prefer /dev/cu.X (opens without waiting for carrier detect).
-    Drop /dev/tty.X when a matching /dev/cu.X exists."""
+def _dedup_platform_ports(ports):
+    """Platform-specific port deduplication.
+    macOS: /dev/cu.X and /dev/tty.X are the same device — prefer /dev/cu.X.
+    Linux/Chromebook: no dedup needed (/dev/ttyUSB*, /dev/ttyACM* are unique)."""
+    if sys.platform != 'darwin':
+        return ports
+
     cu_set = {p.device for p in ports if p.device.startswith('/dev/cu.')}
     result = []
     for p in ports:
@@ -135,7 +141,7 @@ def scan_devices():
 
     all_ports = [p for p in serial.tools.list_ports.comports()
                  if not _is_ignored_port(p.device)]
-    all_ports = _dedup_macos_ports(all_ports)
+    all_ports = _dedup_platform_ports(all_ports)
     current_devices = {p.device for p in all_ports}
 
     # --- Evict ports that have been missing for two consecutive scans ---

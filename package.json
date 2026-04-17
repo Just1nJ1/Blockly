@@ -10,7 +10,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build:win": "electron-builder --win --publish never",
     "build:mac": "electron-builder --mac --publish never",
-    "build:all": "electron-builder --win --mac --publish never",
+    "build:linux": "electron-builder --linux --publish never",
+    "build:all": "electron-builder --win --mac --linux --publish never",
     "postinstall": "electron-builder install-app-deps && npm run setup"
   },
   "keywords": [
@@ -37,14 +38,13 @@
       "output": "dist"
     },
     "files": [
+      "css/**/*",
       "js/**/*",
       "node_modules/**/*",
-      "server/**/*",
       "resources/6dof/**/*",
       "resources/icons/**/*",
       "index.html",
-      "main.js",
-      "server.py"
+      "main.js"
     ],
     "extraResources": [
       {
@@ -61,6 +61,11 @@
     ],
     "mac": {
       "category": "public.app-category.education",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true,
       "target": [
         {
           "target": "dmg",
@@ -86,6 +91,29 @@
         }
       ],
       "artifactName": "WLKATA-Blockly-Win-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "resources/python",
+          "to": "python",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "category": "Education",
+      "artifactName": "WLKATA-Blockly-Linux-${arch}.${ext}",
       "extraResources": [
         {
           "from": "resources/python",

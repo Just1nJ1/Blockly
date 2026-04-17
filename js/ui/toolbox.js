@@ -69,7 +69,13 @@ function getToolboxConfig() {
           { kind: 'block', type: 'text_getSubstring' },
           { kind: 'block', type: 'text_changeCase' },
           { kind: 'block', type: 'text_trim' },
-          { kind: 'block', type: 'text_print' },
+          { kind: 'block', type: 'text_print',
+            inputs: {
+              TEXT: {
+                shadow: { type: 'text', fields: { TEXT: '' } }
+              }
+            }
+          },
           { kind: 'block', type: 'text_prompt_ext' },
         ],
       },
@@ -109,8 +115,23 @@ function getToolboxConfig() {
         colour: '#E67E22',
         contents: [
           { kind: 'block', type: 'setup_robot' },
+          { kind: 'block', type: 'robot_homing' },
+          { kind: 'block', type: 'robot_zero' },
+          { kind: 'block', type: 'robot_speed' },
           { kind: 'block', type: 'write_coordinate' },
           { kind: 'block', type: 'write_angle' },
+          { kind: 'block', type: 'robot_wait_idle' },
+          { kind: 'block', type: 'robot_send_msg' },
+          { kind: 'block', type: 'robot_delay',
+            inputs: {
+              TIME: {
+                shadow: { type: 'math_number', fields: { NUM: 0 } }
+              }
+            }
+          },
+          { kind: 'block', type: 'robot_pump' },
+          { kind: 'block', type: 'robot_gripper' },
+          { kind: 'block', type: 'robot_three_finger' },
         ],
       },
       {

@@ -58,6 +58,8 @@
 
         if (changed) {
           console.log('[DeviceDetector] Ports updated:', newPorts, 'Model map:', newMap);
+          // Reset last connected port so reconnect works after disconnect/reconnect
+          _lastConnectedPort = null;
           updateCommandPortSelect(data.ports);
           updateControlPortSelect(data.ports);
         }
@@ -176,6 +178,22 @@
     updateRemoveButton();
   }
 
+  // Get variable name associated with a port from setup_robot blocks
+  function getVarNameForPort(port) {
+    var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+    if (!ws) return null;
+    var blocks = ws.getBlocksByType('setup_robot', false);
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].getFieldValue('PORT') === port) {
+        var field = blocks[i].getField('VARIABLE');
+        if (field && field.getVariable()) {
+          return field.getVariable().name;
+        }
+      }
+    }
+    return null;
+  }
+
   // Update the control panel's port dropdown
   function updateControlPortSelect(ports) {
     var select = document.getElementById('ctrl-port-select');
@@ -197,7 +215,11 @@
     for (var i = 0; i < ports.length; i++) {
       var opt = document.createElement('option');
       opt.value = ports[i].port;
-      opt.textContent = ports[i].port + ' (' + ports[i].model + ')';
+      var varName = getVarNameForPort(ports[i].port);
+      var label = '';
+      if (varName) label = varName + ' - ';
+      label += ports[i].port + ' (' + ports[i].model + ')';
+      opt.textContent = label;
       select.appendChild(opt);
     }
 
@@ -371,6 +393,14 @@
 
   // Keep a reference to the last detected ports for rebuilding after manual add
   var lastDetectedPorts = [];
+
+  // Refresh control panel dropdown labels (called when workspace blocks change)
+  function refreshControlPortLabels() {
+    if (lastDetectedPorts.length > 0) {
+      updateControlPortSelect(lastDetectedPorts);
+    }
+  }
+  window.refreshControlPortLabels = refreshControlPortLabels;
 
   // Start polling and set up auto-switch after DOM is ready
   function init() {

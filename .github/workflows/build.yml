@@ -34,6 +34,20 @@ jobs:
             build_cmd: npm run build:win -- --x64
             artifact_name: blockly-win-x64
 
+          - os: ubuntu-latest
+            arch: x64
+            python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-x86_64-unknown-linux-gnu-install_only.tar.gz
+            pip: resources/python/bin/pip3
+            build_cmd: npm run build:linux -- --x64
+            artifact_name: blockly-linux-x64
+
+          - os: ubuntu-latest
+            arch: arm64
+            python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-aarch64-unknown-linux-gnu-install_only.tar.gz
+            pip: resources/python/bin/pip3
+            build_cmd: npm run build:linux -- --arm64
+            artifact_name: blockly-linux-arm64
+
     steps:
     - uses: actions/checkout@v6
 
@@ -76,6 +90,8 @@ jobs:
           dist/*.dmg
           dist/*.exe
           dist/*.zip
+          dist/*.AppImage
+          dist/*.deb
 
   # Dev release on this repo for every push to main (internal testing)
   release-dev:

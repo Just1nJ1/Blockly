@@ -66,6 +66,9 @@ class PortConnection:
         # SDK robot instance (initialized on connect)
         self.robot = None
 
+        # Silent mode: when True, add_history is suppressed
+        self._silent = False
+
     # ── Connection lifecycle ──
 
     def connect(self):
@@ -112,6 +115,8 @@ class PortConnection:
     # ── History ──
 
     def add_history(self, direction, text, source=None):
+        if self._silent:
+            return
         with self._history_lock:
             entry = {
                 'id': self._next_id,

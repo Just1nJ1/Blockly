@@ -168,11 +168,7 @@ function initPythonGenerator() {
    * Generator for write_coordinate block.
    */
   generatorTarget['write_coordinate'] = function(block) {
-    const varField = block.getField('VARIABLE');
-    const varModel = varField.getVariable();
-    const varName = Blockly.Python.getVariableName
-      ? Blockly.Python.getVariableName(varModel.getId())
-      : varModel.name;
+    const varName = block.getFieldValue('VARIABLE');
     const motion = block.getFieldValue('MOTION');
     const position = block.getFieldValue('POSITION');
 
@@ -190,11 +186,7 @@ function initPythonGenerator() {
    * Generator for write_angle block.
    */
   generatorTarget['write_angle'] = function(block) {
-    const varField = block.getField('VARIABLE');
-    const varModel = varField.getVariable();
-    const varName = Blockly.Python.getVariableName
-      ? Blockly.Python.getVariableName(varModel.getId())
-      : varModel.name;
+    const varName = block.getFieldValue('VARIABLE');
     const position = block.getFieldValue('POSITION');
 
     var axisKeys = ['X', 'Y', 'Z', 'A', 'B', 'C'];
@@ -205,6 +197,81 @@ function initPythonGenerator() {
     }
 
     return varName + '.writeAngle(' + args.join(', ') + ')\n';
+  };
+
+  /**
+   * Generator for robot_homing block.
+   */
+  generatorTarget['robot_homing'] = function(block) {
+    return block.getFieldValue('VARIABLE') + '.homing()\n';
+  };
+
+  /**
+   * Generator for robot_zero block.
+   */
+  generatorTarget['robot_zero'] = function(block) {
+    return block.getFieldValue('VARIABLE') + '.zero()\n';
+  };
+
+  /**
+   * Generator for robot_speed block.
+   */
+  generatorTarget['robot_speed'] = function(block) {
+    var varName = block.getFieldValue('VARIABLE');
+    var speed = Blockly.Python.valueToCode(block, 'SPEED', Blockly.Python.ORDER_NONE) || '0';
+    return varName + '.speed(' + speed + ')\n';
+  };
+
+  /**
+   * Generator for robot_delay block.
+   */
+  generatorTarget['robot_delay'] = function(block) {
+    var time = Blockly.Python.valueToCode(block, 'TIME', Blockly.Python.ORDER_NONE) || '1';
+    Blockly.Python.definitions_['import_time'] = 'import time';
+    return 'time.sleep(' + time + ')\n';
+  };
+
+  /**
+   * Generator for robot_send_msg block.
+   */
+  generatorTarget['robot_send_msg'] = function(block) {
+    var varName = block.getFieldValue('VARIABLE');
+    var message = Blockly.Python.valueToCode(block, 'MESSAGE', Blockly.Python.ORDER_NONE) || "''";
+    return varName + '.sendMsg(' + message + ')\n';
+  };
+
+  /**
+   * Generator for robot_wait_idle block.
+   */
+  generatorTarget['robot_wait_idle'] = function(block) {
+    return block.getFieldValue('VARIABLE') + '.waitIdle()\n';
+  };
+
+  /**
+   * Generator for robot_pump block (suction cup).
+   */
+  generatorTarget['robot_pump'] = function(block) {
+    var varName = block.getFieldValue('VARIABLE');
+    var mode = block.getFieldValue('MODE');
+    return varName + '.pump(' + mode + ')\n';
+  };
+
+  /**
+   * Generator for robot_gripper block.
+   */
+  generatorTarget['robot_gripper'] = function(block) {
+    var varName = block.getFieldValue('VARIABLE');
+    var mode = block.getFieldValue('MODE');
+    return varName + '.gripper(' + mode + ')\n';
+  };
+
+  /**
+   * Generator for robot_three_finger block.
+   */
+  generatorTarget['robot_three_finger'] = function(block) {
+    var varName = block.getFieldValue('VARIABLE');
+    var mode = block.getFieldValue('MODE');
+    return varName + '.pump(' + mode + ')\n';
   };
 
   /**

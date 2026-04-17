@@ -178,6 +178,11 @@ body {
   background: var(--sidebar-active);
   color: var(--sidebar-active-text);
 }
+.sidebar-tab.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* Main content area (right of sidebar) */
 #app-content {
@@ -558,6 +563,8 @@ button:disabled {
 #stepBtn:hover { background: #F57C00; }
 #continueBtn { background: #4CAF50; }
 #continueBtn:hover { background: #388E3C; }
+#runSelectedBtn { background: #8BC34A; color: #333; }
+#runSelectedBtn:hover { background: #7CB342; }
 #stopDebugBtn { background: #f44336; }
 #stopDebugBtn:hover { background: #d32f2f; }
 
@@ -1075,6 +1082,30 @@ button:disabled {
 }
 #settings-btn {
   margin-top: auto;
+}
+
+/* Block area selection */
+.blockly-selection-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none;
+  cursor: crosshair;
+}
+.blockly-selection-rect {
+  fill: rgba(33, 150, 243, 0.15);
+  stroke: #2196F3;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+  pointer-events: none;
+}
+.blockly-selected-multi > .blocklyPath {
+  stroke: #2196F3 !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: none !important;
 }
 
 /* Theme toggle button */

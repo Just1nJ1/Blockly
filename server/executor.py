@@ -5,12 +5,25 @@ Handles safe execution of Python code and captures stdout/stderr.
 
 import sys
 import io
+import threading
 import traceback
 from .serial_manager import SerialManager
 
 
+class _AbortExecution(Exception):
+    """Raised when execution is aborted via emergency stop."""
+    pass
+
+
 class CodeExecutor:
     """Handles safe execution of Python code."""
+
+    _abort_event = threading.Event()
+
+    @classmethod
+    def abort(cls):
+        """Signal the running execution to abort."""
+        cls._abort_event.set()
 
     @staticmethod
     def _safe_globals() -> dict:
@@ -138,8 +151,21 @@ class CodeExecutor:
                         return _orig_import(name, *args, **kwargs)
                     safe_globals['__builtins__']['__import__'] = _patched_import
 
+                # Clear abort flag before starting
+                CodeExecutor._abort_event.clear()
+
+                # Set up a trace function that checks the abort flag on every line
+                def _abort_trace(frame, event, arg):
+                    if CodeExecutor._abort_event.is_set():
+                        raise _AbortExecution('Execution aborted by emergency stop')
+                    return _abort_trace
+
                 compiled = compile(code, '<blockly>', 'exec')
-                exec(compiled, safe_globals)
+                sys.settrace(_abort_trace)
+                try:
+                    exec(compiled, safe_globals)
+                finally:
+                    sys.settrace(None)
 
                 # Get the result - try to find the last expression value
                 result = None
@@ -161,6 +187,13 @@ class CodeExecutor:
                     'stdout': stdout_buffer.getvalue(),
                     'stderr': stderr_buffer.getvalue(),
                     'result': repr(result) if result is not None else None
+                }
+            except _AbortExecution:
+                return {
+                    'success': False,
+                    'error': 'Execution aborted by emergency stop',
+                    'stdout': stdout_buffer.getvalue(),
+                    'stderr': stderr_buffer.getvalue()
                 }
             except SyntaxError as e:
                 return {

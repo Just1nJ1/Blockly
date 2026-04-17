@@ -96,7 +96,15 @@
         valueInput.type = 'text';
         valueInput.className = 'ctrl-joint-value';
         valueInput.value = '0.00';
-        valueInput.readOnly = true;
+        valueInput.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            var val = parseFloat(valueInput.value);
+            if (isNaN(val)) return;
+            moveToAbsolute(axis.sdkParam, val);
+            valueInput.blur();
+          }
+        });
 
         var plusBtn = document.createElement('button');
         plusBtn.className = 'ctrl-btn ctrl-btn-plus';
@@ -146,6 +154,38 @@
   function jog(sdkParam, step) {
     if (!_currentPort) return;
 
+    // Notify debugger BEFORE jogging (captures before-jog position on first click)
+    var notifyPromise = Promise.resolve();
+    if (typeof window.debugNotifyJog === 'function') {
+      notifyPromise = window.debugNotifyJog() || Promise.resolve();
+    }
+
+    notifyPromise.then(function() {
+      return fetch(getServerUrl() + '/cmd/jog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          port: _currentPort,
+          mode: _currentMode,
+          axis: sdkParam,
+          step: step
+        })
+      });
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        setTimeout(function() { refreshStatus(true); }, 500);
+      }
+    })
+    .catch(function() {});
+  }
+
+  // ── Move to absolute position ──
+
+  function moveToAbsolute(sdkParam, value) {
+    if (!_currentPort) return;
+
     fetch(getServerUrl() + '/cmd/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -153,14 +193,14 @@
         port: _currentPort,
         mode: _currentMode,
         axis: sdkParam,
-        step: step
+        step: value,
+        absolute: true
       })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.success) {
-        // Refresh values after jog completes
-        setTimeout(refreshStatus, 500);
+        setTimeout(function() { refreshStatus(true); }, 500);
       }
     })
     .catch(function() {});
@@ -184,7 +224,7 @@
     });
 
     buildAxisRows();
-    refreshStatus();
+    refreshStatus(true);
   }
 
   function setupModeToggle() {
@@ -255,31 +295,30 @@
     }
 
     buildAxisRows();
-    _needsRefresh = true;
-    refreshIfVisible();
+    refreshStatus(false);  // initial query is non-silent (shows in command tab)
+    startStatusPolling();
   }
 
-  // ── Status refresh ──
+  // ── Status polling ──
 
+  var STATUS_POLL_INTERVAL = 200;
+  var _pollTimer = null;
   var _refreshing = false;
-  var _needsRefresh = false;  // flag: data is stale, refresh when visible
 
-  function refreshStatus() {
+  function refreshStatus(silent) {
     if (!_currentPort || _refreshing) return;
     _refreshing = true;
-    _needsRefresh = false;
 
     fetch(getServerUrl() + '/cmd/get-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port: _currentPort })
+      body: JSON.stringify({ port: _currentPort, silent: !!silent })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       _refreshing = false;
       if (!data.success) return;
 
-      // Update model from server if available (SDK knows the real model)
       if (data.model && data.model !== _currentModel) {
         _currentModel = data.model;
         buildAxisRows();
@@ -299,24 +338,32 @@
            blocklyView && blocklyView.classList.contains('active');
   }
 
-  function refreshIfVisible() {
-    if (isControlPanelVisible()) {
-      refreshStatus();
-    } else {
-      _needsRefresh = true;
+  function startStatusPolling() {
+    stopStatusPolling();
+    _pollTimer = setInterval(function() {
+      if (isControlPanelVisible()) {
+        refreshStatus(true);  // silent poll — no history logging
+      }
+    }, STATUS_POLL_INTERVAL);
+  }
+
+  function stopStatusPolling() {
+    if (_pollTimer) {
+      clearInterval(_pollTimer);
+      _pollTimer = null;
     }
   }
 
-  // Mark data as stale — will refresh when control panel becomes visible
+  // For external callers (command send, blockly run, etc.)
   function markStale() {
-    _needsRefresh = true;
-    refreshIfVisible();
+    if (isControlPanelVisible()) {
+      refreshStatus(true);
+    }
   }
 
-  // Check if stale and refresh if visible (does NOT set the flag)
   function checkAndRefresh() {
-    if (_needsRefresh) {
-      refreshIfVisible();
+    if (isControlPanelVisible()) {
+      refreshStatus(true);
     }
   }
 
@@ -402,11 +449,30 @@
         }
       });
 
+      // Find the variable name for the selected port from setup_robot blocks
+      var varName = null;
+      var setupBlocks = workspace.getBlocksByType('setup_robot', false);
+      for (var s = 0; s < setupBlocks.length; s++) {
+        var portVal = setupBlocks[s].getFieldValue('PORT');
+        if (portVal === _currentPort) {
+          var varField = setupBlocks[s].getField('VARIABLE');
+          if (varField && varField.getVariable()) {
+            varName = varField.getVariable().name;
+          }
+          break;
+        }
+      }
+
       // Determine block type based on mode
       var blockType = (_currentMode === 'coord') ? 'write_coordinate' : 'write_angle';
 
       // Create the block
       var block = workspace.newBlock(blockType);
+
+      // Set the variable to match the port's robot variable
+      if (varName && block.getField('VARIABLE')) {
+        block.setFieldValue(varName, 'VARIABLE');
+      }
 
       // Set mode to Absolute
       if (block.getField('POSITION')) {
@@ -446,12 +512,24 @@
 
   // ── End effector ──
 
+  // Each effector type: list of { label, endpoint, mode }
   var EFFECTORS = {
     none: [],
-    suction: ['On', 'Off', 'Blow'],
-    gripper: ['On', 'Off'],
-    ball: ['On', 'Off'],
-    soft: ['On', 'Off', 'Grab']
+    suction: [
+      { label: 'SUCTION', endpoint: '/cmd/pump', mode: 1 },
+      { label: 'BLOW',    endpoint: '/cmd/pump', mode: 2 },
+      { label: 'OFF',     endpoint: '/cmd/pump', mode: 0 }
+    ],
+    gripper: [
+      { label: 'OPEN',  endpoint: '/cmd/gripper', mode: 1 },
+      { label: 'CLOSE', endpoint: '/cmd/gripper', mode: 2 },
+      { label: 'OFF',   endpoint: '/cmd/gripper', mode: 0 }
+    ],
+    soft: [
+      { label: 'OPEN',  endpoint: '/cmd/pump', mode: 1 },
+      { label: 'CLOSE', endpoint: '/cmd/pump', mode: 2 },
+      { label: 'OFF',   endpoint: '/cmd/pump', mode: 0 }
+    ]
   };
 
   function setupEffectorSelect() {
@@ -462,7 +540,6 @@
       buildEffectorButtons(select.value);
     });
 
-    // Initial state
     buildEffectorButtons(select.value);
   }
 
@@ -474,11 +551,28 @@
     var buttons = EFFECTORS[type] || [];
 
     for (var i = 0; i < buttons.length; i++) {
-      var btn = document.createElement('button');
-      btn.className = 'ctrl-btn ctrl-eff-btn';
-      btn.textContent = buttons[i];
-      container.appendChild(btn);
+      (function(btnDef) {
+        var btn = document.createElement('button');
+        btn.className = 'ctrl-btn ctrl-eff-btn';
+        btn.textContent = btnDef.label;
+        btn.addEventListener('click', function() {
+          sendEffectorCommand(btnDef.endpoint, btnDef.mode);
+        });
+        container.appendChild(btn);
+      })(buttons[i]);
     }
+  }
+
+  function sendEffectorCommand(endpoint, mode) {
+    if (!_currentPort) return;
+
+    fetch(getServerUrl() + endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: _currentPort, mode: mode })
+    })
+    .then(function(r) { return r.json(); })
+    .catch(function() {});
   }
 
   // ── Initialization ──

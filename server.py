@@ -6,11 +6,16 @@ Uses Flask for better request handling.
 """
 
 import argparse
+import logging
 from server.app import create_app
 
 
 def run_server(host='127.0.0.1', port=5080, debug=False):
     """Start the Flask server."""
+    # Suppress werkzeug request logs (GET/POST spam)
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+
     app = create_app()
     print(f"Starting Blockly Python Server at http://{host}:{port}")
     print("Press Ctrl+C to stop")

@@ -21,3 +21,4 @@ __pycache__/
 .vscode/
 *.swp
 *~
+electron-builder.env

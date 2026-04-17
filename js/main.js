@@ -20,6 +20,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set up sidebar tab switching
   initSidebar();
 
+  // Check serial port access on Linux/Chromebook
+  checkSerialAccess();
+
   // Ctrl+S / Cmd+S to save (only when blockly is active)
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -28,6 +31,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 });
+
+/**
+ * Check if serial ports are accessible. Shows a warning on Linux/Chromebook
+ * if the user doesn't have permission.
+ */
+async function checkSerialAccess() {
+  var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
+  try {
+    var resp = await fetch(serverUrl + '/check-serial-access');
+    var data = await resp.json();
+    if (data.success && data.access === false) {
+      // Show warning banner in the command output
+      var output = document.getElementById('command-output');
+      if (output) {
+        var warning = document.createElement('div');
+        warning.style.cssText = 'background:#FFF3E0;color:#E65100;padding:12px 16px;margin:8px;border-radius:6px;font-size:13px;line-height:1.5;border:1px solid #FFB74D;';
+        warning.innerHTML = '<strong>Serial Port Access Denied</strong><br>' +
+          data.message.replace(/\n/g, '<br>');
+        output.appendChild(warning);
+      }
+    }
+  } catch (e) {
+    // Server not ready yet — will check on next poll
+  }
+}
 
 /**
  * Called when the user switches to the Blockly tab.
@@ -89,11 +117,30 @@ function initBlockly() {
   // Store workspace reference
   setWorkspace(workspace);
 
+  // Initialize block area selection (Cmd/Ctrl + drag)
+  if (typeof initBlockSelection === 'function') {
+    initBlockSelection();
+  }
+
   // Store initial toolbox structure
   workspace.initialToolbox = JSON.parse(JSON.stringify(toolbox));
 
   // Update code preview on block change
   workspace.addChangeListener(updateCodePreview);
+
+  // Refresh control panel port labels and block colors when setup_robot blocks change
+  workspace.addChangeListener(function(event) {
+    if (event.type === Blockly.Events.BLOCK_CREATE ||
+        event.type === Blockly.Events.BLOCK_DELETE ||
+        event.type === Blockly.Events.BLOCK_CHANGE) {
+      if (typeof refreshControlPortLabels === 'function') {
+        refreshControlPortLabels();
+      }
+      if (typeof updateRobotBlockColors === 'function') {
+        updateRobotBlockColors();
+      }
+    }
+  });
 
   // ── Dynamic *args / **kwargs slot management ──
   // On any connect or disconnect, immediately cleanup trailing empties and

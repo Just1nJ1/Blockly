@@ -26,6 +26,59 @@ def health_check():
     return jsonify({'status': 'ok', 'message': 'Blockly Python Server is running'})
 
 
+@app.route('/check-serial-access', methods=['GET'])
+def check_serial_access():
+    """Check if the user has permission to access serial ports (Linux)."""
+    import sys
+    import os
+
+    if sys.platform == 'win32':
+        return jsonify({'success': True, 'access': True})
+
+    # Check if user is in dialout/uucp group
+    try:
+        import grp
+        username = os.getlogin()
+        groups = [g.gr_name for g in grp.getgrall() if username in g.gr_mem]
+        # Also check primary group
+        primary_gid = os.getgid()
+        try:
+            primary_group = grp.getgrgid(primary_gid).gr_name
+            groups.append(primary_group)
+        except KeyError:
+            pass
+
+        has_dialout = 'dialout' in groups
+        has_uucp = 'uucp' in groups
+
+        if has_dialout or has_uucp:
+            return jsonify({'success': True, 'access': True})
+
+        # Check if any serial ports are actually accessible
+        import serial.tools.list_ports
+        ports = list(serial.tools.list_ports.comports())
+        for p in ports:
+            try:
+                import serial
+                s = serial.Serial(p.device, timeout=0.1)
+                s.close()
+                return jsonify({'success': True, 'access': True})
+            except PermissionError:
+                return jsonify({
+                    'success': True,
+                    'access': False,
+                    'message': 'Serial port permission denied. Run this command and restart:\n\nsudo usermod -aG dialout $USER\n\nThen log out and log back in.',
+                    'platform': sys.platform
+                })
+            except Exception:
+                continue
+
+        # No ports found — can't determine, assume OK
+        return jsonify({'success': True, 'access': True})
+    except Exception as e:
+        return jsonify({'success': True, 'access': True})
+
+
 @app.route('/functions', methods=['GET'])
 def list_functions():
     """Return list of available built-in functions."""
@@ -52,6 +105,16 @@ def execute_code():
 
     except Exception as e:
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/execute/abort', methods=['POST'])
+def execute_abort():
+    """Abort any running code execution."""
+    try:
+        CodeExecutor.abort()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/inspect', methods=['POST'])
@@ -306,10 +369,58 @@ def cmd_get_status():
         if not conn.robot:
             return jsonify({'success': False, 'error': 'No SDK instance for this port'})
 
-        # Call the SDK's getStatus() which sends '?' and parses the response
-        status = conn.robot.getStatus()
+        silent = data.get('silent', False)
 
-        if status == "error" or status == "parse error" or status == -1:
+        # Query status directly via serial (more reliable than SDK's getStatus
+        # which has tight timing). Flush, send ?, wait for <...> response.
+        import time as _time
+        import re as _re
+
+        status = None
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                if silent:
+                    conn._silent = True
+                conn.rx_flush_input()
+                conn.raw_serial.write(b'?\r\n')
+                # Wait for response via RX buffer
+                line_bytes = conn.rx_readline(timeout=1.0)
+                if silent:
+                    conn._silent = False
+
+                if not line_bytes:
+                    _time.sleep(0.2)
+                    continue
+
+                line = line_bytes.decode('utf-8', errors='ignore').strip()
+                if line.startswith('<') and line.endswith('>'):
+                    pattern = r'<(\w+),Angle\(ABCDXYZ\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),Cartesian coordinate\(XYZ RxRyRz\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),Pump PWM:([\d.-]+),Valve PWM:([\d.-]+),Motion_MODE:([\d.-]+)>'
+                    m = _re.match(pattern, line)
+                    if m:
+                        status = {
+                            'state': m.group(1),
+                            'angle_A': m.group(2), 'angle_B': m.group(3),
+                            'angle_C': m.group(4), 'angle_D': m.group(5),
+                            'angle_X': m.group(6), 'angle_Y': m.group(7),
+                            'angle_Z': m.group(8),
+                            'coordinate_X': m.group(9), 'coordinate_Y': m.group(10),
+                            'coordinate_Z': m.group(11), 'coordinate_RX': m.group(12),
+                            'coordinate_RY': m.group(13), 'coordinate_RZ': m.group(14),
+                            'pump': m.group(15), 'valve': m.group(16),
+                            'mode': m.group(17)
+                        }
+                        break
+                _time.sleep(0.2)
+            except Exception:
+                if silent:
+                    conn._silent = False
+                _time.sleep(0.2)
+
+        if silent:
+            conn._silent = False
+
+        if not status:
             return jsonify({'success': False, 'error': 'Failed to get status'})
 
         # status is a dict with keys like 'state', 'angle_A', 'coordinate_X', etc.
@@ -391,6 +502,54 @@ def cmd_zero():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/cmd/pump', methods=['POST'])
+def cmd_pump():
+    """Control the suction cup via SDK pump()."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', None)
+        mode = int(data.get('mode', 0))
+
+        mgr = SerialManager.get_instance()
+        conn = None
+        if port and port in mgr._ports:
+            conn = mgr._ports[port]
+        elif mgr.active_connection:
+            conn = mgr.active_connection
+
+        if not conn or not conn.connected or not conn.robot:
+            return jsonify({'success': False, 'error': 'Not connected'})
+
+        conn.robot.pump(mode)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/gripper', methods=['POST'])
+def cmd_gripper():
+    """Control the gripper via SDK gripper()."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', None)
+        mode = int(data.get('mode', 0))
+
+        mgr = SerialManager.get_instance()
+        conn = None
+        if port and port in mgr._ports:
+            conn = mgr._ports[port]
+        elif mgr.active_connection:
+            conn = mgr.active_connection
+
+        if not conn or not conn.connected or not conn.robot:
+            return jsonify({'success': False, 'error': 'Not connected'})
+
+        conn.robot.gripper(mode)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/cmd/stop-all', methods=['POST'])
 def cmd_stop_all():
     """Emergency stop: call cancellation() on all connected robots."""
@@ -424,8 +583,8 @@ def cmd_jog():
         axis = data.get('axis', '').upper()     # e.g. 'X', 'Y', 'Z', 'A', 'B', 'C'
         step = float(data.get('step', 0))
 
-        if not axis or step == 0:
-            return jsonify({'success': False, 'error': 'Invalid axis or step'}), 400
+        if not axis:
+            return jsonify({'success': False, 'error': 'Invalid axis'}), 400
 
         mgr = SerialManager.get_instance()
         conn = None
@@ -437,15 +596,23 @@ def cmd_jog():
         if not conn or not conn.connected or not conn.robot:
             return jsonify({'success': False, 'error': 'Not connected'})
 
-        # Build keyword args: only the target axis gets the step value
+        absolute = data.get('absolute', False)
+
+        # Build keyword args: only the target axis gets the value
         kwargs = {axis.lower(): step}
 
-        if mode == 'coord':
-            # writeCoordinate(motion=0 fast, position=1 incremental, axis=step)
-            conn.robot.writeCoordinate(0, 1, **kwargs)
+        if absolute:
+            # Absolute move: position=0 (G90)
+            if mode == 'coord':
+                conn.robot.writeCoordinate(0, 0, **kwargs)
+            else:
+                conn.robot.writeAngle(0, **kwargs)
         else:
-            # writeAngle(position=1 incremental, axis=step)
-            conn.robot.writeAngle(1, **kwargs)
+            # Incremental move: position=1 (G91)
+            if mode == 'coord':
+                conn.robot.writeCoordinate(0, 1, **kwargs)
+            else:
+                conn.robot.writeAngle(1, **kwargs)
 
         return jsonify({'success': True})
     except Exception as e:

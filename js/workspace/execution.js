@@ -103,19 +103,43 @@ async function runCode() {
 }
 
 /**
- * Emergency stop all connected robots.
+ * Emergency stop: cancel all robot movements, stop debug session,
+ * and abort any running Blockly code.
  */
 async function stopAllRobots() {
   const serverUrl = getServerUrl ? getServerUrl() : 'http://127.0.0.1:5080';
+
+  // 1. Send cancellation to all connected robots
   try {
-    await fetch(`${serverUrl}/cmd/stop-all`, {
+    fetch(`${serverUrl}/cmd/stop-all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(5000)
     });
-  } catch (e) {
-    // Best effort — don't block on errors
+  } catch (e) {}
+
+  // 2. Stop debug session if active
+  if (typeof debugStop === 'function') {
+    try { debugStop(); } catch (e) {}
   }
+
+  // 3. Abort running execution by killing the executor thread
+  try {
+    fetch(`${serverUrl}/execute/abort`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(5000)
+    });
+  } catch (e) {}
+
+  // 4. Reset UI
+  const runBtn = document.getElementById('runBtn');
+  if (runBtn) {
+    runBtn.disabled = false;
+    runBtn.textContent = '\u25B6 Run';
+  }
+
+  appendOutput('EMERGENCY STOP — all operations cancelled.', 'error');
 }
 
 /**

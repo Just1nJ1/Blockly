@@ -513,9 +513,7 @@ app.on('window-all-closed', () => {
   if (pythonProcess) {
     pythonProcess.kill();
   }
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  app.quit();
 });
 
 // Handle IPC messages from renderer
