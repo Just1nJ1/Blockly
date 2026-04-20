@@ -40,13 +40,16 @@ jobs:
             pip: resources/python/bin/pip3
             build_cmd: npm run build:linux -- --x64
             artifact_name: blockly-linux-x64
+            cross_compile: false
 
           - os: ubuntu-latest
             arch: arm64
             python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-aarch64-unknown-linux-gnu-install_only.tar.gz
-            pip: resources/python/bin/pip3
+            pip_python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-x86_64-unknown-linux-gnu-install_only.tar.gz
+            pip: pip-python/bin/pip3
             build_cmd: npm run build:linux -- --arm64
             artifact_name: blockly-linux-arm64
+            cross_compile: true
 
     steps:
     - uses: actions/checkout@v6
@@ -66,15 +69,36 @@ jobs:
         echo "Python extracted to resources/python"
         ls resources/python
 
+    - name: Download x64 Python for pip (cross-compile only)
+      if: matrix.cross_compile
+      shell: bash
+      run: |
+        mkdir -p pip-python-dl
+        curl -L "${{ matrix.pip_python_url }}" -o pip-python.tar.gz
+        tar -xzf pip-python.tar.gz -C pip-python-dl
+        mv pip-python-dl/python pip-python
+        rm -rf pip-python-dl pip-python.tar.gz
+        echo "x64 Python for pip at pip-python/"
+
     - name: Install wlkatapython SDK into embedded Python
       shell: bash
       run: |
-        ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev
+        if [ "${{ matrix.cross_compile }}" = "true" ]; then
+          # Cross-compile: use x64 pip but install into arm64 site-packages
+          ${{ matrix.pip }} install --target resources/python/lib/python3.12/site-packages \
+            --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev
+        else
+          ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev
+        fi
 
     - name: Install flask into embedded Python
       shell: bash
       run: |
-        ${{ matrix.pip }} install flask flask-cors
+        if [ "${{ matrix.cross_compile }}" = "true" ]; then
+          ${{ matrix.pip }} install --target resources/python/lib/python3.12/site-packages flask flask-cors
+        else
+          ${{ matrix.pip }} install flask flask-cors
+        fi
 
     - name: Install Node.js dependencies
       run: npm ci || npm install
