@@ -20,7 +20,10 @@
     "python",
     "visual-programming"
   ],
-  "author": "",
+  "author": {
+    "name": "Haochen Ji",
+    "email": "haochen.justin.ji@gmail.com"
+  },
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
@@ -63,9 +66,6 @@
       "category": "public.app-category.education",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true,
       "target": [
         {
           "target": "dmg",
