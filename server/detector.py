@@ -29,41 +29,66 @@ _cache = {}
 _missing = set()
 
 
-def detect_model(port):
+def detect_model(port, keep_open=False):
     """
     Probe a serial port to determine the connected robot model.
 
     Args:
         port (str): The serial port path (e.g. 'COM3', '/dev/ttyUSB0').
+        keep_open (bool): If True, return the open serial connection along
+                          with the model (for reuse by SerialManager).
 
     Returns:
-        str or None: The model name (e.g. 'Mirobot', 'MT4') if a known
-                     robotic arm is detected, or None if the device is
-                     not recognized.
+        If keep_open=False: str or None (model name or None if not recognized)
+        If keep_open=True: (model, serial_obj) tuple. serial_obj is None if
+                           detection failed or model not recognized.
     """
+    ser = None
+    model = None
     try:
-        with serial.Serial(port, 115200, timeout=5) as ser:
-            ser.flushInput()
-            ser.flushOutput()
-            ser.write("$V\r\n".encode("utf-8"))
-            # Read up to 5 lines (timeout=5s per read handles slow responses)
-            for _ in range(5):
-                raw = ser.readline()
-                if not raw:
-                    break  # timeout, no more data
-                message = raw.decode('utf-8', errors='ignore').strip()
-                if not message:
-                    continue
-                if message.startswith("Mirobot"):
-                    return "Mirobot"
-                if message.startswith("E4"):
-                    return "MT4"
+        ser = serial.Serial(port, 115200, timeout=5)
+        ser.flushInput()
+        ser.flushOutput()
+        ser.write("$V\r\n".encode("utf-8"))
+        # Read up to 5 lines (timeout=5s per read handles slow responses)
+        for _ in range(5):
+            raw = ser.readline()
+            if not raw:
+                break  # timeout, no more data
+            message = raw.decode('utf-8', errors='ignore').strip()
+            if not message:
+                continue
+            if message.startswith("Mirobot"):
+                model = "Mirobot"
+                break
+            if message.startswith("E4"):
+                model = "MT4"
+                break
     except (serial.SerialException, OSError, PermissionError):
         # PermissionError: on Linux/Chromebook, user may not have serial access.
         # Fix: add user to 'dialout' group: sudo usermod -aG dialout $USER
+        if ser:
+            try:
+                ser.close()
+            except Exception:
+                pass
+        if keep_open:
+            return (None, None)
         return None
 
-    return None
+    if keep_open:
+        if model:
+            # Reset timeout for normal operation
+            ser.timeout = 0.1
+            return (model, ser)
+        else:
+            if ser:
+                ser.close()
+            return (None, None)
+    else:
+        if ser:
+            ser.close()
+        return model
 
 
 # Ports to skip on macOS/Linux (Bluetooth, debug consoles, etc.)
@@ -107,16 +132,19 @@ def _dedup_platform_ports(ports):
 
 
 def _probe_port(port_info):
-    """Probe a single port. Returns (device_path, model, description).
-    Skips ports that are already connected in the SerialManager."""
+    """Probe a single port. Returns (device_path, model, description, serial_obj).
+    Skips ports that are already connected or locked for flashing.
+    serial_obj is the open serial connection if detection succeeded (for reuse)."""
     mgr = SerialManager.get_instance()
+    if port_info.device in mgr._flash_locked:
+        return (port_info.device, _cache.get(port_info.device, {}).get('model'), port_info.description or '', None)
     for reg in mgr.get_registered_ports():
         if reg['port'] == port_info.device and reg['connected']:
             # Already connected — return cached model without probing
-            return (port_info.device, reg['model'], port_info.description or '')
+            return (port_info.device, reg['model'], port_info.description or '', None)
 
-    model = detect_model(port_info.device)
-    return (port_info.device, model, port_info.description or '')
+    model, ser = detect_model(port_info.device, keep_open=True)
+    return (port_info.device, model, port_info.description or '', ser)
 
 
 def scan_devices():
@@ -157,12 +185,17 @@ def scan_devices():
 
 
     # --- Probe new ports in parallel ---
+    # Store open serial connections to pass to SerialManager
+    _pending_serials = {}  # device -> serial_obj
+
     if to_probe:
         with ThreadPoolExecutor(max_workers=min(len(to_probe), 8)) as pool:
             futures = {pool.submit(_probe_port, p): p for p in to_probe}
             for future in as_completed(futures):
-                device, model, description = future.result()
+                device, model, description, ser = future.result()
                 _cache[device] = {'model': model, 'description': description}
+                if ser:
+                    _pending_serials[device] = ser
 
     # --- Register detected robots in the SerialManager ---
     mgr = SerialManager.get_instance()
@@ -173,13 +206,22 @@ def scan_devices():
         if info['model'] is not None:
             # Auto-connect detected robots (creates SDK instance + read thread)
             # Uses ensure_connected so it doesn't change the active port
-            mgr.ensure_connected(device, model=info['model'])
+            # Pass the open serial connection if we have one (avoids reconnect)
+            existing_ser = _pending_serials.pop(device, None)
+            mgr.ensure_connected(device, model=info['model'], existing_serial=existing_ser)
             current_robot_ports.add(device)
             results.append({
                 'port': device,
                 'description': info['description'],
                 'model': info['model']
             })
+
+    # Close any remaining unused serial connections
+    for ser in _pending_serials.values():
+        try:
+            ser.close()
+        except Exception:
+            pass
 
     # Unregister ports that were previously registered but no longer detected
     for reg in mgr.get_registered_ports():

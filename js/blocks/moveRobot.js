@@ -481,3 +481,8 @@ function getRobotModelForVarName(varName) {
   }
   return null;
 }
+
+window.setRobotColorForVar = function(varName, color) {
+  _robotVarColorMap[varName] = color;
+  updateRobotBlockColors();
+};

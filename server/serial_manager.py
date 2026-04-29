@@ -13,6 +13,7 @@ Provides:
 
 import sys
 import os
+import re
 import serial
 import threading
 import time
@@ -31,6 +32,20 @@ _MODEL_CLASSES = {
     'MT4': wlkatapython.MT4_UART,
     'E4': wlkatapython.E4_UART,
 }
+
+# Regex for the status line auto-reported by the robot after $40=1
+_STATUS_RE = re.compile(
+    r'<(\w+),Angle\(ABCDXYZ\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),'
+    r'Cartesian coordinate\(XYZ RxRyRz\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),'
+    r'Pump PWM:([\d.-]+),Valve PWM:([\d.-]+),Motion_MODE:([\d.-]+)>'
+)
+
+
+def _extract_version(raw):
+    """Return the part after the first comma, e.g. 'EXbox,20230710' -> '20230710'.
+    Returns the original string unchanged if there is no comma."""
+    idx = raw.find(',')
+    return raw[idx + 1:].strip() if idx != -1 else raw.strip()
 
 
 class PortConnection:
@@ -69,13 +84,32 @@ class PortConnection:
         # Silent mode: when True, add_history is suppressed
         self._silent = False
 
+        # Cached status from auto-report ($40=1) or explicit ? query
+        self._last_status = None
+        self._last_status_ts = 0
+
+        # When True, the next status line should be recorded in history
+        # (set when sending explicit ? query from command tab)
+        self._awaiting_query = False
+
+        # Cached firmware version fetched once on connect
+        # None = not yet fetched; dict = {extender, robot} after fetch
+        self._firmware_version = None
+
     # ── Connection lifecycle ──
 
-    def connect(self):
+    def connect(self, existing_serial=None):
+        """Connect to the port. If existing_serial is provided, reuse it
+        instead of opening a new connection (faster, avoids reconnect delay)."""
         if self.connected:
             self.disconnect()
         try:
-            self._serial = serial.Serial(self.port, self.baudrate, timeout=0.1)
+            if existing_serial and existing_serial.is_open:
+                self._serial = existing_serial
+                self._serial.timeout = 0.1  # ensure correct timeout
+            else:
+                self._serial = serial.Serial(self.port, self.baudrate, timeout=0.1)
+
             self.connected = True
             self._stop_event.clear()
             self._read_thread = threading.Thread(
@@ -84,6 +118,10 @@ class PortConnection:
 
             # Create SDK robot instance with a ProxySerial
             self._init_robot()
+
+            # Enable auto-report: robot sends status after each movement completes
+            time.sleep(0.3)
+            self._serial.write(b'$40=1\r\n')
 
             self.add_history('sys', f'Connected to {self.port} ({self.model or "unknown"})')
             return True
@@ -110,6 +148,7 @@ class PortConnection:
                 pass
         self.connected = False
         self._serial = None
+        self._firmware_version = None
         self.add_history('sys', f'Disconnected from {self.port}')
 
     # ── History ──
@@ -144,10 +183,26 @@ class PortConnection:
                 if self._serial.in_waiting > 0:
                     line = self._serial.readline().decode('utf-8', errors='ignore').strip()
                     if line:
-                        self.add_history('rx', line)
-                        with self._rx_lock:
-                            self._rx_lines.append(line)
-                            self._rx_event.set()
+                        # Check if this is an auto-reported status line
+                        m = _STATUS_RE.match(line)
+                        if m:
+                            self._parse_and_cache_status(m)
+                            if self._awaiting_query:
+                                # Explicit ? query: record in history and pass to RX buffer
+                                self._awaiting_query = False
+                                self.add_history('rx', line)
+                                with self._rx_lock:
+                                    self._rx_lines.append(line)
+                                    self._rx_event.set()
+                            else:
+                                # Auto-report: cache only, don't pollute history or RX buffer
+                                pass
+                        else:
+                            self.add_history('rx', line)
+                            if line.lower() != 'ok':
+                                with self._rx_lock:
+                                    self._rx_lines.append(line)
+                                    self._rx_event.set()
                 else:
                     time.sleep(0.02)
             except (serial.SerialException, OSError):
@@ -156,6 +211,27 @@ class PortConnection:
                 break
             except Exception:
                 time.sleep(0.02)
+
+    def _parse_and_cache_status(self, match):
+        """Parse a status regex match and cache the result."""
+        self._last_status = {
+            'state': match.group(1),
+            'angles': {
+                'A': float(match.group(2)), 'B': float(match.group(3)),
+                'C': float(match.group(4)), 'D': float(match.group(5)),
+                'X': float(match.group(6)), 'Y': float(match.group(7)),
+                'Z': float(match.group(8)),
+            },
+            'coordinates': {
+                'X': float(match.group(9)), 'Y': float(match.group(10)),
+                'Z': float(match.group(11)), 'Rx': float(match.group(12)),
+                'Ry': float(match.group(13)), 'Rz': float(match.group(14)),
+            },
+            'pump': float(match.group(15)),
+            'valve': float(match.group(16)),
+            'mode': float(match.group(17)),
+        }
+        self._last_status_ts = time.time()
 
     # ── SDK-compatible read interface ──
 
@@ -204,11 +280,76 @@ class PortConnection:
         with self.write_lock:
             try:
                 self.add_history('tx', command, source=source)
+                if command.strip() == '?':
+                    self._awaiting_query = True
                 msg = command.strip() + '\r\n'
                 self._serial.write(msg.encode('utf-8'))
                 return {'success': True}
             except Exception as e:
                 return {'success': False, 'error': str(e)}
+
+    def send_and_wait(self, command, timeout=1.5):
+        """Send a command, flush stale rx, then block until the first
+        response line arrives (or timeout).  Returns the response text."""
+        if not self.connected or not self._serial:
+            return {'success': False, 'error': 'Not connected'}
+
+        try:
+            with self.write_lock:
+                self.rx_flush_input()
+                self.add_history('tx', command, source='command')
+                self._serial.write((command.strip() + '\r\n').encode('utf-8'))
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+        line = self.rx_readline(timeout=timeout)
+        response = line.decode('utf-8', errors='ignore').strip() if line else ''
+        return {'success': True, 'response': response}
+
+    def fetch_firmware_version(self):
+        """Call version() on the robot and cache the result.
+        Returns dict with keys: extender (str or None), robot (str or None).
+        Version strings like 'EXbox,20230710' are trimmed to the part after the comma."""
+        if self._firmware_version is not None:
+            print(f'[FW-DEBUG] {self.port}: returning cached version: {self._firmware_version}')
+            return {'success': True, **self._firmware_version}
+        if not self.robot:
+            print(f'[FW-DEBUG] {self.port}: no robot instance')
+            return {'success': False, 'error': 'No robot instance'}
+        try:
+            print(f'[FW-DEBUG] {self.port}: calling robot.version()...')
+            v = self.robot.version()
+            print(f'[FW-DEBUG] {self.port}: raw version response: {repr(v)} (type: {type(v).__name__})')
+
+            if isinstance(v, (list, tuple)) and len(v) >= 2:
+                ext_raw, robot_raw = str(v[0]), str(v[1])
+                ext_parsed = _extract_version(ext_raw)
+                robot_parsed = _extract_version(robot_raw)
+                print(f'[FW-DEBUG] {self.port}: list/tuple with 2+ items')
+                print(f'[FW-DEBUG]   extender raw: {repr(ext_raw)} -> parsed: {repr(ext_parsed)}')
+                print(f'[FW-DEBUG]   robot raw: {repr(robot_raw)} -> parsed: {repr(robot_parsed)}')
+                self._firmware_version = {
+                    'extender': ext_parsed,
+                    'robot':    robot_parsed,
+                }
+            elif isinstance(v, str) and '查询失败' in v:
+                print(f'[FW-DEBUG] {self.port}: query failed (查询失败)')
+                self._firmware_version = {'extender': None, 'robot': None}
+            else:
+                robot_parsed = _extract_version(str(v)) if v is not None else None
+                print(f'[FW-DEBUG] {self.port}: single value or other type')
+                print(f'[FW-DEBUG]   raw: {repr(v)} -> robot parsed: {repr(robot_parsed)}')
+                self._firmware_version = {
+                    'extender': None,
+                    'robot':    robot_parsed,
+                }
+            print(f'[FW-DEBUG] {self.port}: final result: {self._firmware_version}')
+            return {'success': True, **self._firmware_version}
+        except Exception as e:
+            import traceback
+            print(f'[FW-DEBUG] {self.port}: exception: {e}')
+            traceback.print_exc()
+            return {'success': False, 'error': str(e)}
 
     @property
     def raw_serial(self):
@@ -283,6 +424,7 @@ class SerialManager:
         self._ports = {}
         self._active_port = None   # currently selected port path
         self._busy = False
+        self._flash_locked = set()  # ports locked for firmware flashing
 
     # ── Port registration (called by detector) ──
 
@@ -312,10 +454,21 @@ class SerialManager:
 
     # ── Connection lifecycle ──
 
-    def ensure_connected(self, port, model=None, baudrate=115200):
+    def ensure_connected(self, port, model=None, baudrate=115200, existing_serial=None):
         """Ensure a port is connected (register + connect if needed).
         Does NOT change the active port. Used by the detector for
-        auto-connecting discovered robots in the background."""
+        auto-connecting discovered robots in the background.
+
+        If existing_serial is provided, reuse that open serial connection
+        instead of opening a new one (avoids disconnect/reconnect delay)."""
+        if port in self._flash_locked:
+            if existing_serial:
+                try:
+                    existing_serial.close()
+                except Exception:
+                    pass
+            return {'success': False, 'port': port, 'model': model, 'locked': True}
+
         if port not in self._ports:
             self.register_port(port, model=model, baudrate=baudrate)
 
@@ -324,9 +477,14 @@ class SerialManager:
             conn.model = model
 
         if conn.connected:
+            if existing_serial:
+                try:
+                    existing_serial.close()
+                except Exception:
+                    pass
             return {'success': True, 'port': port, 'model': conn.model}
 
-        success = conn.connect()
+        success = conn.connect(existing_serial=existing_serial)
         return {'success': success, 'port': port, 'model': conn.model}
 
     def connect(self, port, model=None, baudrate=115200):
@@ -347,6 +505,18 @@ class SerialManager:
         if self._active_port == port:
             self._active_port = None
         return {'success': True}
+
+    def lock_for_flash(self, port):
+        """Disconnect a port and prevent the detector from reconnecting it."""
+        self._flash_locked.add(port)
+        if port in self._ports and self._ports[port].connected:
+            self._ports[port].disconnect()
+        if self._active_port == port:
+            self._active_port = None
+
+    def unlock_port(self, port):
+        """Allow the detector to reconnect a port after flashing is done."""
+        self._flash_locked.discard(port)
 
     def all_connected(self):
         """Return list of all PortConnections that are currently connected."""

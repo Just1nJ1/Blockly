@@ -174,9 +174,17 @@ class CodeExecutor:
                 if lines:
                     last_line = lines[-1].strip()
                     # Skip common statements that don't yield a result
-                    if last_line and not last_line.startswith(('def ', 'class ', 'if ', 'for ', 'while ', 'import ',
-                                                               'from ', '#', 'print', 'try:', 'except', 'finally',
-                                                               'with ')):
+                    # Skip lines that are statements or function/method calls
+                    # (re-eval'ing them would execute side effects twice)
+                    is_skip = (
+                        last_line.startswith(('def ', 'class ', 'if ', 'for ', 'while ',
+                                             'import ', 'from ', '#', 'print(', 'try:',
+                                             'except', 'finally', 'with ', 'return ',
+                                             'pass', 'break', 'continue', 'raise ')) or
+                        '=' in last_line.split('(')[0] or  # assignment like x = ...
+                        last_line.endswith(')')             # any function/method call
+                    )
+                    if last_line and not is_skip:
                         try:
                             result = eval(last_line, safe_globals)
                         except Exception:

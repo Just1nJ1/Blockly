@@ -49,19 +49,37 @@
           newPorts.push([label, port]);
         }
 
+        // Merge manual ports that have a model into the lists
+        var serverPortSet = new Set();
+        for (var k = 0; k < data.ports.length; k++) {
+          serverPortSet.add(data.ports[k].port);
+        }
+        var mergedLastDetected = data.ports.slice();
+        for (var m = 0; m < manualPorts.length; m++) {
+          var mp = manualPorts[m];
+          if (serverPortSet.has(mp)) continue;
+          var mm = manualPortModels[mp];
+          if (mm) {
+            newPorts.push([mp + ' (' + mm + ')', mp]);
+            var mv = MODEL_VALUE_MAP[mm];
+            if (mv) newMap[mp] = mv;
+            mergedLastDetected.push({ port: mp, description: '', model: mm });
+          }
+        }
+
         // Only update if something changed
         var changed = (JSON.stringify(newPorts) !== JSON.stringify(window.detectedPorts));
         window.detectedPorts = newPorts;
         window.portModelMap = newMap;
 
-        lastDetectedPorts = data.ports;
+        lastDetectedPorts = mergedLastDetected;
 
         if (changed) {
           console.log('[DeviceDetector] Ports updated:', newPorts, 'Model map:', newMap);
           // Reset last connected port so reconnect works after disconnect/reconnect
           _lastConnectedPort = null;
-          updateCommandPortSelect(data.ports);
-          updateControlPortSelect(data.ports);
+          updateCommandPortSelect(mergedLastDetected);
+          updateControlPortSelect(mergedLastDetected);
         }
       })
       .catch(function(err) {
@@ -100,6 +118,7 @@
 
   // Manually added ports (survive poll updates)
   var manualPorts = [];  // array of port strings, e.g. ['COM7']
+  var manualPortModels = {};  // { portString -> modelName }, e.g. { 'COM7': 'Mirobot' }
 
   // Update the command tab's port dropdown with detected robot ports
   function updateCommandPortSelect(ports) {
@@ -209,6 +228,11 @@
       noConn.disabled = true;
       noConn.selected = true;
       select.appendChild(noConn);
+      // Notify control panel that there's no connection
+      // Pass the previous port so it can clear cached data
+      if (typeof window.controlPanelOnDisconnected === 'function') {
+        window.controlPanelOnDisconnected(currentValue || null);
+      }
       return;
     }
 
@@ -233,56 +257,322 @@
       }
     }
     if (!restored && ports.length > 0) {
+      // Previous port is gone — notify control panel to clear its cache
+      if (currentValue && typeof window.controlPanelOnDisconnected === 'function') {
+        window.controlPanelOnDisconnected(currentValue);
+      }
       select.selectedIndex = 0;
       // Trigger change so control panel picks up the new port
       select.dispatchEvent(new Event('change'));
     }
   }
 
-  // Show a custom modal prompt (Electron doesn't support window.prompt)
+  // Port picker: combo box with a text input, a toggle arrow to expand/fold
+  // the dropdown, and typing filters the list items.
   function showPortPrompt() {
     return new Promise(function(resolve) {
+      var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
+      var allPorts = [];
+      var highlightIdx = -1;
+      var isOpen = false;
+      var loaded = false;
+
+      var detectedSet = new Set();
+      for (var d = 0; d < lastDetectedPorts.length; d++) {
+        detectedSet.add(lastDetectedPorts[d].port);
+      }
+
+      function cleanup() { if (overlay.parentNode) document.body.removeChild(overlay); }
+      function cancel() { cleanup(); resolve(null); }
+
+      // After user picks a port, probe it for model detection
+      function submit(val) {
+        val = val && val.trim();
+        if (!val) return;
+        probeAndResolve(val);
+      }
+
+      // ── Probe port and resolve (or show model picker) ──
+      function probeAndResolve(port) {
+        // Disable the dialog and show probing state
+        input.disabled = true;
+        arrow.disabled = true;
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Probing...';
+        closeDropdown();
+
+        fetch(serverUrl + '/cmd/probe-port', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ port: port })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.success && data.model) {
+            cleanup();
+            resolve({ port: port, model: data.model });
+          } else {
+            showModelPicker(port);
+          }
+        })
+        .catch(function() {
+          showModelPicker(port);
+        });
+      }
+
+      function showModelPicker(port) {
+        // Replace dialog body with model selection buttons
+        body.innerHTML = '';
+        var msg = document.createElement('div');
+        msg.className = 'port-picker-probe-msg';
+        msg.textContent = 'Could not auto-detect model on ' + port + '. Select the robot type:';
+        body.appendChild(msg);
+
+        var btnGroup = document.createElement('div');
+        btnGroup.className = 'port-picker-model-group';
+
+        var models = [
+          { label: 'Mirobot', value: 'Mirobot' },
+          { label: 'E4 / MT4', value: 'MT4' },
+          { label: 'None (raw serial)', value: null }
+        ];
+
+        models.forEach(function(m) {
+          var btn = document.createElement('button');
+          btn.className = 'port-picker-model-btn';
+          btn.textContent = m.label;
+          btn.addEventListener('click', function() {
+            cleanup();
+            resolve({ port: port, model: m.value });
+          });
+          btnGroup.appendChild(btn);
+        });
+
+        body.appendChild(btnGroup);
+
+        // Update footer
+        connectBtn.style.display = 'none';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = cancel;
+      }
+
+      // ── Overlay + dialog ──
       var overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:center;z-index:30000;';
+      overlay.className = 'port-picker-overlay';
+      overlay.addEventListener('click', function(e) { if (e.target === overlay) cancel(); });
 
       var dialog = document.createElement('div');
-      dialog.style.cssText = 'background:#2d2d2d;border-radius:8px;padding:24px;min-width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+      dialog.className = 'port-picker-dialog';
 
-      var title = document.createElement('div');
-      title.textContent = 'Manual Connection';
-      title.style.cssText = 'font-size:16px;font-weight:600;color:#e0e0e0;margin-bottom:12px;';
-      dialog.appendChild(title);
+      // Header
+      var header = document.createElement('div');
+      header.className = 'port-picker-header';
+      header.innerHTML = '<span>Manual Connection</span>';
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'port-picker-close';
+      closeBtn.innerHTML = '&times;';
+      closeBtn.onclick = cancel;
+      header.appendChild(closeBtn);
+      dialog.appendChild(header);
+
+      // Body
+      var body = document.createElement('div');
+      body.className = 'port-picker-body';
+
+      // Combo box wrapper
+      var combo = document.createElement('div');
+      combo.className = 'port-picker-combo';
 
       var input = document.createElement('input');
       input.type = 'text';
-      input.placeholder = 'e.g. COM7, /dev/ttyUSB0';
-      input.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 12px;background:#3c3c3c;border:1px solid #555;border-radius:4px;color:#d4d4d4;font-size:14px;outline:none;margin-bottom:16px;';
-      dialog.appendChild(input);
+      input.className = 'port-picker-input';
+      input.placeholder = 'Select or type a port path...';
+      combo.appendChild(input);
 
-      var btnRow = document.createElement('div');
-      btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;';
+      var arrow = document.createElement('button');
+      arrow.className = 'port-picker-arrow';
+      arrow.innerHTML = '&#9662;';
+      arrow.setAttribute('tabindex', '-1');
+      combo.appendChild(arrow);
 
+      body.appendChild(combo);
+
+      var dropdown = document.createElement('div');
+      dropdown.className = 'port-picker-dropdown';
+      dropdown.style.display = 'none';
+      body.appendChild(dropdown);
+
+      dialog.appendChild(body);
+
+      // Footer
+      var footer = document.createElement('div');
+      footer.className = 'port-picker-footer';
       var cancelBtn = document.createElement('button');
+      cancelBtn.className = 'port-picker-cancel-btn';
       cancelBtn.textContent = 'Cancel';
-      cancelBtn.style.cssText = 'padding:6px 16px;background:#555;color:#ddd;border:none;border-radius:4px;cursor:pointer;font-size:13px;';
-      cancelBtn.onclick = function() { document.body.removeChild(overlay); resolve(null); };
-      btnRow.appendChild(cancelBtn);
+      cancelBtn.onclick = cancel;
+      footer.appendChild(cancelBtn);
+      var connectBtn = document.createElement('button');
+      connectBtn.className = 'port-picker-connect-btn';
+      connectBtn.textContent = 'Connect';
+      connectBtn.onclick = function() { submit(input.value); };
+      footer.appendChild(connectBtn);
+      dialog.appendChild(footer);
 
-      var okBtn = document.createElement('button');
-      okBtn.textContent = 'Connect';
-      okBtn.style.cssText = 'padding:6px 16px;background:#2196F3;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;';
-      okBtn.onclick = function() { document.body.removeChild(overlay); resolve(input.value); };
-      btnRow.appendChild(okBtn);
-
-      dialog.appendChild(btnRow);
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
+      input.focus();
+
+      // ── Open / close ──
+      function openDropdown() {
+        if (isOpen) return;
+        isOpen = true;
+        dropdown.style.display = '';
+        arrow.classList.add('port-picker-arrow-open');
+        renderDropdown();
+      }
+
+      function closeDropdown() {
+        if (!isOpen) return;
+        isOpen = false;
+        dropdown.style.display = 'none';
+        arrow.classList.remove('port-picker-arrow-open');
+        highlightIdx = -1;
+      }
+
+      function toggleDropdown() {
+        if (isOpen) closeDropdown(); else openDropdown();
+      }
+
+      arrow.addEventListener('mousedown', function(e) {
+        e.preventDefault(); // keep focus on input
+        toggleDropdown();
+      });
+
+      // ── Render filtered items ──
+      function renderDropdown() {
+        var filter = input.value.trim().toLowerCase();
+        dropdown.innerHTML = '';
+        highlightIdx = -1;
+
+        if (!loaded) {
+          dropdown.innerHTML = '<div class="port-picker-empty">Loading...</div>';
+          return;
+        }
+
+        var matched = allPorts.filter(function(p) {
+          if (!filter) return true;
+          return p.device.toLowerCase().indexOf(filter) !== -1 ||
+                 (p.description && p.description.toLowerCase().indexOf(filter) !== -1);
+        });
+
+        if (allPorts.length === 0) {
+          dropdown.innerHTML = '<div class="port-picker-empty">No additional ports found.</div>';
+          return;
+        }
+
+        if (matched.length === 0) {
+          dropdown.innerHTML = '<div class="port-picker-empty">No matching ports.</div>';
+          return;
+        }
+
+        for (var i = 0; i < matched.length; i++) {
+          (function(port, idx) {
+            var item = document.createElement('div');
+            item.className = 'port-picker-item';
+            item.addEventListener('mousedown', function(e) {
+              e.preventDefault(); // prevent blur before click fires
+            });
+            item.addEventListener('click', function() {
+              input.value = port.device;
+              closeDropdown();
+              submit(port.device);
+            });
+            item.addEventListener('mouseenter', function() {
+              highlightIdx = idx;
+              updateHighlight();
+            });
+
+            var nameSpan = document.createElement('span');
+            nameSpan.className = 'port-picker-item-name';
+            nameSpan.textContent = port.device;
+            item.appendChild(nameSpan);
+
+            if (port.description && port.description !== 'n/a') {
+              var descSpan = document.createElement('span');
+              descSpan.className = 'port-picker-item-desc';
+              descSpan.textContent = port.description;
+              item.appendChild(descSpan);
+            }
+
+            dropdown.appendChild(item);
+          })(matched[i], i);
+        }
+      }
+
+      function updateHighlight() {
+        var items = dropdown.querySelectorAll('.port-picker-item');
+        items.forEach(function(el, i) {
+          el.classList.toggle('port-picker-item-active', i === highlightIdx);
+        });
+      }
+
+      // ── Input events ──
+      input.addEventListener('input', function() {
+        openDropdown();
+        renderDropdown();
+      });
+
+      input.addEventListener('focus', function() {
+        if (loaded && allPorts.length > 0) openDropdown();
+      });
 
       input.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') okBtn.click();
-        if (e.key === 'Escape') cancelBtn.click();
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (!isOpen) { openDropdown(); return; }
+          var items = dropdown.querySelectorAll('.port-picker-item');
+          if (items.length > 0) {
+            highlightIdx = (highlightIdx + 1) % items.length;
+            updateHighlight();
+            items[highlightIdx].scrollIntoView({ block: 'nearest' });
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!isOpen) { openDropdown(); return; }
+          var items2 = dropdown.querySelectorAll('.port-picker-item');
+          if (items2.length > 0) {
+            highlightIdx = highlightIdx <= 0 ? items2.length - 1 : highlightIdx - 1;
+            updateHighlight();
+            items2[highlightIdx].scrollIntoView({ block: 'nearest' });
+          }
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (isOpen && highlightIdx >= 0) {
+            var items3 = dropdown.querySelectorAll('.port-picker-item');
+            if (highlightIdx < items3.length) { items3[highlightIdx].click(); return; }
+          }
+          submit(input.value);
+        } else if (e.key === 'Escape') {
+          if (isOpen) { closeDropdown(); } else { cancel(); }
+        }
       });
-      input.focus();
+
+      // ── Fetch ports ──
+      fetch(serverUrl + '/list-all-ports')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          loaded = true;
+          if (data.success && data.ports) {
+            allPorts = data.ports.filter(function(p) { return !detectedSet.has(p.device); });
+          }
+          if (isOpen) renderDropdown();
+        })
+        .catch(function() {
+          loaded = true;
+          allPorts = [];
+          if (isOpen) renderDropdown();
+        });
     });
   }
 
@@ -305,24 +595,53 @@
 
     select.addEventListener('change', function() {
       if (select.value === '__manual__') {
-        showPortPrompt().then(function(port) {
-          if (!port || !port.trim()) {
+        showPortPrompt().then(function(result) {
+          if (!result) {
             revertSelection(select);
             updateRemoveButton();
             return;
           }
 
-          port = port.trim();
+          var port = result.port;
+          var model = result.model;
 
           if (manualPorts.indexOf(port) === -1) {
             manualPorts.push(port);
           }
 
+          // Store model for this manual port so poll cycles preserve it
+          if (model) {
+            manualPortModels[port] = model;
+
+            // Immediately update all shared state so UI reflects the change
+            // before the next poll cycle
+            var alreadyInDetected = false;
+            for (var i = 0; i < lastDetectedPorts.length; i++) {
+              if (lastDetectedPorts[i].port === port) { alreadyInDetected = true; break; }
+            }
+            if (!alreadyInDetected) {
+              lastDetectedPorts.push({ port: port, description: '', model: model });
+            }
+            var modelValue = MODEL_VALUE_MAP[model];
+            if (modelValue) {
+              window.portModelMap[port] = modelValue;
+            }
+            var dpLabel = port + ' (' + model + ')';
+            var alreadyInDP = false;
+            for (var j = 0; j < window.detectedPorts.length; j++) {
+              if (window.detectedPorts[j][1] === port) { alreadyInDP = true; break; }
+            }
+            if (!alreadyInDP) {
+              window.detectedPorts.push([dpLabel, port]);
+            }
+          }
+
           updateCommandPortSelect(lastDetectedPorts);
+          updateControlPortSelect(lastDetectedPorts);
           select.value = port;
           updateRemoveButton();
           connectToSelectedPort(port);
-          console.log('[DeviceDetector] Manually added port:', port);
+          console.log('[DeviceDetector] Manually added port:', port, 'model:', model);
         });
       } else {
         updateRemoveButton();
@@ -346,7 +665,24 @@
         }
 
         manualPorts.splice(idx, 1);
+        // Also remove from lastDetectedPorts if it was manually added there
+        for (var j = lastDetectedPorts.length - 1; j >= 0; j--) {
+          if (lastDetectedPorts[j].port === val) {
+            lastDetectedPorts.splice(j, 1);
+            break;
+          }
+        }
+        delete window.portModelMap[val];
+        delete manualPortModels[val];
+        // Also remove from window.detectedPorts so setup_robot dropdown updates
+        for (var dp = window.detectedPorts.length - 1; dp >= 0; dp--) {
+          if (window.detectedPorts[dp][1] === val) {
+            window.detectedPorts.splice(dp, 1);
+            break;
+          }
+        }
         updateCommandPortSelect(lastDetectedPorts);
+        updateControlPortSelect(lastDetectedPorts);
         updateRemoveButton();
 
         // Auto-connect to first remaining port if available
@@ -376,7 +712,16 @@
     }
 
     _lastConnectedPort = port;
-    window.commandTabConnect(port, model);
+    var result = window.commandTabConnect(port, model);
+    if (result && typeof result.then === 'function') {
+      result.then(function(data) {
+        if (!data || !data.success) {
+          _lastConnectedPort = null;  // device not ready yet — retry next poll
+        }
+      }).catch(function() {
+        _lastConnectedPort = null;
+      });
+    }
   }
 
   function revertSelection(select) {
@@ -401,6 +746,14 @@
     }
   }
   window.refreshControlPortLabels = refreshControlPortLabels;
+
+  // Allow other modules to force a reconnect on the next poll cycle
+  // (e.g. after firmware flash disconnects and reconnects the port)
+  window.resetDetectorPort = function(port) {
+    if (!port || port === _lastConnectedPort) {
+      _lastConnectedPort = null;
+    }
+  };
 
   // Start polling and set up auto-switch after DOM is ready
   function init() {

@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const http = require('http');
 const net = require('net');
@@ -113,9 +114,75 @@ function findServerPackageDir() {
   return null;
 }
 
+/**
+ * Get the path to the user's extensions directory.
+ * Creates it if it doesn't exist.
+ */
+function getExtensionsDir() {
+  const dir = path.join(os.homedir(), '.wlkata-blockly', 'extensions');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    log('Created extensions directory: ' + dir);
+  }
+  return dir;
+}
+
+/**
+ * Discover extensions in the extensions directories.
+ * Checks user dir, dev dir, and packaged app resources.
+ */
+function discoverExtensions() {
+  const extensionsDirs = [
+    // User extensions (always checked, highest priority)
+    getExtensionsDir(),
+    // Dev extensions (checked in development)
+    path.join(__dirname, 'extensions'),
+  ];
+
+  // In packaged app, also check extraResources
+  if (isPackaged()) {
+    extensionsDirs.push(path.join(process.resourcesPath, 'extensions'));
+  }
+
+  const extensions = [];
+  const seen = new Set();
+
+  for (const dir of extensionsDirs) {
+    if (!fs.existsSync(dir)) continue;
+
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch(e) { continue; }
+
+    for (const entry of entries) {
+      const extDir = path.join(dir, entry);
+      const manifestPath = path.join(extDir, 'extension.json');
+
+      if (!fs.existsSync(manifestPath)) continue;
+
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const name = manifest.name || entry;
+
+        // First one wins (user overrides bundled)
+        if (seen.has(name)) continue;
+        seen.add(name);
+
+        extensions.push({ manifest: manifest, path: extDir });
+        log('Extension found: ' + (manifest.displayName || name) + ' (' + extDir + ')');
+      } catch (err) {
+        logError('Invalid extension manifest in ' + entry + ': ' + err.message);
+      }
+    }
+  }
+
+  log('Discovered ' + extensions.length + ' extension(s)');
+  return extensions;
+}
+
 let mainWindow;
 let pythonProcess;
 let serverPort = 5080; // Will be updated to an available port
+let _discoveredExtensions = [];
 
 const DEFAULT_PORT = 5080;
 
@@ -324,6 +391,17 @@ function createWindow() {
       ).catch(() => {});
     }
 
+    // Load extensions into renderer
+    if (_discoveredExtensions.length > 0) {
+      const extData = _discoveredExtensions.map(e => ({
+        manifest: e.manifest,
+        basePath: e.path
+      }));
+      mainWindow.webContents.executeJavaScript(
+        `if (typeof loadExtensions === 'function') loadExtensions(${JSON.stringify(extData)});`
+      ).catch(() => {});
+    }
+
     _rendererReady = true;
   });
 
@@ -391,7 +469,21 @@ function startPythonServer() {
     log(`PYTHONPATH=${env.PYTHONPATH}`);
     log(`CWD for server: ${serverPkgDir || __dirname}`);
 
-    pythonProcess = spawn(pythonCmd, ['-u', serverPath, '--port', String(serverPort)], {
+    const serverArgs = ['-u', serverPath, '--port', String(serverPort)];
+
+    // Pass all extensions directories to the Flask server
+    const extDirs = [getExtensionsDir()];
+    const devExtDir = path.join(__dirname, 'extensions');
+    if (fs.existsSync(devExtDir)) extDirs.push(devExtDir);
+    if (isPackaged()) {
+      const bundledExtDir = path.join(process.resourcesPath, 'extensions');
+      if (fs.existsSync(bundledExtDir)) extDirs.push(bundledExtDir);
+    }
+    for (const d of extDirs) {
+      serverArgs.push('--extensions-dir', d);
+    }
+
+    pythonProcess = spawn(pythonCmd, serverArgs, {
       detached: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -483,6 +575,9 @@ app.whenReady().then(async () => {
     log(`__dirname: ${__dirname}`);
     log(`resourcesPath: ${process.resourcesPath}`);
 
+    // Discover extensions before starting the server
+    _discoveredExtensions = discoverExtensions();
+
     // Find an available port starting from the default
     serverPort = await findAvailablePort(DEFAULT_PORT);
     log(`Using port ${serverPort} for Python server`);
@@ -560,4 +655,49 @@ ipcMain.handle('dialog:createFolder', async () => {
     log(`Created workspace folder: ${folderPath}`);
   }
   return folderPath;
+});
+
+/**
+ * Open a firmware file using the native OS file picker.
+ * Defaults to the resources/firmware folder in the app.
+ * Returns { path, name } or null if cancelled.
+ */
+ipcMain.handle('dialog:selectFirmware', async (event, fileType) => {
+  // Determine the default path (resources folder)
+  let defaultPath;
+  if (isPackaged()) {
+    // In packaged app, resources are in the app's resources directory
+    defaultPath = path.join(process.resourcesPath, 'firmware');
+  } else {
+    // In development, use the resources folder in the project
+    defaultPath = path.join(__dirname, 'resources', 'firmware');
+  }
+
+  // Fall back to resources folder if firmware subfolder doesn't exist
+  if (!fs.existsSync(defaultPath)) {
+    defaultPath = isPackaged()
+      ? process.resourcesPath
+      : path.join(__dirname, 'resources');
+  }
+
+  // Set file filters based on type
+  const filters = fileType === 'extender'
+    ? [{ name: 'ESP32 Firmware', extensions: ['bin'] }]
+    : [{ name: 'AVR Firmware', extensions: ['hex'] }];
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Firmware File',
+    defaultPath: defaultPath,
+    properties: ['openFile'],
+    filters: filters,
+    buttonLabel: 'Select',
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return null;
+  
+  const filePath = result.filePaths[0];
+  return {
+    path: filePath,
+    name: path.basename(filePath)
+  };
 });

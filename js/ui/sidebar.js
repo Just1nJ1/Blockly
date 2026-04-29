@@ -1,33 +1,34 @@
 /**
  * Sidebar Module
- * Handles switching between the Command and Blockly top-level views.
+ * Handles switching between top-level views (Command, Blockly, extensions).
+ * Uses event delegation so dynamically added extension tabs work.
  */
 
 function initSidebar() {
-  var tabs = document.querySelectorAll('.sidebar-tab');
-  var views = document.querySelectorAll('.app-view');
+  var sidebar = document.getElementById('sidebar');
 
-  tabs.forEach(function(tab) {
-    tab.addEventListener('click', function() {
-      var targetTab = tab.dataset.tab;
+  sidebar.addEventListener('click', function(e) {
+    var tab = e.target.closest('.sidebar-tab');
+    if (!tab || tab.classList.contains('disabled')) return;
 
-      // Update sidebar active state
-      tabs.forEach(function(t) { t.classList.remove('active'); });
-      tab.classList.add('active');
+    var targetTab = tab.dataset.tab;
+    if (!targetTab) return;
 
-      // Switch views
-      views.forEach(function(v) { v.classList.remove('active'); });
-      var targetView = document.getElementById(targetTab + '-view');
-      if (targetView) targetView.classList.add('active');
+    // Update sidebar active state (all tabs, including extension tabs)
+    document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
+    tab.classList.add('active');
 
-      // When switching to Blockly, ensure workspace + Blockly are ready
-      if (targetTab === 'blockly') {
-        ensureBlocklyReady();
-        // Refresh control panel if it was marked stale while on another tab
-        if (typeof window.controlPanelCheckAndRefresh === 'function') {
-          window.controlPanelCheckAndRefresh();
-        }
+    // Switch views
+    document.querySelectorAll('.app-view').forEach(function(v) { v.classList.remove('active'); });
+    var targetView = document.getElementById(targetTab + '-view');
+    if (targetView) targetView.classList.add('active');
+
+    // When switching to Blockly, ensure workspace + Blockly are ready
+    if (targetTab === 'blockly') {
+      ensureBlocklyReady();
+      if (typeof window.controlPanelCheckAndRefresh === 'function') {
+        window.controlPanelCheckAndRefresh();
       }
-    });
+    }
   });
 }

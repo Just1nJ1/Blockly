@@ -69,12 +69,12 @@ jobs:
     - name: Install wlkatapython SDK into embedded Python
       shell: bash
       run: |
-        ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev
+        ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev==1.0.0.dev2
 
-    - name: Install flask into embedded Python
+    - name: Install Python dependencies into embedded Python
       shell: bash
       run: |
-        ${{ matrix.pip }} install flask flask-cors
+        ${{ matrix.pip }} install -r requirements.txt
 
     - name: Install Node.js dependencies
       run: npm ci || npm install

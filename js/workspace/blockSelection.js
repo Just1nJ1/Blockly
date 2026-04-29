@@ -30,30 +30,37 @@
     blocklyDiv.style.position = 'relative';
     blocklyDiv.appendChild(_overlay);
 
-    // Track Cmd/Ctrl key state to enable/disable the overlay
+    // Track Cmd/Ctrl key state to enable/disable the overlay for area selection
     document.addEventListener('keydown', function(e) {
       if ((e.metaKey || e.ctrlKey) && _overlay) {
         _overlay.style.pointerEvents = 'auto';
+        _overlay.style.cursor = 'crosshair';
       }
     });
     document.addEventListener('keyup', function(e) {
       if (!e.metaKey && !e.ctrlKey && _overlay && !_selecting) {
-        _overlay.style.pointerEvents = 'none';
+        if (_dragOverlayActive) {
+          // Keep overlay active for group drag, restore grab cursor
+          _overlay.style.cursor = 'grab';
+        } else {
+          _overlay.style.pointerEvents = 'none';
+        }
       }
     });
 
-    // Mouse down on overlay: start selection
+    // Mouse down on overlay: start area selection (only with Cmd/Ctrl)
     _overlay.addEventListener('mousedown', function(e) {
       if (e.button !== 0) return;
+      if (!(e.metaKey || e.ctrlKey)) return;  // area selection requires modifier
       e.preventDefault();
       e.stopPropagation();
 
+      _selecting = true;  // set BEFORE clearSelection so overlay stays active
       clearSelection();
 
       var point = svgToWorkspaceCoords(svgEl, e, ws);
       _startX = point.x;
       _startY = point.y;
-      _selecting = true;
 
       // Create selection rectangle in workspace canvas
       var canvas = ws.getCanvas();
@@ -116,12 +123,23 @@
       findBlocksInRect(ws, selRect);
 
       console.log('[Selection] Selected', _selectedBlocks.length, 'blocks');
+
+      // Enable drag overlay so group drag works
+      _enableDragOverlay();
     });
 
     // Clear selection on any workspace click without modifier
+    // (but not during/right after a group drag)
+    var _dragJustFinished = false;
     ws.addChangeListener(function(event) {
       if (event.type === Blockly.Events.CLICK && _selectedBlocks.length > 0) {
-        clearSelection();
+        if (_dragJustFinished) {
+          _dragJustFinished = false;
+          return;
+        }
+        if (!_dragOverlayActive) {
+          clearSelection();
+        }
       }
     });
 
@@ -149,72 +167,222 @@
         e.preventDefault();
         runSelectedBlocks();
       }
+
+      // Cmd/Ctrl+Z: undo (ensure it works even when overlay is active)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        ws.undo(false);
+      }
+
+      // Cmd/Ctrl+Shift+Z or Cmd/Ctrl+Y: redo
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        ws.undo(true);
+      }
     });
 
-    // Group drag: show overlay when blocks are selected so we can
-    // intercept drag on selected blocks before Blockly does.
+    // Group drag: use overlay to intercept mouse before Blockly.
+    // On drag start: disconnect selected from non-selected, save internal connections.
+    // During drag: move all blocks. On drop: reconnect internal connections.
     var _dragStartPos = null;
-    var _dragRoots = null;
+    var _dragBlocks = null;
     var _dragOrigPositions = null;
+    var _dragSavedConnections = [];
+    var _dragStarted = false;
+    var _dragThreshold = 3;
+    var _dragOverlayActive = false;
 
-    svgEl.addEventListener('mousedown', function(e) {
-      if (e.metaKey || e.ctrlKey) return;  // selection mode
+    // After selection, enable overlay so we intercept clicks on selected blocks
+    function _enableDragOverlay() {
+      if (_selectedBlocks.length > 0) {
+        _overlay.style.pointerEvents = 'auto';
+        _overlay.style.cursor = 'grab';
+        _dragOverlayActive = true;
+      }
+    }
+
+    function _disableDragOverlay() {
+      _dragOverlayActive = false;
+      if (!_selecting) {
+        _overlay.style.pointerEvents = 'none';
+        _overlay.style.cursor = 'crosshair';
+      }
+    }
+
+    // Hook into selection completion
+    var _origClearSelection = clearSelection;
+    clearSelection = function() {
+      _origClearSelection();
+      _disableDragOverlay();
+    };
+
+    // Override the mouseup in area selection to enable drag overlay after selecting
+    // (we'll call _enableDragOverlay from the area selection mouseup)
+
+    // Overlay mousedown: check if on a selected block, start group drag
+    _overlay.addEventListener('mousedown', function(e) {
+      if (e.metaKey || e.ctrlKey) return;  // area selection mode
       if (_selectedBlocks.length < 2) return;
       if (e.button !== 0) return;
+      if (!_dragOverlayActive) return;
 
-      // Check if the click is on a selected block
-      var target = e.target;
-      while (target && target !== svgEl) {
-        if (target.classList && target.classList.contains('blockly-selected-multi')) {
-          // Starting a group drag
-          e.preventDefault();
-          e.stopPropagation();
+      // Hit-test: temporarily hide overlay to find element below
+      _overlay.style.pointerEvents = 'none';
+      var elBelow = document.elementFromPoint(e.clientX, e.clientY);
+      _overlay.style.pointerEvents = 'auto';
 
-          _dragStartPos = { x: e.clientX, y: e.clientY };
-
-          // Collect unique roots of selected blocks
-          var rootMap = {};
-          for (var i = 0; i < _selectedBlocks.length; i++) {
-            var root = _selectedBlocks[i].getRootBlock();
-            if (!rootMap[root.id]) {
-              rootMap[root.id] = root;
-            }
-          }
-          _dragRoots = [];
-          _dragOrigPositions = [];
-          for (var id in rootMap) {
-            _dragRoots.push(rootMap[id]);
-            _dragOrigPositions.push(rootMap[id].getRelativeToSurfaceXY());
-          }
-          return;
+      // Walk up to find if it's a selected block
+      var isOnSelected = false;
+      var el = elBelow;
+      while (el && el !== svgEl) {
+        if (el.classList && el.classList.contains('blockly-selected-multi')) {
+          isOnSelected = true;
+          break;
         }
-        target = target.parentNode;
+        el = el.parentNode;
       }
-    }, true);
+
+      if (!isOnSelected) {
+        // Clicked empty space — deselect
+        clearSelection();
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+      _dragStartPos = { x: e.clientX, y: e.clientY };
+      _dragStarted = false;
+      _overlay.style.cursor = 'grabbing';
+    });
 
     document.addEventListener('mousemove', function(e) {
-      if (!_dragStartPos || !_dragRoots) return;
+      if (!_dragStartPos) return;
+
+      var dx = e.clientX - _dragStartPos.x;
+      var dy = e.clientY - _dragStartPos.y;
+
+      if (!_dragStarted) {
+        if (Math.abs(dx) < _dragThreshold && Math.abs(dy) < _dragThreshold) return;
+        _dragStarted = true;
+        _prepareDrag(ws);
+      }
+
       e.preventDefault();
 
       var scale = ws.getScale();
-      var dx = (e.clientX - _dragStartPos.x) / scale;
-      var dy = (e.clientY - _dragStartPos.y) / scale;
+      var wsDx = dx / scale;
+      var wsDy = dy / scale;
 
       Blockly.Events.disable();
-      for (var i = 0; i < _dragRoots.length; i++) {
+      for (var i = 0; i < _dragBlocks.length; i++) {
+        var b = _dragBlocks[i];
+        if (b.isDisposed() || b.getParent()) continue;  // skip child blocks
         var orig = _dragOrigPositions[i];
-        _dragRoots[i].moveTo(new Blockly.utils.Coordinate(orig.x + dx, orig.y + dy));
+        b.moveTo(new Blockly.utils.Coordinate(orig.x + wsDx, orig.y + wsDy));
       }
       Blockly.Events.enable();
     });
 
-    document.addEventListener('mouseup', function(e) {
+    document.addEventListener('mouseup', function() {
       if (!_dragStartPos) return;
+
+      if (_dragStarted) {
+        _finishDrag(ws);
+        _dragJustFinished = true;
+        // Reset after a tick so the next real click can clear selection
+        setTimeout(function() { _dragJustFinished = false; }, 100);
+      }
+
       _dragStartPos = null;
-      _dragRoots = null;
+      _dragBlocks = null;
       _dragOrigPositions = null;
+      _dragSavedConnections = [];
+      _dragStarted = false;
+      if (_dragOverlayActive) {
+        _overlay.style.cursor = 'grab';
+      }
     });
 
+    function _prepareDrag(ws) {
+      var selectedSet = new Set(_selectedBlocks.map(function(b) { return b.id; }));
+      _dragSavedConnections = [];
+
+      // Group all disconnect/move events together for undo
+      Blockly.Events.setGroup(true);
+
+      // First pass: disconnect all external connections (selected ↔ non-selected)
+      for (var i = 0; i < _selectedBlocks.length; i++) {
+        var block = _selectedBlocks[i];
+
+        if (block.previousConnection && block.previousConnection.targetConnection) {
+          var above = block.previousConnection.targetBlock();
+          if (above && !selectedSet.has(above.id)) {
+            block.previousConnection.disconnect();
+          }
+        }
+
+        if (block.nextConnection && block.nextConnection.targetConnection) {
+          var below = block.nextConnection.targetBlock();
+          if (below && !selectedSet.has(below.id)) {
+            block.nextConnection.disconnect();
+          }
+        }
+      }
+
+      // Second pass: save and disconnect internal connections
+      for (var j = 0; j < _selectedBlocks.length; j++) {
+        var b = _selectedBlocks[j];
+        if (b.nextConnection && b.nextConnection.targetConnection) {
+          var nextBlock = b.nextConnection.targetBlock();
+          if (nextBlock && selectedSet.has(nextBlock.id)) {
+            _dragSavedConnections.push({ fromId: b.id, toId: nextBlock.id });
+            b.nextConnection.disconnect();
+          }
+        }
+      }
+
+      // Record positions
+      _dragBlocks = _selectedBlocks.slice();
+      _dragOrigPositions = [];
+      for (var k = 0; k < _dragBlocks.length; k++) {
+        _dragOrigPositions.push(_dragBlocks[k].getRelativeToSurfaceXY());
+      }
+
+      // Disable events for the continuous mousemove updates
+      Blockly.Events.disable();
+    }
+
+    function _finishDrag(ws) {
+      // Re-enable events so final positions and reconnections are recorded
+      Blockly.Events.enable();
+
+      // Fire move events for each top-level block's final position
+      for (var j = 0; j < _dragBlocks.length; j++) {
+        var block = _dragBlocks[j];
+        if (block.isDisposed() || block.getParent()) continue;
+        var newPos = block.getRelativeToSurfaceXY();
+        var oldPos = _dragOrigPositions[j];
+        if (newPos.x !== oldPos.x || newPos.y !== oldPos.y) {
+          var moveEvent = new Blockly.Events.BlockMove(block);
+          moveEvent.oldCoordinate = oldPos;
+          moveEvent.newCoordinate = newPos;
+          Blockly.Events.fire(moveEvent);
+        }
+      }
+
+      // Reconnect internal connections (events fire for undo)
+      for (var i = 0; i < _dragSavedConnections.length; i++) {
+        var conn = _dragSavedConnections[i];
+        var fromBlock = ws.getBlockById(conn.fromId);
+        var toBlock = ws.getBlockById(conn.toId);
+        if (fromBlock && toBlock && fromBlock.nextConnection && toBlock.previousConnection) {
+          fromBlock.nextConnection.connect(toBlock.previousConnection);
+        }
+      }
+
+      // End the event group (all disconnect + move + reconnect = one undo step)
+      Blockly.Events.setGroup(false);
+    }
+
+    _trackNativeSelection();
     console.log('[Selection] Block area selection initialized');
   }
 
@@ -388,17 +556,54 @@
     console.log('[Selection] Pasted', pastedBlocks.length, 'blocks');
   }
 
+  function _isInOrIsFunction(block) {
+    var current = block;
+    while (current) {
+      if (current.type === 'procedures_defnoreturn' || current.type === 'procedures_defreturn') {
+        return true;
+      }
+      current = current.getSurroundParent();
+    }
+    return false;
+  }
+
   // ── Run selected blocks ──
 
+  // Track the last Blockly-selected block so we can use it even after
+  // clicking a toolbar button deselects it.
+  var _lastNativeSelected = null;
+
+  function _trackNativeSelection() {
+    var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+    if (!ws) return;
+    ws.addChangeListener(function(event) {
+      if (event.type === Blockly.Events.SELECTED) {
+        if (event.newElementId) {
+          _lastNativeSelected = ws.getBlockById(event.newElementId);
+        }
+        // Don't clear on deselect — keep the last one
+      }
+    });
+  }
+
   function getBlocksToRun() {
-    // Use area-selected blocks if any, otherwise Blockly's single selected block
+    // Use area-selected blocks if any
     if (_selectedBlocks.length > 0) {
       return _selectedBlocks.slice();
     }
-    var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
-    if (!ws) return [];
-    var selected = Blockly.getSelected ? Blockly.getSelected() : Blockly.common.getSelected();
+    // Try current Blockly selection
+    var selected = null;
+    try {
+      if (typeof Blockly !== 'undefined') {
+        selected = Blockly.getSelected ? Blockly.getSelected() :
+                   (Blockly.common && Blockly.common.getSelected ? Blockly.common.getSelected() : null);
+      }
+    } catch (e) {}
     if (selected) return [selected];
+    // Fall back to last known selection (survives toolbar button clicks)
+    if (_lastNativeSelected && !_lastNativeSelected.isDisposed()) {
+      return [_lastNativeSelected];
+    }
     return [];
   }
 
@@ -412,22 +617,94 @@
       return;
     }
 
-    // Generate code: first get full workspace code to populate definitions_
-    // (imports, function defs), then extract code for selected blocks only.
+    // Generate full workspace code first to get all imports and function defs
+    var fullWsCode = Blockly.Python.workspaceToCode(ws);
+
+    // Extract imports and function definitions from the full code
+    var wsLines = fullWsCode.split('\n');
+    var preambleLines = [];
+    var inFuncDef = false;
+    var funcDefIndent = 0;
+    for (var li = 0; li < wsLines.length; li++) {
+      var line = wsLines[li];
+      var trimmed = line.trim();
+
+      if (inFuncDef) {
+        preambleLines.push(line);
+        var lineIndent = line.search(/\S/);
+        if (trimmed.length > 0 && lineIndent <= funcDefIndent) {
+          inFuncDef = false;
+        }
+        continue;
+      }
+
+      if (trimmed.match(/^(import\s+|from\s+\S+\s+import\s+)/)) {
+        preambleLines.push(line);
+      } else if (trimmed.match(/^def\s+\w+\s*\(/)) {
+        inFuncDef = true;
+        funcDefIndent = line.search(/\S/);
+        preambleLines.push(line);
+      } else if (trimmed.startsWith('#')) {
+        preambleLines.push(line);
+      }
+    }
+
+    // Sort selected blocks by vertical position (top to bottom)
+    // Connected blocks stay in their connection order
+    var sortedBlocks = blocks.slice().sort(function(a, b) {
+      var posA = a.getRelativeToSurfaceXY();
+      var posB = b.getRelativeToSurfaceXY();
+      return posA.y - posB.y;
+    });
+
+    // Deduplicate: if a block is connected below another selected block,
+    // it will be reached via the connection — skip it in the sorted list
+    var selectedSet = new Set(blocks.map(function(b) { return b.id; }));
+    var processedIds = new Set();
+
+    // Re-init for generating selected block code
     Blockly.Python.init(ws);
 
     var blockCodeParts = [];
-    for (var i = 0; i < blocks.length; i++) {
-      var block = blocks[i];
+    for (var i = 0; i < sortedBlocks.length; i++) {
+      var block = sortedBlocks[i];
       if (block.isDisposed() || !block.isEnabled()) continue;
+      if (processedIds.has(block.id)) continue;
 
-      var code = Blockly.Python.blockToCode(block);
-      if (Array.isArray(code)) {
-        // Expression block — wrap in statement
-        code = code[0] + '\n';
-      }
-      if (code && code.trim()) {
-        blockCodeParts.push(code);
+      // Skip function definitions and anything inside them —
+      // all function defs are always included in the preamble
+      if (_isInOrIsFunction(block)) continue;
+
+      // Walk the chain of connected selected blocks from this one
+      var chainBlock = block;
+      while (chainBlock) {
+        if (processedIds.has(chainBlock.id)) break;
+        if (!selectedSet.has(chainBlock.id)) break;
+        processedIds.add(chainBlock.id);
+
+        // Temporarily disconnect next to get only this block's code
+        var nextBlock = chainBlock.getNextBlock();
+        var nextConn = chainBlock.nextConnection;
+        if (nextBlock && nextConn && nextConn.targetConnection) {
+          nextConn.disconnect();
+        }
+
+        var code = Blockly.Python.blockToCode(chainBlock);
+        if (Array.isArray(code)) {
+          code = code[0] + '\n';
+        }
+
+        // Reconnect
+        if (nextBlock && nextConn && nextBlock.previousConnection) {
+          nextConn.connect(nextBlock.previousConnection);
+        }
+
+        if (code && code.trim()) {
+          blockCodeParts.push(code);
+        }
+
+        // Follow the chain to the next connected selected block
+        chainBlock = nextBlock && selectedSet.has(nextBlock.id) ? nextBlock : null;
       }
     }
 
@@ -436,18 +713,10 @@
       return;
     }
 
-    // Collect definitions (imports, function defs) that were registered
-    var defs = Blockly.Python.definitions_;
-    var defLines = [];
-    if (defs) {
-      for (var key in defs) {
-        defLines.push(defs[key]);
-      }
-    }
-
+    // Combine: preamble (imports + function defs) + selected block code
     var fullCode = '';
-    if (defLines.length > 0) {
-      fullCode = defLines.join('\n') + '\n\n';
+    if (preambleLines.length > 0) {
+      fullCode = preambleLines.join('\n') + '\n\n';
     }
     fullCode += blockCodeParts.join('');
 

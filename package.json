@@ -51,6 +51,13 @@
     ],
     "extraResources": [
       {
+        "from": "extensions",
+        "to": "extensions",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "server.py",
         "to": "server.py"
       },
@@ -60,6 +67,15 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/esptool.cfg",
+        "to": "esptool.cfg"
+      },
+      {
+        "from": "resources/firmware",
+        "to": "firmware",
+        "filter": ["**/*"]
       }
     ],
     "mac": {
@@ -77,9 +93,12 @@
         {
           "from": "resources/python",
           "to": "python",
-          "filter": [
-            "**/*"
-          ]
+          "filter": ["**/*"]
+        },
+        {
+          "from": "resources/avrdude/avrdude_macOS_64bit",
+          "to": "avrdude/avrdude_macOS_64bit",
+          "filter": ["**/*"]
         }
       ]
     },
@@ -95,9 +114,12 @@
         {
           "from": "resources/python",
           "to": "python",
-          "filter": [
-            "**/*"
-          ]
+          "filter": ["**/*"]
+        },
+        {
+          "from": "resources/avrdude/avrdude-v8.1-windows-x64",
+          "to": "avrdude/avrdude-v8.1-windows-x64",
+          "filter": ["**/*"]
         }
       ]
     },
@@ -118,9 +140,17 @@
         {
           "from": "resources/python",
           "to": "python",
-          "filter": [
-            "**/*"
-          ]
+          "filter": ["**/*"]
+        },
+        {
+          "from": "resources/avrdude/avrdude_Linux_64bit",
+          "to": "avrdude/avrdude_Linux_64bit",
+          "filter": ["**/*"]
+        },
+        {
+          "from": "resources/avrdude/avrdude_Linux_ARM64",
+          "to": "avrdude/avrdude_Linux_ARM64",
+          "filter": ["**/*"]
         }
       ]
     }
