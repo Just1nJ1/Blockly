@@ -226,7 +226,7 @@ async function main() {
     }
   }
 
-  console.log('=== Blockly Desktop App - Python Environment Setup ===\n');
+  console.log('=== WLKATA StudioX - Python Environment Setup ===\n');
 
   if (platform === 'auto') {
     // Auto-detect current platform

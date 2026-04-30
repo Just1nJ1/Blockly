@@ -107,7 +107,7 @@ function setCurrentWorkspace(wsPath) {
   _addRecentWorkspace(wsPath);
 
   // Update title bar
-  document.title = _currentWorkspaceName + ' - WLKATA Blockly';
+  document.title = _currentWorkspaceName + ' - WLKATA StudioX';
   // Update toolbar indicator
   var indicator = document.getElementById('workspace-name-indicator');
   if (indicator) indicator.textContent = _currentWorkspaceName;

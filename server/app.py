@@ -33,7 +33,7 @@ CORS(app, resources={
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
-    return jsonify({'status': 'ok', 'message': 'Blockly Python Server is running'})
+    return jsonify({'status': 'ok', 'message': 'StudioX Server is running'})
 
 
 @app.route('/check-serial-access', methods=['GET'])
@@ -1117,7 +1117,7 @@ def _fetch_all_releases():
                f'?per_page=30&page={page}')
         req = urllib.request.Request(url, headers={
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'WLKATA-Blockly'
+            'User-Agent': 'WLKATA-StudioX'
         })
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -1319,7 +1319,7 @@ def cmd_download_firmware():
         def run():
             try:
                 _flash_jobs[job_id]['lines'].append('Downloading firmware...')
-                req = urllib.request.Request(fw_url, headers={'User-Agent': 'WLKATA-Blockly'})
+                req = urllib.request.Request(fw_url, headers={'User-Agent': 'WLKATA-StudioX'})
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     with open(tmp_path, 'wb') as f:
                         f.write(resp.read())

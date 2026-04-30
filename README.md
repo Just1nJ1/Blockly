@@ -1,6 +1,6 @@
-# WLKATA Blockly
+# WLKATA StudioX
 
-A visual programming desktop application built with Electron and Blockly, featuring an embedded Python backend for code execution. Supports both Windows and macOS.
+A visual programming desktop application for WLKATA robotic arms, built with Electron and Blockly. Features an embedded Python backend for code execution. Supports Windows, macOS, and Linux.
 
 ## Prerequisites
 
@@ -11,8 +11,8 @@ A visual programming desktop application built with Electron and Blockly, featur
 ## Development Setup
 
 ```bash
-git clone https://github.com/wlkata/Blockly
-cd Blockly
+git clone https://github.com/wlkata/StudioX
+cd StudioX
 npm install
 npm start
 ```

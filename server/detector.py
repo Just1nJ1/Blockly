@@ -75,6 +75,7 @@ def detect_model(port, keep_open=False, cancel_event=None):
         # Send $V to request firmware version
         # Response will be mixed with auto-report status messages
         ser.write("$V\r\n".encode("utf-8"))
+        time.sleep(0.5)  # Give device time to process and respond
 
         # Read lines and look for firmware response among status messages
         # Max attempts prevents infinite loop if device never responds to $V
@@ -163,7 +164,9 @@ def _background_probe(port, description):
 
     def probe():
         try:
+            print(f"[detector] Starting probe for {port}")
             model, ser = detect_model(port, keep_open=True, cancel_event=cancel_event)
+            print(f"[detector] Probe result for {port}: model={model}")
             if model:
                 _cache[port] = {'model': model, 'description': description}
                 # Register with SerialManager
@@ -176,6 +179,9 @@ def _background_probe(port, description):
                         ser.close()
                     except Exception:
                         pass
+        except Exception as e:
+            print(f"[detector] Probe error for {port}: {e}")
+            _cache[port] = {'model': None, 'description': description}
         finally:
             _probing.pop(port, None)
             cancel_event.set()  # Stop watchdog

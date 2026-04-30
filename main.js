@@ -119,7 +119,7 @@ function findServerPackageDir() {
  * Creates it if it doesn't exist.
  */
 function getExtensionsDir() {
-  const dir = path.join(os.homedir(), '.wlkata-blockly', 'extensions');
+  const dir = path.join(os.homedir(), '.wlkata-studiox', 'extensions');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('Created extensions directory: ' + dir);

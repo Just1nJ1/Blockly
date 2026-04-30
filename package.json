@@ -1,7 +1,7 @@
 {
   "name": "blockly-desktop-app",
   "version": "1.0.0",
-  "description": "A Blockly desktop application with Python backend execution",
+  "description": "WLKATA StudioX - Visual programming for robotic arms",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -35,7 +35,7 @@
   },
   "build": {
     "appId": "com.example.blocklyapp",
-    "productName": "WLKATA Blockly",
+    "productName": "WLKATA StudioX",
     "icon": "resources/icons/icon",
     "directories": {
       "output": "dist"
@@ -88,7 +88,7 @@
           "arch": ["x64", "arm64"]
         }
       ],
-      "artifactName": "WLKATA-Blockly-Mac-${arch}.${ext}",
+      "artifactName": "WLKATA-StudioX-Mac-${arch}.${ext}",
       "extraResources": [
         {
           "from": "resources/python",
@@ -109,7 +109,7 @@
           "arch": ["x64"]
         }
       ],
-      "artifactName": "WLKATA-Blockly-Win-${arch}.${ext}",
+      "artifactName": "WLKATA-StudioX-Win-${arch}.${ext}",
       "extraResources": [
         {
           "from": "resources/python",
@@ -123,6 +123,17 @@
         }
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "runAfterFinish": true,
+      "include": "build/installer.nsh",
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": false,
+      "shortcutName": "WLKATA StudioX"
+    },
     "linux": {
       "target": [
         {
@@ -135,7 +146,7 @@
         }
       ],
       "category": "Education",
-      "artifactName": "WLKATA-Blockly-Linux-${arch}.${ext}",
+      "artifactName": "WLKATA-StudioX-Linux-${arch}.${ext}",
       "extraResources": [
         {
           "from": "resources/python",
