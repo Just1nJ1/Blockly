@@ -38,6 +38,12 @@
           var model = entry.model;
           var label = port;
 
+          // Skip ports that are still being detected
+          if (model === 'Detecting...') {
+            newPorts.push([port + ' (Detecting...)', '__detecting__' + port]);
+            continue;
+          }
+
           if (model) {
             label = port + ' (' + model + ')';
             var modelValue = MODEL_VALUE_MAP[model];
@@ -148,10 +154,18 @@
     if (ports) {
       for (var i = 0; i < ports.length; i++) {
         var opt = document.createElement('option');
-        opt.value = ports[i].port;
-        opt.textContent = ports[i].port + ' (' + ports[i].model + ')';
+        var model = ports[i].model;
+        // Handle ports still being detected
+        if (model === 'Detecting...') {
+          opt.value = '';
+          opt.textContent = ports[i].port + ' (Detecting...)';
+          opt.disabled = true;
+        } else {
+          opt.value = ports[i].port;
+          opt.textContent = ports[i].port + ' (' + model + ')';
+          detectedValues.add(ports[i].port);
+        }
         select.appendChild(opt);
-        detectedValues.add(ports[i].port);
       }
     }
 
@@ -238,12 +252,20 @@
 
     for (var i = 0; i < ports.length; i++) {
       var opt = document.createElement('option');
-      opt.value = ports[i].port;
-      var varName = getVarNameForPort(ports[i].port);
-      var label = '';
-      if (varName) label = varName + ' - ';
-      label += ports[i].port + ' (' + ports[i].model + ')';
-      opt.textContent = label;
+      var model = ports[i].model;
+      // Handle ports still being detected
+      if (model === 'Detecting...') {
+        opt.value = '';
+        opt.textContent = ports[i].port + ' (Detecting...)';
+        opt.disabled = true;
+      } else {
+        opt.value = ports[i].port;
+        var varName = getVarNameForPort(ports[i].port);
+        var label = '';
+        if (varName) label = varName + ' - ';
+        label += ports[i].port + ' (' + model + ')';
+        opt.textContent = label;
+      }
       select.appendChild(opt);
     }
 
