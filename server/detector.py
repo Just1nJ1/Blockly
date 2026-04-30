@@ -43,9 +43,11 @@ def detect_model(port, keep_open=False, cancel_event=None):
     """
     Probe a serial port to determine the connected robot model.
 
-    Sends $V twice:
-    1. First $V wakes up the device and clears any boot messages
-    2. Second $V gets a clean response with model/firmware info
+    The robot may be continuously sending auto-report status messages like:
+    <Alarm,Angle(ABCDXYZ):0.000,...>
+
+    We send $V and look for the firmware response (e.g. "Mirobot fw...")
+    among the incoming messages. The firmware line starts with "Mirobot" or "E4".
 
     The probe waits indefinitely for a response (no timeout), but can be
     cancelled via the cancel_event. A watchdog thread monitors the probe
@@ -70,39 +72,49 @@ def detect_model(port, keep_open=False, cancel_event=None):
         ser.flushInput()
         ser.flushOutput()
 
-        # First $V: wake up device and clear any boot/garbage messages
-        ser.write("$V\r\n".encode("utf-8"))
-        time.sleep(0.3)  # Give device time to respond
-        ser.flushInput()  # Discard all responses from first $V
-
-        # Second $V: get clean response
+        # Send $V to request firmware version
+        # Response will be mixed with auto-report status messages
         ser.write("$V\r\n".encode("utf-8"))
 
-        # Read lines indefinitely until we get a model or are cancelled
-        # Max attempts prevents infinite loop if device sends garbage forever
+        # Read lines and look for firmware response among status messages
+        # Max attempts prevents infinite loop if device never responds to $V
         max_attempts = 120  # 120 * 0.5s timeout = 60 seconds max wait
         attempts = 0
+        last_v_time = time.time()
+
         while attempts < max_attempts:
             if cancel_event and cancel_event.is_set():
                 break  # Cancelled by watchdog
 
             raw = ser.readline()
             if not raw:
-                # Timeout, no data yet - send $V again periodically
+                # Timeout, no data - send $V again periodically
                 attempts += 1
-                if attempts % 10 == 0:  # Every 5 seconds
+                if time.time() - last_v_time >= 5.0:
                     ser.write("$V\r\n".encode("utf-8"))
+                    last_v_time = time.time()
                 continue
 
             message = raw.decode('utf-8', errors='ignore').strip()
             if not message:
                 continue
+
+            # Skip auto-report status messages (start with '<')
+            if message.startswith('<'):
+                # Resend $V periodically even while receiving status
+                if time.time() - last_v_time >= 2.0:
+                    ser.write("$V\r\n".encode("utf-8"))
+                    last_v_time = time.time()
+                continue
+
+            # Check for firmware version response
             if message.startswith("Mirobot"):
                 model = "Mirobot"
                 break
             if message.startswith("E4"):
                 model = "MT4"
                 break
+
             attempts += 1
 
     except (serial.SerialException, OSError, PermissionError):
