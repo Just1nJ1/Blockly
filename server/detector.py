@@ -33,6 +33,10 @@ def detect_model(port, keep_open=False):
     """
     Probe a serial port to determine the connected robot model.
 
+    Sends $V twice:
+    1. First $V wakes up the device and clears any boot messages
+    2. Second $V gets a clean response with model/firmware info
+
     Args:
         port (str): The serial port path (e.g. 'COM3', '/dev/ttyUSB0').
         keep_open (bool): If True, return the open serial connection along
@@ -46,11 +50,19 @@ def detect_model(port, keep_open=False):
     ser = None
     model = None
     try:
-        ser = serial.Serial(port, 115200, timeout=5)
+        ser = serial.Serial(port, 115200, timeout=2)
         ser.flushInput()
         ser.flushOutput()
+
+        # First $V: wake up device and clear any boot/garbage messages
         ser.write("$V\r\n".encode("utf-8"))
-        # Read up to 5 lines (timeout=5s per read handles slow responses)
+        time.sleep(0.3)  # Give device time to respond
+        ser.flushInput()  # Discard all responses from first $V
+
+        # Second $V: get clean response
+        ser.write("$V\r\n".encode("utf-8"))
+
+        # Read up to 5 lines (timeout=2s per read)
         for _ in range(5):
             raw = ser.readline()
             if not raw:
