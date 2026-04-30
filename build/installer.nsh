@@ -1,63 +1,67 @@
 ; Custom NSIS installer script for WLKATA StudioX
-; Adds checkboxes for desktop and start menu shortcuts
+; Adds a custom page with checkboxes for shortcuts
 
+!include "nsDialogs.nsh"
 !include "MUI2.nsh"
 
+; Suppress warning 6010 (unreferenced function) - the Page custom directive
+; inside the customWelcomePage macro references these functions but NSIS
+; doesn't track references across macro boundaries.
+!pragma warning disable 6010
+
+Var DesktopShortcutCheckbox
+Var StartMenuShortcutCheckbox
 Var CreateDesktopShortcut
 Var CreateStartMenuShortcut
 
-; Custom page for shortcut options
-Function customShortcutPage
+Function ShortcutOptionsPage
+  !insertmacro MUI_HEADER_TEXT "Shortcut Options" "Choose which shortcuts to create."
+
   nsDialogs::Create 1018
   Pop $0
-  
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
   ${NSD_CreateCheckbox} 0 0 100% 12u "Create Desktop Shortcut"
-  Pop $CreateDesktopShortcut
-  ${NSD_SetState} $CreateDesktopShortcut ${BST_CHECKED}
-  
+  Pop $DesktopShortcutCheckbox
+  ${NSD_SetState} $DesktopShortcutCheckbox ${BST_CHECKED}
+
   ${NSD_CreateCheckbox} 0 20u 100% 12u "Create Start Menu Shortcut"
-  Pop $CreateStartMenuShortcut
-  ${NSD_SetState} $CreateStartMenuShortcut ${BST_CHECKED}
-  
+  Pop $StartMenuShortcutCheckbox
+  ${NSD_SetState} $StartMenuShortcutCheckbox ${BST_CHECKED}
+
   nsDialogs::Show
 FunctionEnd
 
-Function customShortcutPageLeave
-  ${NSD_GetState} $CreateDesktopShortcut $0
-  ${If} $0 == ${BST_CHECKED}
-    StrCpy $CreateDesktopShortcut "1"
-  ${Else}
-    StrCpy $CreateDesktopShortcut "0"
-  ${EndIf}
-  
-  ${NSD_GetState} $CreateStartMenuShortcut $0
-  ${If} $0 == ${BST_CHECKED}
-    StrCpy $CreateStartMenuShortcut "1"
-  ${Else}
-    StrCpy $CreateStartMenuShortcut "0"
-  ${EndIf}
+Function ShortcutOptionsPageLeave
+  ${NSD_GetState} $DesktopShortcutCheckbox $CreateDesktopShortcut
+  ${NSD_GetState} $StartMenuShortcutCheckbox $CreateStartMenuShortcut
 FunctionEnd
 
+!macro customInit
+  StrCpy $CreateDesktopShortcut ${BST_CHECKED}
+  StrCpy $CreateStartMenuShortcut ${BST_CHECKED}
+!macroend
+
+!macro customWelcomePage
+  !insertmacro MUI_PAGE_WELCOME
+  Page custom ShortcutOptionsPage ShortcutOptionsPageLeave
+!macroend
+
 !macro customInstall
-  ; Create desktop shortcut if selected
-  ${If} $CreateDesktopShortcut == "1"
+  ${If} $CreateDesktopShortcut == ${BST_CHECKED}
     CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${PRODUCT_FILENAME}.exe"
   ${EndIf}
-  
-  ; Create start menu shortcut if selected
-  ${If} $CreateStartMenuShortcut == "1"
+
+  ${If} $CreateStartMenuShortcut == ${BST_CHECKED}
     CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
     CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\${PRODUCT_FILENAME}.exe"
-    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall ${PRODUCT_NAME}.exe"
   ${EndIf}
 !macroend
 
 !macro customUnInstall
-  ; Remove desktop shortcut
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
-  
-  ; Remove start menu shortcuts
   Delete "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk"
-  Delete "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk"
   RMDir "$SMPROGRAMS\${PRODUCT_NAME}"
 !macroend
