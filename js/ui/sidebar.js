@@ -30,5 +30,13 @@ function initSidebar() {
         window.controlPanelCheckAndRefresh();
       }
     }
+
+    // When switching to Teaching, refresh status if a port is selected
+    if (targetTab === 'teaching') {
+      var teachPort = document.getElementById('teach-port-select');
+      if (teachPort && teachPort.value) {
+        // Trigger a status refresh by firing the change event logic
+      }
+    }
   });
 }

@@ -86,6 +86,7 @@
           _lastConnectedPort = null;
           updateCommandPortSelect(mergedLastDetected);
           updateControlPortSelect(mergedLastDetected);
+          updateTeachingPortSelect(mergedLastDetected);
         }
       })
       .catch(function(err) {
@@ -285,6 +286,65 @@
       }
       select.selectedIndex = 0;
       // Trigger change so control panel picks up the new port
+      select.dispatchEvent(new Event('change'));
+    }
+  }
+
+  // Update the teaching panel's port dropdown
+  function updateTeachingPortSelect(ports) {
+    var select = document.getElementById('teach-port-select');
+    if (!select) return;
+
+    var currentValue = select.value;
+    select.innerHTML = '';
+
+    if (!ports || ports.length === 0) {
+      var noConn = document.createElement('option');
+      noConn.value = '';
+      noConn.textContent = 'No Connection';
+      noConn.disabled = true;
+      noConn.selected = true;
+      select.appendChild(noConn);
+      if (typeof window.teachingPanelOnDisconnected === 'function') {
+        window.teachingPanelOnDisconnected();
+      }
+      return;
+    }
+
+    for (var i = 0; i < ports.length; i++) {
+      var opt = document.createElement('option');
+      var model = ports[i].model;
+      if (model === 'Detecting...') {
+        opt.value = '';
+        opt.textContent = ports[i].port + ' (Detecting...)';
+        opt.disabled = true;
+      } else {
+        opt.value = ports[i].port;
+        opt.textContent = ports[i].port + ' (' + model + ')';
+      }
+      select.appendChild(opt);
+    }
+
+    // Restore previous selection
+    var restored = false;
+    for (var j = 0; j < select.options.length; j++) {
+      if (select.options[j].value === currentValue && currentValue !== '') {
+        select.selectedIndex = j;
+        restored = true;
+        break;
+      }
+    }
+    if (!restored && ports.length > 0) {
+      // Select first real (non-detecting) port
+      for (var p = 0; p < select.options.length; p++) {
+        if (select.options[p].value && !select.options[p].disabled) {
+          select.selectedIndex = p;
+          break;
+        }
+      }
+    }
+    // Always fire change so teaching panel picks up the port
+    if (select.value) {
       select.dispatchEvent(new Event('change'));
     }
   }
@@ -660,6 +720,7 @@
 
           updateCommandPortSelect(lastDetectedPorts);
           updateControlPortSelect(lastDetectedPorts);
+          updateTeachingPortSelect(lastDetectedPorts);
           select.value = port;
           updateRemoveButton();
           connectToSelectedPort(port);
@@ -705,6 +766,7 @@
         }
         updateCommandPortSelect(lastDetectedPorts);
         updateControlPortSelect(lastDetectedPorts);
+        updateTeachingPortSelect(lastDetectedPorts);
         updateRemoveButton();
 
         // Auto-connect to first remaining port if available

@@ -660,7 +660,7 @@ def cmd_stop_all():
 
 @app.route('/cmd/jog', methods=['POST'])
 def cmd_jog():
-    """Jog a single axis by a step amount using the SDK."""
+    """Jog the robot. Supports single-axis step or multi-axis absolute move."""
     try:
         data = request.get_json()
         if not data:
@@ -668,11 +668,6 @@ def cmd_jog():
 
         port = data.get('port', None)
         mode = data.get('mode', 'joint')       # 'joint' or 'coord'
-        axis = data.get('axis', '').upper()     # e.g. 'X', 'Y', 'Z', 'A', 'B', 'C'
-        step = float(data.get('step', 0))
-
-        if not axis:
-            return jsonify({'success': False, 'error': 'Invalid axis'}), 400
 
         mgr = SerialManager.get_instance()
         conn = None
@@ -684,23 +679,39 @@ def cmd_jog():
         if not conn or not conn.connected or not conn.robot:
             return jsonify({'success': False, 'error': 'Not connected'})
 
-        absolute = data.get('absolute', False)
+        values = data.get('values', None)       # multi-axis: {x, y, z, a, b, c}
 
-        # Build keyword args: only the target axis gets the value
-        kwargs = {axis.lower(): step}
-
-        if absolute:
-            # Absolute move: position=0 (G90)
+        if values:
+            # Multi-axis absolute move (used by teaching panel)
+            motion = int(data.get('motion', 0))  # 0=Fast, 1=Linear, 2=Joint
+            kwargs = {}
+            for key in ('x', 'y', 'z', 'a', 'b', 'c'):
+                if key in values and values[key] is not None:
+                    kwargs[key] = float(values[key])
             if mode == 'coord':
-                conn.robot.writeCoordinate(0, 0, **kwargs)
+                conn.robot.writeCoordinate(motion, 0, **kwargs)
             else:
                 conn.robot.writeAngle(0, **kwargs)
         else:
-            # Incremental move: position=1 (G91)
-            if mode == 'coord':
-                conn.robot.writeCoordinate(0, 1, **kwargs)
+            # Single-axis jog (used by control panel +/- buttons)
+            axis = data.get('axis', '').upper()
+            step = float(data.get('step', 0))
+            if not axis:
+                return jsonify({'success': False, 'error': 'Invalid axis'}), 400
+
+            absolute = data.get('absolute', False)
+            kwargs = {axis.lower(): step}
+
+            if absolute:
+                if mode == 'coord':
+                    conn.robot.writeCoordinate(0, 0, **kwargs)
+                else:
+                    conn.robot.writeAngle(0, **kwargs)
             else:
-                conn.robot.writeAngle(1, **kwargs)
+                if mode == 'coord':
+                    conn.robot.writeCoordinate(0, 1, **kwargs)
+                else:
+                    conn.robot.writeAngle(1, **kwargs)
 
         return jsonify({'success': True})
     except Exception as e:
