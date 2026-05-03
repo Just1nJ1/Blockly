@@ -1,0 +1,4 @@
+# Python dependencies for the Sample Jog extension.
+# These are installed automatically when the extension is added
+# via Settings > Extensions > Install.
+numpy

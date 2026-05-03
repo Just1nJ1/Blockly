@@ -251,6 +251,9 @@ body {
 .cmd-msg-rx {
   color: var(--cmd-text);
 }
+.cmd-msg-auto-status {
+  opacity: 0.55;
+}
 .cmd-msg-sys {
   color: #999;
   font-style: italic;
@@ -1325,7 +1328,14 @@ button:disabled {
   background: #b71c1c !important;
 }
 .app-settings-dialog {
-  max-width: 380px;
+  max-width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.app-settings-dialog .ctrl-modal-body {
+  flex: 1;
+  min-height: 0;
 }
 .app-settings-check-label {
   display: flex;
@@ -1383,6 +1393,358 @@ button:disabled {
   color: var(--text-muted);
   font-style: italic;
   padding: 8px;
+}
+/* ── Settings: back button ── */
+.app-settings-back {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+  margin-right: 4px;
+}
+.app-settings-back:hover {
+  background: var(--bg-header);
+  color: var(--text-primary);
+}
+/* ── Settings: navigation items ── */
+.app-settings-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.app-settings-nav-item:hover {
+  background: var(--bg-secondary);
+}
+.app-settings-nav-item:last-child {
+  margin-bottom: 0;
+}
+.app-settings-nav-label {
+  flex: 1;
+}
+.app-settings-nav-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.app-settings-nav-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.app-settings-nav-item > svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+/* ── Settings: list items (extensions, environments) ── */
+.app-settings-list-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+.app-settings-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app-settings-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.app-settings-item-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.app-settings-item-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.app-settings-item-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  word-break: break-all;
+}
+.app-settings-item-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+/* ── Settings: buttons ── */
+.app-settings-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-header);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.app-settings-btn:hover {
+  background: var(--bg-tertiary);
+}
+.app-settings-btn-primary {
+  background: var(--accent, #2196F3);
+  color: #fff;
+  border-color: transparent;
+}
+.app-settings-btn-primary:hover {
+  background: var(--accent-hover, #1976D2);
+  color: #fff;
+}
+.app-settings-btn-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.app-settings-btn-danger {
+  color: #c62828;
+  border-color: #c62828;
+  background: transparent;
+}
+.app-settings-btn-danger:hover {
+  background: #c62828;
+  color: #fff;
+}
+/* ── Settings: package table (PyCharm-style) ── */
+.app-settings-pkg-section {
+  margin-top: 16px;
+}
+.app-settings-pkg-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.app-settings-pkg-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.app-settings-pkg-table-wrap {
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.app-settings-pkg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.app-settings-pkg-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.app-settings-pkg-table thead th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-primary);
+  user-select: none;
+}
+.app-settings-pkg-table tbody tr {
+  border-bottom: 1px solid var(--border-faint, var(--border-primary));
+  transition: background 0.1s;
+}
+.app-settings-pkg-table tbody tr:last-child {
+  border-bottom: none;
+}
+.app-settings-pkg-table tbody tr:nth-child(even) {
+  background: var(--bg-secondary);
+}
+.app-settings-pkg-table tbody tr:hover {
+  background: var(--bg-tertiary);
+}
+.app-settings-pkg-table td {
+  padding: 5px 10px;
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+.app-settings-pkg-table .pkg-col-name {
+  font-weight: 500;
+}
+.app-settings-pkg-table .pkg-col-ver {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.app-settings-pkg-table .pkg-col-act {
+  width: 32px;
+  text-align: center;
+  padding: 4px 6px;
+}
+.app-settings-pkg-remove-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.app-settings-pkg-table tbody tr:hover .app-settings-pkg-remove-btn {
+  opacity: 1;
+}
+.app-settings-pkg-remove-btn:hover {
+  opacity: 1;
+  color: #c62828;
+  background: rgba(198,40,40,0.08);
+}
+.app-settings-pkg-version {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+/* ── Settings: install form ── */
+.app-settings-install-form {
+  padding: 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.app-settings-install-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.app-settings-search-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.app-settings-input {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.app-settings-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.app-settings-select {
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.app-settings-extra-index {
+  margin-top: 8px;
+}
+/* ── Settings: search results ── */
+.app-settings-search-found {
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  margin-bottom: 8px;
+}
+.app-settings-search-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.app-settings-search-summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 4px 0 8px;
+}
+.app-settings-search-install-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.app-settings-search-error {
+  padding: 8px;
+  font-size: 12px;
+  color: #c62828;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+/* ── Settings: loading / empty ── */
+@keyframes settings-spin {
+  to { transform: rotate(360deg); }
+}
+.app-settings-loading {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 16px 12px;
+  text-align: center;
+  font-style: italic;
+}
+.app-settings-progress {
+  padding: 24px 16px;
+  text-align: center;
+}
+.app-settings-progress .progress-spinner {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border-light, #ddd);
+  border-top-color: var(--accent, #2196F3);
+  border-radius: 50%;
+  animation: settings-spin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+.app-settings-progress .progress-stage {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.app-settings-progress .progress-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.app-settings-empty-msg {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 16px 12px;
+  text-align: center;
+  font-style: italic;
+  line-height: 1.5;
+}
+.app-settings-empty-msg code {
+  background: var(--bg-tertiary);
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 11px;
 }
 .ctrl-btn-calibrate {
   width: 100%;

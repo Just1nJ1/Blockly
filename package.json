@@ -27,6 +27,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "adm-zip": "^0.5.17",
     "blockly": "^12.4.1"
   },
   "devDependencies": {
@@ -34,7 +35,7 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "com.example.blocklyapp",
+    "appId": "com.wlkata.studiox",
     "productName": "WLKATA StudioX",
     "icon": "resources/icons/icon",
     "directories": {
@@ -75,7 +76,9 @@
       {
         "from": "resources/firmware",
         "to": "firmware",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -85,7 +88,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "artifactName": "WLKATA-StudioX-Mac-${arch}.${ext}",
@@ -93,12 +99,16 @@
         {
           "from": "resources/python",
           "to": "python",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         },
         {
           "from": "resources/avrdude/avrdude_macOS_64bit",
           "to": "avrdude/avrdude_macOS_64bit",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     },
@@ -106,7 +116,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "WLKATA-StudioX-Win-${arch}.${ext}",
@@ -114,12 +126,16 @@
         {
           "from": "resources/python",
           "to": "python",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         },
         {
           "from": "resources/avrdude/avrdude-v8.1-windows-x64",
           "to": "avrdude/avrdude-v8.1-windows-x64",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     },
@@ -138,11 +154,17 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "category": "Education",
@@ -151,17 +173,23 @@
         {
           "from": "resources/python",
           "to": "python",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         },
         {
           "from": "resources/avrdude/avrdude_Linux_64bit",
           "to": "avrdude/avrdude_Linux_64bit",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         },
         {
           "from": "resources/avrdude/avrdude_Linux_ARM64",
           "to": "avrdude/avrdude_Linux_ARM64",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     }

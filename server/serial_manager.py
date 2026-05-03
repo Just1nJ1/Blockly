@@ -195,8 +195,8 @@ class PortConnection:
                                     self._rx_lines.append(line)
                                     self._rx_event.set()
                             else:
-                                # Auto-report: cache only, don't pollute history or RX buffer
-                                pass
+                                # Auto-report: cache in history (hidden unless dev mode)
+                                self.add_history('auto-status', line)
                         else:
                             self.add_history('rx', line)
                             if line.lower() != 'ok':

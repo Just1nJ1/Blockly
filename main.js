@@ -701,3 +701,182 @@ ipcMain.handle('dialog:selectFirmware', async (event, fileType) => {
     name: path.basename(filePath)
   };
 });
+
+// ── Extension management (native OS) ────────────────────────────
+
+/**
+ * Return the user extensions directory path.
+ */
+ipcMain.handle('extensions:getDir', () => {
+  return getExtensionsDir();
+});
+
+/**
+ * List installed extensions from the user extensions directory.
+ * Returns array of { name, displayName, version, description, path }.
+ */
+ipcMain.handle('extensions:list', () => {
+  const dir = getExtensionsDir();
+  const results = [];
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch (e) { return results; }
+  for (const entry of entries) {
+    const extDir = path.join(dir, entry);
+    const manifestPath = path.join(extDir, 'extension.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      results.push({
+        name: manifest.name || entry,
+        displayName: manifest.displayName || manifest.name || entry,
+        version: manifest.version || '',
+        description: manifest.description || '',
+        path: extDir,
+      });
+    } catch (e) {
+      results.push({ name: entry, displayName: entry, version: '', description: 'Invalid manifest', path: extDir });
+    }
+  }
+  return results;
+});
+
+/**
+ * Install an extension from a folder (copies into user extensions dir).
+ * Returns { success, name } or { success: false, error }.
+ */
+ipcMain.handle('extensions:installFolder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Extension Folder',
+    properties: ['openDirectory'],
+    buttonLabel: 'Install',
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const srcDir = result.filePaths[0];
+  const manifestPath = path.join(srcDir, 'extension.json');
+  if (!fs.existsSync(manifestPath)) {
+    return { success: false, error: 'Selected folder has no extension.json manifest.' };
+  }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch (e) {
+    return { success: false, error: 'Invalid extension.json: ' + e.message };
+  }
+
+  const name = manifest.name || path.basename(srcDir);
+  const dest = path.join(getExtensionsDir(), name);
+
+  try {
+    _copyDirSync(srcDir, dest);
+    log('Extension installed from folder: ' + name);
+    const reqPath = path.join(dest, 'requirements.txt');
+    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : null;
+    return { success: true, name: name, requirements: requirements };
+  } catch (e) {
+    return { success: false, error: 'Copy failed: ' + e.message };
+  }
+});
+
+/**
+ * Install an extension from a .zip file (extracts into user extensions dir).
+ * Returns { success, name } or { success: false, error }.
+ */
+ipcMain.handle('extensions:installZip', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Extension Zip',
+    properties: ['openFile'],
+    filters: [{ name: 'Zip Archives', extensions: ['zip'] }],
+    buttonLabel: 'Install',
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const zipPath = result.filePaths[0];
+  try {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(zipPath);
+    const entries = zip.getEntries();
+
+    // Find extension.json to detect root folder inside zip
+    let manifestEntry = null;
+    for (const entry of entries) {
+      const parts = entry.entryName.replace(/\\/g, '/').split('/').filter(Boolean);
+      if (parts[parts.length - 1] === 'extension.json') {
+        if (!manifestEntry || parts.length < manifestEntry.depth) {
+          manifestEntry = { entry, depth: parts.length, prefix: parts.slice(0, -1).join('/') };
+        }
+      }
+    }
+    if (!manifestEntry) {
+      return { success: false, error: 'Zip does not contain an extension.json manifest.' };
+    }
+
+    const manifest = JSON.parse(manifestEntry.entry.getData().toString('utf-8'));
+    const name = manifest.name || path.basename(zipPath, '.zip');
+    const dest = path.join(getExtensionsDir(), name);
+    const prefix = manifestEntry.prefix ? manifestEntry.prefix + '/' : '';
+
+    if (fs.existsSync(dest)) {
+      fs.rmSync(dest, { recursive: true, force: true });
+    }
+    fs.mkdirSync(dest, { recursive: true });
+
+    for (const entry of entries) {
+      if (entry.isDirectory) continue;
+      const entryPath = entry.entryName.replace(/\\/g, '/');
+      if (prefix && !entryPath.startsWith(prefix)) continue;
+      const relative = prefix ? entryPath.slice(prefix.length) : entryPath;
+      if (!relative) continue;
+      const destFile = path.join(dest, relative);
+      fs.mkdirSync(path.dirname(destFile), { recursive: true });
+      fs.writeFileSync(destFile, entry.getData());
+    }
+
+    log('Extension installed from zip: ' + name);
+    const reqPath = path.join(dest, 'requirements.txt');
+    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : null;
+    return { success: true, name: name, requirements: requirements };
+  } catch (e) {
+    if (e.code === 'MODULE_NOT_FOUND') {
+      return { success: false, error: 'Zip support requires the adm-zip package. Install it with: npm install adm-zip' };
+    }
+    return { success: false, error: 'Zip extraction failed: ' + e.message };
+  }
+});
+
+/**
+ * Remove an extension by deleting its folder from the user extensions dir.
+ */
+ipcMain.handle('extensions:remove', async (event, name) => {
+  const extDir = path.join(getExtensionsDir(), name);
+  if (!fs.existsSync(extDir)) {
+    return { success: false, error: 'Extension folder not found.' };
+  }
+  try {
+    fs.rmSync(extDir, { recursive: true, force: true });
+    log('Extension removed: ' + name);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: 'Delete failed: ' + e.message };
+  }
+});
+
+/**
+ * Recursively copy a directory.
+ */
+function _copyDirSync(src, dest) {
+  if (fs.existsSync(dest)) {
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      _copyDirSync(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}

@@ -16,6 +16,7 @@ from .inspector import FunctionInspector, InstanceInspector
 from .debugger import StepDebugger
 from .detector import scan_devices
 from .serial_manager import SerialManager
+from . import environments
 
 # In-memory store for firmware flash jobs (desktop app, single user)
 _flash_jobs = {}
@@ -391,8 +392,11 @@ def cmd_history():
     """Get message history since a given ID."""
     try:
         since = request.args.get('since', 0, type=int)
+        include_status = request.args.get('include_status', 'false') == 'true'
         mgr = SerialManager.get_instance()
         messages = mgr.get_history(since=since)
+        if not include_status:
+            messages = [m for m in messages if m.get('dir') != 'auto-status']
         return jsonify({'success': True, 'messages': messages})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -1392,6 +1396,126 @@ def cmd_download_firmware():
 
         threading.Thread(target=run, daemon=True).start()
         return jsonify({'success': True, 'job_id': job_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+
+# ── Environment Management ──────────────────────────────────────
+
+
+@app.route('/env/list', methods=['GET'])
+def env_list():
+    """List all virtual environments."""
+    try:
+        envs = environments.list_environments()
+        return jsonify({'success': True, 'environments': envs,
+                        'base_dir': environments.get_envs_base()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/create', methods=['POST'])
+def env_create():
+    """Create a new virtual environment with base packages (uses uv)."""
+    try:
+        data = request.get_json() or {}
+        name = data.get('name', '').strip()
+        if not name:
+            return jsonify({'success': False, 'error': 'No name provided'}), 400
+        python_version = data.get('python_version', '').strip() or None
+        return jsonify(environments.create_environment(
+            name, python_version=python_version))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/delete', methods=['POST'])
+def env_delete():
+    """Delete a virtual environment."""
+    try:
+        data = request.get_json() or {}
+        name = data.get('name', '').strip()
+        if not name:
+            return jsonify({'success': False, 'error': 'No name provided'}), 400
+        return jsonify(environments.delete_environment(name))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/<name>/packages', methods=['GET'])
+def env_packages(name):
+    """List installed packages in an environment."""
+    try:
+        return jsonify(environments.list_packages(name))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/install', methods=['POST'])
+def env_install():
+    """Install a package into an environment."""
+    try:
+        data = request.get_json() or {}
+        env_name = data.get('env', '').strip()
+        package = data.get('package', '').strip()
+        version = data.get('version', '').strip() or None
+        extra_index_url = data.get('extra_index_url', '').strip() or None
+
+        if not env_name or not package:
+            return jsonify({'success': False, 'error': 'env and package are required'}), 400
+
+        return jsonify(environments.install_package(
+            env_name, package, version=version,
+            extra_index_url=extra_index_url))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/uninstall', methods=['POST'])
+def env_uninstall():
+    """Uninstall a package from an environment."""
+    try:
+        data = request.get_json() or {}
+        env_name = data.get('env', '').strip()
+        package = data.get('package', '').strip()
+
+        if not env_name or not package:
+            return jsonify({'success': False, 'error': 'env and package are required'}), 400
+
+        remove_deps = bool(data.get('remove_deps', False))
+        return jsonify(environments.uninstall_package(
+            env_name, package, remove_deps=remove_deps))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/install-requirements', methods=['POST'])
+def env_install_requirements():
+    """Install packages from requirements.txt content."""
+    try:
+        data = request.get_json() or {}
+        env_name = data.get('env', '').strip()
+        requirements = data.get('requirements', '').strip()
+
+        if not env_name or not requirements:
+            return jsonify({'success': False,
+                            'error': 'env and requirements are required'}), 400
+
+        return jsonify(environments.install_requirements(env_name, requirements))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/search-pypi', methods=['POST'])
+def env_search_pypi():
+    """Look up a package on PyPI."""
+    try:
+        data = request.get_json() or {}
+        query = data.get('query', '').strip()
+        if not query:
+            return jsonify({'success': False, 'error': 'No query provided'}), 400
+        return jsonify(environments.search_pypi(query))
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

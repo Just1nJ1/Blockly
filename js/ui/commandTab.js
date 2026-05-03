@@ -84,7 +84,9 @@
   // ── Poll history ──
 
   function pollHistory() {
-    fetch(getServerUrl() + '/cmd/history?since=' + _lastMessageId)
+    var url = getServerUrl() + '/cmd/history?since=' + _lastMessageId;
+    if (window.developerMode) url += '&include_status=true';
+    fetch(url)
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (!data.success || !data.messages) return;
@@ -134,6 +136,9 @@
       el.textContent = prefix + msg.text;
     } else if (msg.dir === 'rx') {
       el.className = 'cmd-msg cmd-msg-rx';
+      el.textContent = msg.text;
+    } else if (msg.dir === 'auto-status') {
+      el.className = 'cmd-msg cmd-msg-rx cmd-msg-auto-status';
       el.textContent = msg.text;
     } else if (msg.dir === 'sys') {
       el.className = 'cmd-msg ' + (isBlocklySys ? 'cmd-msg-sys-blockly' : 'cmd-msg-sys');
