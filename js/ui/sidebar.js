@@ -14,6 +14,11 @@ function initSidebar() {
     var targetTab = tab.dataset.tab;
     if (!targetTab) return;
 
+    // Detect previously active extension tab (before we clear classes)
+    var prevExtTab = sidebar.querySelector('.sidebar-tab.active[data-extension]');
+    var prevExtName = prevExtTab ? prevExtTab.dataset.extension : null;
+    var extName = tab.dataset.extension || null;
+
     // Update sidebar active state (all tabs, including extension tabs)
     document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
     tab.classList.add('active');
@@ -22,6 +27,19 @@ function initSidebar() {
     document.querySelectorAll('.app-view').forEach(function(v) { v.classList.remove('active'); });
     var targetView = document.getElementById(targetTab + '-view');
     if (targetView) targetView.classList.add('active');
+
+    // Lazy-load extension frontend JS on first tab click
+    if (extName && typeof activateExtensionFrontend === 'function') {
+      activateExtensionFrontend(extName);
+    }
+
+    // Fire extension lifecycle events
+    if (prevExtName && prevExtName !== extName) {
+      ExtensionAPI._fireLifecycle(prevExtName, 'deactivate');
+    }
+    if (extName && extName !== prevExtName) {
+      ExtensionAPI._fireLifecycle(extName, 'activate');
+    }
 
     // When switching to Blockly, ensure workspace + Blockly are ready
     if (targetTab === 'blockly') {

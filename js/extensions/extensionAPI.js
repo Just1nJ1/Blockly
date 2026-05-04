@@ -6,6 +6,43 @@
  */
 window.ExtensionAPI = {
 
+  // ── Lifecycle ──
+
+  _lifecycleCallbacks: {},
+
+  /**
+   * Register a callback for when the extension's tab becomes active.
+   * Called every time the user switches to this extension's tab
+   * (including the first time, after the JS has loaded).
+   */
+  onActivate: function(extensionName, fn) {
+    var cbs = this._lifecycleCallbacks[extensionName] = this._lifecycleCallbacks[extensionName] || {};
+    (cbs.activate = cbs.activate || []).push(fn);
+  },
+
+  /**
+   * Register a callback for when the user switches away from this extension's tab.
+   */
+  onDeactivate: function(extensionName, fn) {
+    var cbs = this._lifecycleCallbacks[extensionName] = this._lifecycleCallbacks[extensionName] || {};
+    (cbs.deactivate = cbs.deactivate || []).push(fn);
+  },
+
+  /** Returns true if this extension's tab is currently visible. */
+  isActive: function(extensionName) {
+    var view = document.getElementById(extensionName + '-view');
+    return view ? view.classList.contains('active') : false;
+  },
+
+  /** @internal Called by sidebar.js — do not use in extensions. */
+  _fireLifecycle: function(extensionName, event) {
+    var cbs = (this._lifecycleCallbacks[extensionName] || {})[event];
+    if (!cbs) return;
+    for (var i = 0; i < cbs.length; i++) {
+      try { cbs[i](); } catch(e) { console.error('[ExtensionAPI] lifecycle error (' + event + '/' + extensionName + '):', e); }
+    }
+  },
+
   // ── Server Communication ──
 
   getServerUrl: function() {

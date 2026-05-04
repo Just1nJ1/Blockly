@@ -53,12 +53,12 @@ async function _loadSingleExtension(manifest, basePath) {
     await _injectSidebarTab(manifest, basePath, contributes.sidebarTab);
   }
 
-  // 3. Inject tab JS (after HTML is in the DOM)
+  // 3. Store JS path for lazy loading (injected on first tab click)
   if (contributes.sidebarTab && contributes.sidebarTab.js) {
-    await _injectExtScript(basePath, contributes.sidebarTab.js, 'ext-tab-' + name);
+    _loadedExtensions.get(name).pendingJS = contributes.sidebarTab.js;
   }
 
-  _loadedExtensions.get(name).status = 'active';
+  _loadedExtensions.get(name).status = 'ready';
 }
 
 /**
@@ -150,6 +150,22 @@ async function _injectSidebarTab(manifest, basePath, tabConfig) {
   }
 
   // Click handling is done by sidebar.js event delegation
+}
+
+/**
+ * Inject the extension's frontend JS on first activation (tab click).
+ * No-op if already activated or no JS to load.
+ */
+async function activateExtensionFrontend(name) {
+  var ext = _loadedExtensions.get(name);
+  if (!ext || !ext.pendingJS) return;
+
+  var jsPath = ext.pendingJS;
+  delete ext.pendingJS;
+  ext.status = 'active';
+
+  await _injectExtScript(ext.basePath, jsPath, 'ext-tab-' + name);
+  console.log('[Extensions] Activated frontend JS for: ' + name);
 }
 
 /**

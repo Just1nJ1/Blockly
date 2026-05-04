@@ -354,6 +354,47 @@ ExtensionAPI.setData('my-extension', 'lastCalibration', { x: 10, y: 20 });
 var cal = ExtensionAPI.getData('my-extension', 'lastCalibration');
 ```
 
+#### Tab Lifecycle Hooks
+
+Extensions can register callbacks that fire when the user switches tabs.
+This is ideal for pausing expensive work (camera streams, polling loops)
+when the extension is not visible.
+
+```js
+// Called every time the user switches TO your tab
+ExtensionAPI.onActivate('my-extension', function () {
+  startCamera();
+});
+
+// Called when the user switches AWAY from your tab
+ExtensionAPI.onDeactivate('my-extension', function () {
+  stopCamera();
+});
+
+// Check visibility at any time
+if (ExtensionAPI.isActive('my-extension')) {
+  // tab is currently showing
+}
+```
+
+**Typical pattern** — the IIFE handles first-time setup, lifecycle hooks
+handle pause/resume:
+
+```js
+(function () {
+  var polling = false;
+
+  function start() { /* open camera, set polling = true, begin loop */ }
+  function stop()  { polling = false; /* release resources */ }
+
+  ExtensionAPI.onActivate('my-extension', start);
+  ExtensionAPI.onDeactivate('my-extension', stop);
+
+  // First activation (script is lazy-loaded on first tab click)
+  start();
+})();
+```
+
 ### Backend: Relevant Server Endpoints
 
 Your backend code can also make internal HTTP requests to the existing server
@@ -809,3 +850,11 @@ users override bundled extensions with their own version.
 - **The `extension.json` `name` field is your identity.** It determines your
   backend URL prefix (`/ext/<name>/`), your settings namespace, and the
   deduplication key. Choose it carefully and do not change it after release.
+- **Lazy startup.** Both the frontend JS and the backend subprocess are
+  loaded lazily — **nothing runs until the user clicks the extension's
+  sidebar tab for the first time.** The frontend script is injected on
+  first tab click, and its initial API call triggers the backend subprocess
+  to start. This keeps app startup fast and avoids acquiring resources
+  (cameras, GPIO, etc.) until they are actually needed. Write your `tab.js`
+  as an IIFE that initializes on load — it will only execute when the user
+  opens the tab.

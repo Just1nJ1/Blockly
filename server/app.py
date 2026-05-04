@@ -1532,10 +1532,11 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 
-def create_app(extensions_dirs=None):
+def create_app(extensions_dirs=None, host='127.0.0.1', port=5080):
     """Factory function to create the Flask app."""
     if extensions_dirs:
+        main_server_url = f'http://{host}:{port}'
         from .extensions import load_extensions
         for ext_dir in extensions_dirs:
-            load_extensions(app, ext_dir)
+            load_extensions(app, ext_dir, main_server_url=main_server_url)
     return app

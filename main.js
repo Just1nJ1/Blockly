@@ -182,6 +182,27 @@ function discoverExtensions() {
 let mainWindow;
 let pythonProcess;
 let serverPort = 5080; // Will be updated to an available port
+
+/**
+ * Kill the main Python server and all its child processes (extension subprocesses).
+ */
+function killPythonTree() {
+  if (!pythonProcess) return;
+  const pid = pythonProcess.pid;
+  try {
+    if (process.platform === 'win32') {
+      // taskkill /T kills the entire process tree on Windows
+      require('child_process').execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
+    } else {
+      // Send SIGTERM to the entire process group (negative PID)
+      process.kill(-pid, 'SIGTERM');
+    }
+  } catch (_) {
+    // Fallback: kill just the main process
+    try { pythonProcess.kill(); } catch (_) {}
+  }
+  pythonProcess = null;
+}
 let _discoveredExtensions = [];
 
 const DEFAULT_PORT = 5080;
@@ -407,9 +428,7 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (pythonProcess) {
-      pythonProcess.kill();
-    }
+    killPythonTree();
   });
 
   // Open external links in default browser
@@ -484,7 +503,7 @@ function startPythonServer() {
     }
 
     pythonProcess = spawn(pythonCmd, serverArgs, {
-      detached: false,
+      detached: process.platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: serverPkgDir || __dirname,
@@ -605,9 +624,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (pythonProcess) {
-    pythonProcess.kill();
-  }
+  killPythonTree();
   app.quit();
 });
 

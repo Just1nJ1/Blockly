@@ -16,7 +16,7 @@ def run_server(host='127.0.0.1', port=5080, debug=False, extensions_dirs=None):
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
 
-    app = create_app(extensions_dirs=extensions_dirs)
+    app = create_app(extensions_dirs=extensions_dirs, host=host, port=port)
     print(f"Starting StudioX Server at http://{host}:{port}")
     print("Press Ctrl+C to stop")
     app.run(host=host, port=port, debug=debug, threaded=True)
