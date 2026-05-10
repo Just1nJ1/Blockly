@@ -1,3 +1,6 @@
 [submodule "resources/wlkata_arm_virtual-reality"]
 	path = resources/wlkata_arm_virtual-reality
 	url = https://github.com/wlkata/wlkata_arm_virtual-reality
+[submodule "extensions/cv-picl"]
+	path = extensions/cv-picl
+	url = https://github.com/wlkata/WLKATA-StudioX-cv-pick.git
