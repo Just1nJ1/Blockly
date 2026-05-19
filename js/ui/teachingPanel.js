@@ -154,7 +154,7 @@
     fetch(getServerUrl() + '/cmd/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port: _currentPort, mode: _currentMode, axis: sdkParam, step: value, absolute: true })
+      body: JSON.stringify({ port: _currentPort, mode: _currentMode, axis: sdkParam, step: value, isAbsolute: true })
     }).catch(function() {});
   }
 
@@ -647,7 +647,8 @@
         port: action.port,
         mode: action.mode,
         motion: action.motionMode,
-        values: action.values
+        values: action.values,
+        isAbsolute: true
       })
     });
   }

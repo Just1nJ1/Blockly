@@ -1,4 +1,4 @@
-# StudioX Extension Development Guide
+# WLKATA StudioX Extension Development Guide
 
 Build custom extensions for WLKATA StudioX. Extensions can add new backend
 endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), or both.
@@ -14,11 +14,8 @@ endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), or both.
 5. [Backend Development](#backend-development)
 6. [Available APIs for Extensions](#available-apis-for-extensions)
 7. [Robot Interaction](#robot-interaction)
-8. [Example: Webcam Extension](#example-webcam-extension)
-9. [Example: Drawing Extension](#example-drawing-extension)
-10. [Extension Ideas](#extension-ideas)
-11. [Installation](#installation)
-12. [Tips & Limitations](#tips--limitations)
+8. [Installation](#installation)
+9. [Tips & Limitations](#tips--limitations)
 
 ---
 
@@ -309,12 +306,39 @@ with the correct headers.
 
 #### Robot Control
 
-```js
-// Send a raw GCode command to the connected robot
-await ExtensionAPI.sendCommand('G1 X100 Y0 Z0 F2000');
+Use `fetch()` to call the server's robot-control endpoints directly.
+`ExtensionAPI.getServerUrl()` returns the base URL (e.g. `http://127.0.0.1:5080`).
 
-// Send to a specific port (if multiple robots are connected)
-await ExtensionAPI.sendCommand('$H', '/dev/ttyUSB0');
+```js
+var serverUrl = ExtensionAPI.getServerUrl();
+
+// Absolute move (multi-axis) — motion: 0=Fast, 1=Linear
+fetch(serverUrl + '/cmd/jog', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 'coord', motion: 1, values: { x: 150, y: 0, z: 200 }, isAbsolute: true })
+});
+
+// Absolute move (single-axis)
+fetch(serverUrl + '/cmd/jog', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 'coord', axis: 'X', step: 150, isAbsolute: true })
+});
+
+// Incremental jog (e.g. +5 mm on X)
+fetch(serverUrl + '/cmd/jog', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 'coord', axis: 'X', step: 5 })
+});
+
+// Suction cup on / off
+fetch(serverUrl + '/cmd/pump', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 1 })   // 1 = on, 0 = off
+});
 
 // Get the robot's current status (joint angles, coordinates, state)
 var status = await ExtensionAPI.getRobotStatus();
@@ -398,23 +422,186 @@ handle pause/resume:
 ### Backend: Relevant Server Endpoints
 
 Your backend code can also make internal HTTP requests to the existing server
-endpoints, but in most cases using `SerialManager` directly is simpler. For
-reference, these are the endpoints relevant to extensions:
+endpoints, but in most cases using `SerialManager` directly is simpler.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/cmd/status` | GET | Connection status (port, model, connected, busy) |
-| `/cmd/send` | POST | Send a raw GCode command `{ command, port? }` |
-| `/cmd/query` | POST | Send command and wait for response `{ command, port?, timeout? }` |
-| `/cmd/get-status` | POST | Query robot position/state `{ port?, silent? }` |
-| `/cmd/last-status` | POST | Get cached auto-reported status (no serial query) |
-| `/detect-devices` | GET | Scan for connected robotic arms |
-| `/cmd/home` | POST | Home the robot `{ port? }` |
-| `/cmd/zero` | POST | Move to zero position `{ port? }` |
-| `/cmd/pump` | POST | Control suction cup `{ mode, port? }` |
-| `/cmd/gripper` | POST | Control gripper `{ mode, port? }` |
-| `/cmd/jog` | POST | Jog robot axes `{ axis, step, mode, port? }` |
-| `/cmd/stop-all` | POST | Emergency stop all connected robots |
+> **Note:** All `port` parameters are optional. When omitted the server uses
+> the currently active connection. Pass `port` only when targeting a specific
+> robot among multiple connected devices.
+
+---
+
+#### `GET /cmd/status`
+
+Connection status. No parameters.
+
+**Response:** `{ success, port, model, connected, busy }`
+
+---
+
+#### `GET /detect-devices`
+
+Scan serial ports for connected robotic arms. No parameters.
+
+**Response:** `{ success, ports: [{ port, model, connected }, ...] }`
+
+---
+
+#### `POST /cmd/get-status`
+
+Query the robot's current position and state via the SDK. Sends a serial
+query and waits for a response.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | string | — | Serial port to query |
+| `silent` | bool | `false` | If `true`, suppresses adding the query to the command history |
+
+**Response:**
+```json
+{
+  "success": true,
+  "state": "Idle",
+  "model": "Mirobot",
+  "angles":      { "A": 0, "B": 0, "C": 0, "D": 0, "X": 0, "Y": 0, "Z": 0 },
+  "coordinates": { "X": 200, "Y": 0, "Z": 230, "Rx": 0, "Ry": 0, "Rz": 0 },
+  "pump": 0, "valve": 0, "mode": 0
+}
+```
+
+---
+
+#### `POST /cmd/last-status`
+
+Return the cached auto-reported status (from `$40=1`). Unlike
+`/cmd/get-status`, this does **not** send a serial query — it returns the
+last value received from the robot's auto-report stream.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | string | — | Serial port to query |
+
+**Response:** Same shape as `/cmd/get-status`, plus a `ts` (timestamp) field.
+
+---
+
+#### `POST /cmd/send`
+
+Send a raw command string to the robot over serial.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `command` | string | *(required)* | The raw command to send |
+| `port` | string | — | Target port |
+
+**Response:** `{ success }`
+
+---
+
+#### `POST /cmd/query`
+
+Send a command and block until the first response line is received.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `command` | string | *(required)* | The raw command to send |
+| `port` | string | — | Target port |
+| `timeout` | number | `1.5` | Seconds to wait for a response |
+
+**Response:** `{ success, response }`
+
+---
+
+#### `POST /cmd/jog`
+
+Move the robot. Supports single-axis and multi-axis moves, both incremental
+and absolute.
+
+**Common parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | string | `"joint"` | `"coord"` for Cartesian (X/Y/Z), `"joint"` for joint angles (A/B/C/…) |
+| `isAbsolute` | bool | `false` | `true` = move to this position, `false` = move by this amount |
+| `motion` | int | `0` | Motion type when `isAbsolute` is `true`. `0` = Fast, `1` = Linear |
+| `port` | string | — | Target port |
+
+**Single-axis** — provide `axis` + `step`:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `axis` | string | Axis letter: `"X"`, `"Y"`, `"Z"`, `"A"`, `"B"`, `"C"` |
+| `step` | number | Distance to move (mm for coord, degrees for joint) |
+
+**Multi-axis** — provide `values`:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `values` | object | `{ x, y, z, a, b, c }` — include only the axes you want to move |
+
+**Examples:**
+```js
+// Incremental: jog X by +5 mm
+{ mode: "coord", axis: "X", step: 5 }
+
+// Absolute: move to (150, 0, 200) with linear motion
+{ mode: "coord", values: { x: 150, y: 0, z: 200 }, isAbsolute: true, motion: 1 }
+
+// Incremental multi-axis
+{ mode: "coord", values: { x: 10, z: -5 } }
+```
+
+---
+
+#### `POST /cmd/home`
+
+Run the homing sequence.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | string | — | Target port |
+
+---
+
+#### `POST /cmd/zero`
+
+Move to the zero (origin) position.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | string | — | Target port |
+
+---
+
+#### `POST /cmd/pump`
+
+Control the suction cup.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | int | `0` | `1` = turn on, `0` = turn off |
+| `port` | string | — | Target port |
+
+---
+
+#### `POST /cmd/gripper`
+
+Control the gripper.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | int | `0` | `1` = close / grip, `0` = open / release |
+| `port` | string | — | Target port |
+
+---
+
+#### `POST /cmd/stop-all`
+
+Emergency stop. Sends `cancellation()` to **all** connected robots. No
+parameters.
+
+**Response:** `{ success, stopped: [port, ...], errors: [...] }`
+
+---
 
 **Endpoints NOT intended for extensions** (internal to the app):
 `/execute`, `/execute/abort`, `/debug/*`, `/inspect*`, `/import`, `/functions`,
@@ -432,9 +619,11 @@ extension simply uses the robots that are already connected.
 
 ### From Frontend JS
 
-Use `ExtensionAPI` methods — they talk to the existing server endpoints:
+Use `ExtensionAPI` methods and direct `fetch()` calls to server endpoints:
 
 ```js
+var serverUrl = ExtensionAPI.getServerUrl();
+
 // Check what robots are available
 var devices = await ExtensionAPI.getDevices();
 if (devices.ports && devices.ports.length > 0) {
@@ -448,12 +637,19 @@ var x = status.coordinates.X;
 var y = status.coordinates.Y;
 var z = status.coordinates.Z;
 
-// Move the robot with GCode
-await ExtensionAPI.sendCommand('G1 X150 Y0 Z200 F2000');
+// Absolute move via /cmd/jog
+fetch(serverUrl + '/cmd/jog', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 'coord', motion: 1, values: { x: 150, y: 0, z: 200 }, isAbsolute: true })
+});
 
-// Control end effectors
-await ExtensionAPI.sendCommand('M3S1000');  // pump on
-await ExtensionAPI.sendCommand('M3S0');     // pump off
+// Control end effectors via /cmd/pump
+fetch(serverUrl + '/cmd/pump', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 1 })   // 1 = on, 0 = off
+});
 ```
 
 ### From Backend Python
@@ -469,322 +665,17 @@ mgr = SerialManager.get_instance()
 conn = mgr.active_connection
 if conn and conn.connected:
     # Use the SDK robot object for high-level control
-    conn.robot.writeCoordinate(0, 0, x=150, y=0, z=200)
+    conn.robot.writeCoordinate(0, 0, x=150, y=0, z=200)  # motion=0 (Fast), mode=0 (Absolute)
+    conn.robot.writeCoordinate(0, 1, x=10)                # mode=1 (Incremental)
     conn.robot.homing()
     conn.robot.pump(1)   # suction on
     conn.robot.pump(0)   # suction off
     conn.robot.gripper(1)
 
-    # Or send raw GCode
-    conn.send_raw('G1 X150 Y0 Z200 F2000')
-
-    # Send and wait for a response
-    result = conn.send_and_wait('?', timeout=1.5)
-
 # List all connected ports
 for c in mgr.all_connected():
     print(f'{c.port}: {c.model}, connected={c.connected}')
 ```
-
----
-
-## Example: Webcam Extension
-
-A computer vision extension that captures webcam frames and detects objects.
-
-### File Structure
-
-```
-webcam-cv/
-├── extension.json
-├── requirements.txt
-├── frontend/
-│   ├── index.html
-│   ├── main.js
-│   ├── styles.css
-│   └── icon.svg
-└── backend/
-    └── main.py
-```
-
-### extension.json
-
-```json
-{
-  "name": "webcam-cv",
-  "displayName": "Webcam CV",
-  "version": "1.0.0",
-  "description": "Computer vision with webcam for pick-and-place tasks.",
-  "contributes": {
-    "sidebarTab": {
-      "id": "webcam-cv",
-      "label": "Camera",
-      "icon": "frontend/icon.svg",
-      "html": "frontend/index.html",
-      "js": "frontend/main.js",
-      "css": "frontend/styles.css"
-    },
-    "backend": {
-      "main": "backend/main.py"
-    }
-  }
-}
-```
-
-### backend/main.py
-
-```python
-import cv2
-import base64
-import numpy as np
-from flask import Blueprint, request, jsonify
-
-blueprint = Blueprint('webcam_cv', __name__)
-
-_cap = None
-
-
-def _get_camera(index=0):
-    global _cap
-    if _cap is None or not _cap.isOpened():
-        _cap = cv2.VideoCapture(index)
-    return _cap
-
-
-@blueprint.route('/capture', methods=['POST'])
-def capture():
-    """Capture a single frame and return it as a base64 JPEG."""
-    data = request.get_json() or {}
-    cam_index = data.get('camera', 0)
-
-    cap = _get_camera(cam_index)
-    if not cap.isOpened():
-        return jsonify({'success': False, 'error': 'Cannot open camera'})
-
-    ret, frame = cap.read()
-    if not ret:
-        return jsonify({'success': False, 'error': 'Failed to capture frame'})
-
-    _, buf = cv2.imencode('.jpg', frame)
-    b64 = base64.b64encode(buf).decode('utf-8')
-    return jsonify({'success': True, 'image': b64,
-                    'width': frame.shape[1], 'height': frame.shape[0]})
-
-
-@blueprint.route('/detect-color', methods=['POST'])
-def detect_color():
-    """Detect objects of a given HSV color range and return centers."""
-    data = request.get_json() or {}
-    lower = np.array(data.get('lower_hsv', [0, 100, 100]))
-    upper = np.array(data.get('upper_hsv', [10, 255, 255]))
-
-    cap = _get_camera()
-    ret, frame = cap.read()
-    if not ret:
-        return jsonify({'success': False, 'error': 'Failed to capture frame'})
-
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, lower, upper)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
-                                   cv2.CHAIN_APPROX_SIMPLE)
-
-    objects = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area > 500:
-            M = cv2.moments(cnt)
-            cx = int(M['m10'] / M['m00']) if M['m00'] else 0
-            cy = int(M['m01'] / M['m00']) if M['m00'] else 0
-            objects.append({'x': cx, 'y': cy, 'area': area})
-
-    return jsonify({'success': True, 'objects': objects})
-
-
-@blueprint.route('/release', methods=['POST'])
-def release():
-    """Release the camera resource."""
-    global _cap
-    if _cap and _cap.isOpened():
-        _cap.release()
-        _cap = None
-    return jsonify({'success': True})
-```
-
-### frontend/index.html
-
-```html
-<div class="webcam-container">
-  <div class="webcam-toolbar">
-    <button id="webcam-capture-btn">Capture</button>
-    <button id="webcam-detect-btn">Detect Objects</button>
-    <button id="webcam-pick-btn" disabled>Pick Nearest</button>
-  </div>
-  <div class="webcam-preview">
-    <img id="webcam-image" alt="No image captured yet" />
-  </div>
-  <div id="webcam-results"></div>
-</div>
-```
-
-### frontend/main.js
-
-```js
-(function() {
-  var captureBtn = document.getElementById('webcam-capture-btn');
-  var detectBtn  = document.getElementById('webcam-detect-btn');
-  var pickBtn    = document.getElementById('webcam-pick-btn');
-  var image      = document.getElementById('webcam-image');
-  var results    = document.getElementById('webcam-results');
-  var lastObjects = [];
-
-  captureBtn.addEventListener('click', async function() {
-    var data = await ExtensionAPI.fetch('webcam-cv', '/capture', {
-      method: 'POST',
-      body: JSON.stringify({ camera: 0 })
-    });
-    if (data.success) {
-      image.src = 'data:image/jpeg;base64,' + data.image;
-    } else {
-      ExtensionAPI.showNotification(data.error, 'error');
-    }
-  });
-
-  detectBtn.addEventListener('click', async function() {
-    var data = await ExtensionAPI.fetch('webcam-cv', '/detect-color', {
-      method: 'POST',
-      body: JSON.stringify({
-        lower_hsv: [0, 100, 100],
-        upper_hsv: [10, 255, 255]
-      })
-    });
-    if (data.success) {
-      lastObjects = data.objects;
-      results.textContent = 'Found ' + data.objects.length + ' object(s)';
-      pickBtn.disabled = data.objects.length === 0;
-    }
-  });
-
-  pickBtn.addEventListener('click', async function() {
-    if (lastObjects.length === 0) return;
-    // Example: move robot to first detected object's mapped coordinates
-    // (you would add your own pixel-to-world calibration here)
-    var obj = lastObjects[0];
-    ExtensionAPI.showNotification(
-      'Moving to object at pixel (' + obj.x + ', ' + obj.y + ')', 'info'
-    );
-    await ExtensionAPI.sendCommand('G1 X150 Y0 Z100 F2000');
-  });
-})();
-```
-
----
-
-## Example: Drawing Extension
-
-A simple extension that lets users draw paths on a 2D canvas and converts them
-to robot movement commands.
-
-### extension.json
-
-```json
-{
-  "name": "drawing",
-  "displayName": "Drawing",
-  "version": "1.0.0",
-  "description": "Draw paths on a canvas and replay them on the robot.",
-  "contributes": {
-    "sidebarTab": {
-      "id": "drawing",
-      "label": "Drawing",
-      "icon": "frontend/icon.svg",
-      "html": "frontend/index.html",
-      "js": "frontend/main.js",
-      "css": "frontend/styles.css"
-    }
-  }
-}
-```
-
-### frontend/main.js (sketch)
-
-```js
-(function() {
-  var canvas = document.getElementById('draw-canvas');
-  var ctx = canvas.getContext('2d');
-  var points = [];
-  var drawing = false;
-
-  canvas.addEventListener('mousedown', function(e) {
-    drawing = true;
-    points = [];
-    ctx.beginPath();
-    ctx.moveTo(e.offsetX, e.offsetY);
-    points.push({ x: e.offsetX, y: e.offsetY });
-  });
-
-  canvas.addEventListener('mousemove', function(e) {
-    if (!drawing) return;
-    ctx.lineTo(e.offsetX, e.offsetY);
-    ctx.stroke();
-    points.push({ x: e.offsetX, y: e.offsetY });
-  });
-
-  canvas.addEventListener('mouseup', function() { drawing = false; });
-
-  document.getElementById('draw-send-btn').addEventListener('click', async function() {
-    // Convert canvas pixels to robot workspace coordinates
-    // This is a simplified linear mapping — adjust for your setup
-    var scaleX = 200 / canvas.width;
-    var scaleY = 200 / canvas.height;
-    var zDraw = 150;  // drawing height
-    var zLift = 200;  // travel height
-
-    // Lift to safe height first
-    await ExtensionAPI.sendCommand('G1 Z' + zLift + ' F2000');
-
-    for (var i = 0; i < points.length; i++) {
-      var rx = (points[i].x * scaleX) + 100;  // offset to robot workspace
-      var ry = (points[i].y * scaleY) - 100;
-
-      if (i === 0) {
-        // Move to start position above the surface
-        await ExtensionAPI.sendCommand('G1 X' + rx + ' Y' + ry + ' Z' + zLift + ' F2000');
-        // Lower pen to drawing height
-        await ExtensionAPI.sendCommand('G1 Z' + zDraw + ' F1000');
-      } else {
-        await ExtensionAPI.sendCommand('G1 X' + rx + ' Y' + ry + ' F1000');
-      }
-    }
-
-    // Lift pen when done
-    await ExtensionAPI.sendCommand('G1 Z' + zLift + ' F2000');
-    ExtensionAPI.showNotification('Drawing complete!', 'info');
-  });
-})();
-```
-
----
-
-## Extension Ideas
-
-Here are some extensions that would work well with the current system:
-
-| Extension | Description | Backend? |
-|-----------|-------------|----------|
-| **Webcam CV** | Camera capture, color/object detection, pick-and-place with calibration | Yes (OpenCV) |
-| **Drawing Pad** | Draw paths on a canvas and replay them as robot movements | No (frontend only) |
-| **Conveyor Belt** | Control a conveyor belt via serial, coordinate with the arm for sorting | Yes (serial I/O) |
-| **Keyboard Jog** | WASD/arrow-key jogging with adjustable speed and axis lock | No (frontend only) |
-| **Gamepad Control** | Map a USB gamepad's axes and buttons to robot axes and end effectors | No (Gamepad API) |
-| **G-Code Sender** | Load and stream `.gcode` / `.nc` files line by line with progress tracking | No (frontend only) |
-| **Data Logger** | Record robot position over time, export as CSV, plot charts | Yes (data storage) |
-| **REST API Bridge** | Expose robot control as a REST API for external programs to call | Yes (Flask routes) |
-| **Voice Control** | Use the Web Speech API to control the robot with voice commands | No (frontend only) |
-| **Coordinate Calibration** | Teach a pixel-to-world mapping between a camera and the robot workspace | Yes (OpenCV + math) |
-| **Multi-Robot Sync** | Coordinate movements across multiple connected arms | Yes (SerialManager) |
-| **3D Print Slicer** | Import STL files, slice into layers, generate toolpaths | Yes (slicer logic) |
-
----
 
 ## Installation
 
@@ -841,7 +732,7 @@ users override bundled extensions with their own version.
 - **One sidebar tab per extension.** Each extension can contribute a single
   sidebar tab. If you need multiple views, use sub-tabs within your tab.
 - **Connection management is handled by the app.** Do not open serial ports
-  directly. Use `ExtensionAPI.sendCommand()` / `ExtensionAPI.getRobotStatus()`
+  directly. Use `/cmd/jog`, `/cmd/pump`, `ExtensionAPI.getRobotStatus()`
   from the frontend, or `SerialManager.get_instance()` from the backend.
 - **Blueprint name uniqueness.** Your Flask Blueprint's first argument must be
   unique across all extensions. Use your extension name as the Blueprint name.

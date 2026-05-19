@@ -55,29 +55,33 @@ class _RemoteRobot:
             return {'success': False}
 
     def writeCoordinate(self, motion, mode, **kwargs):
-        if mode == 1:  # incremental single-axis
-            for axis, step in kwargs.items():
-                self._post('/cmd/jog', {
-                    'port': self._port, 'mode': 'coord',
-                    'axis': axis.upper(), 'step': step,
-                })
-        else:  # absolute
+        is_abs = (mode == 0)
+        if len(kwargs) == 1 and not is_abs:
+            axis, step = next(iter(kwargs.items()))
+            self._post('/cmd/jog', {
+                'port': self._port, 'mode': 'coord',
+                'axis': axis.upper(), 'step': step,
+            })
+        else:
             self._post('/cmd/jog', {
                 'port': self._port, 'mode': 'coord',
                 'motion': motion, 'values': kwargs,
+                'isAbsolute': is_abs,
             })
 
     def writeAngle(self, mode, **kwargs):
-        if mode == 1:
-            for axis, step in kwargs.items():
-                self._post('/cmd/jog', {
-                    'port': self._port, 'mode': 'joint',
-                    'axis': axis.upper(), 'step': step,
-                })
+        is_abs = (mode == 0)
+        if len(kwargs) == 1 and not is_abs:
+            axis, step = next(iter(kwargs.items()))
+            self._post('/cmd/jog', {
+                'port': self._port, 'mode': 'joint',
+                'axis': axis.upper(), 'step': step,
+            })
         else:
             self._post('/cmd/jog', {
                 'port': self._port, 'mode': 'joint',
                 'motion': 0, 'values': kwargs,
+                'isAbsolute': is_abs,
             })
 
     def homing(self):

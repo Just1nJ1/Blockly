@@ -9,6 +9,7 @@ arrives for a given extension, not at app startup.
 """
 
 import atexit
+import collections
 import os
 import socket
 import subprocess
@@ -25,18 +26,20 @@ from flask import request, Response, jsonify
 # ---------------------------------------------------------------------------
 
 class _SubprocessInfo:
-    __slots__ = ('name', 'port', 'process', 'healthy')
+    __slots__ = ('name', 'port', 'process', 'healthy', 'output')
 
     def __init__(self, name, port, process):
         self.name = name
         self.port = port
         self.process = process
         self.healthy = False
+        self.output = collections.deque(maxlen=30)  # last N lines
 
 
 _running = {}        # name -> _SubprocessInfo
 _launch_configs = {} # name -> {ext_dir, env_python, main_server_url}
 _start_locks = {}    # name -> threading.Lock  (prevents concurrent starts)
+_last_fail = {}      # name -> timestamp of last failed start (cooldown)
 
 _EXT_RUNNER = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                            'ext_runner.py')
@@ -84,11 +87,28 @@ def _ensure_running(name):
         if info and info.healthy:
             return info.port
 
+        # Cooldown: don't retry within 10s of a failure
+        fail_ts = _last_fail.get(name, 0)
+        if time.monotonic() - fail_ts < 10:
+            return None
+
         config = _launch_configs.get(name)
         if not config:
             return None
 
-        return _start_and_wait(name, **config)
+        port = _start_and_wait(name, **config)
+        if port is None:
+            _last_fail[name] = time.monotonic()
+        return port
+
+
+def _drain_stdout(proc, buf):
+    """Read subprocess stdout line-by-line into a deque (runs in a thread)."""
+    try:
+        for line in proc.stdout:
+            buf.append(line.rstrip('\n'))
+    except Exception:
+        pass
 
 
 def _start_and_wait(name, ext_dir, env_python, main_server_url):
@@ -96,8 +116,10 @@ def _start_and_wait(name, ext_dir, env_python, main_server_url):
     port = _find_free_port()
 
     env = os.environ.copy()
-    for key in ('PYTHONHOME', 'PYTHONPATH', 'PYTHONDONTWRITEBYTECODE'):
+    for key in ('PYTHONHOME', 'PYTHONPATH', 'PYTHONDONTWRITEBYTECODE',
+                'VIRTUAL_ENV', 'CONDA_PREFIX', 'CONDA_DEFAULT_ENV'):
         env.pop(key, None)
+    env['PYTHONNOUSERSITE'] = '1'  # isolate from ~/.local/lib site-packages
 
     cmd = [
         env_python, _EXT_RUNNER,
@@ -106,6 +128,8 @@ def _start_and_wait(name, ext_dir, env_python, main_server_url):
         '--main-server', main_server_url,
         '--server-root', _SERVER_ROOT,
     ]
+
+    print(f'[ext_process] Spawning {name}: {" ".join(cmd)}', flush=True)
 
     try:
         proc = subprocess.Popen(
@@ -117,6 +141,12 @@ def _start_and_wait(name, ext_dir, env_python, main_server_url):
         print(f'[ext_process] Failed to spawn {name}: {e}', flush=True)
         return None
 
+    # Drain stdout in a background thread to prevent pipe buffer deadlock
+    output_buf = collections.deque(maxlen=30)
+    drain_thread = threading.Thread(
+        target=_drain_stdout, args=(proc, output_buf), daemon=True)
+    drain_thread.start()
+
     print(f'[ext_process] {name} starting on port {port} (pid {proc.pid})',
           flush=True)
 
@@ -126,26 +156,33 @@ def _start_and_wait(name, ext_dir, env_python, main_server_url):
 
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            out = proc.stdout.read() if proc.stdout else ''
+            drain_thread.join(timeout=1)
             print(f'[ext_process] {name} exited early (rc={proc.returncode})',
                   flush=True)
-            if out:
-                for line in out.strip().splitlines()[-10:]:
-                    print(f'  {line}', flush=True)
+            for line in output_buf:
+                print(f'  {line}', flush=True)
             return None
         try:
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=2):
                 info = _SubprocessInfo(name, port, proc)
                 info.healthy = True
+                info.output = output_buf
                 _running[name] = info
                 print(f'[ext_process] {name} ready on port {port}', flush=True)
                 return port
         except Exception:
             time.sleep(0.3)
 
+    # Timed out — dump output and kill
+    drain_thread.join(timeout=1)
+    try:
+        proc.terminate()
+    except Exception:
+        pass
     print(f'[ext_process] {name} failed to start within 30 s', flush=True)
-    proc.terminate()
+    for line in output_buf:
+        print(f'  {line}', flush=True)
     return None
 
 

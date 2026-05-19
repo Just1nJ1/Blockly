@@ -196,7 +196,7 @@
         mode: _currentMode,
         axis: sdkParam,
         step: value,
-        absolute: true
+        isAbsolute: true
       })
     })
     .then(function(r) { return r.json(); })
