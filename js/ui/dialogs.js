@@ -354,72 +354,137 @@ function _installExtension(mode) {
 }
 
 /**
- * After installing an extension that has requirements.txt, create
- * an environment named after the extension and install the deps.
+ * After installing an extension that has requirements.txt, show a
+ * full-screen loading overlay while creating the venv and installing deps.
  */
 function _setupExtensionEnv(extName, requirementsText) {
-  var doSetup = confirm(
-    'Extension "' + extName + '" has Python dependencies.\n\n' +
-    'Create an environment and install them automatically?'
-  );
-  if (!doSetup) {
-    alert('Extension installed. You can set up its environment later\nvia Settings > Environments.');
-    return;
-  }
+  // Build modal overlay — start with confirmation prompt
+  var overlay = document.createElement('div');
+  overlay.id = 'ext-setup-overlay';
+  overlay.className = 'ctrl-modal-overlay';
+  overlay.style.display = 'flex';
 
-  // Show progress in the extension list area
-  var listEl = document.getElementById('ext-list-container');
-  if (listEl) {
-    listEl.innerHTML =
-      '<div class="app-settings-progress">' +
+  var dialog = document.createElement('div');
+  dialog.className = 'ctrl-modal-dialog';
+  dialog.style.width = '380px';
+
+  var pkgPreview = requirementsText.trim().split('\n')
+    .filter(function(l) { return l.trim() && l.trim()[0] !== '#'; })
+    .join(', ');
+
+  dialog.innerHTML =
+    '<div style="padding:24px;">' +
+      '<div class="progress-stage" style="margin-bottom:8px;">Install dependencies?</div>' +
+      '<div class="progress-detail" style="margin-bottom:4px;">"' + _escHtml(extName) + '" requires Python packages:</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary);font-family:monospace;margin-bottom:16px;">' + _escHtml(pkgPreview) + '</div>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+        '<button id="ext-setup-skip" class="app-settings-btn">Skip</button>' +
+        '<button id="ext-setup-go" class="app-settings-btn app-settings-btn-primary">Install</button>' +
+      '</div>' +
+    '</div>';
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  // Wait for user choice
+  document.getElementById('ext-setup-skip').addEventListener('click', function() {
+    overlay.remove();
+  });
+
+  document.getElementById('ext-setup-go').addEventListener('click', _doInstall);
+
+  function _doInstall() {
+    // Switch to progress view
+    dialog.innerHTML =
+      '<div class="app-settings-progress" style="padding:32px 24px;">' +
         '<div class="progress-spinner"></div>' +
-        '<div class="progress-stage" id="ext-env-stage">Creating environment "' + _escHtml(extName) + '"\u2026</div>' +
-        '<div class="progress-detail" id="ext-env-detail">Setting up virtual environment</div>' +
+        '<div class="progress-stage" id="ext-setup-stage">Creating environment\u2026</div>' +
+        '<div class="progress-detail" id="ext-setup-detail">Setting up "' + _escHtml(extName) + '"</div>' +
+        '<div id="ext-setup-log" style="margin-top:12px;font-size:10px;color:var(--text-muted);' +
+          'max-height:80px;overflow-y:auto;text-align:left;font-family:monospace;white-space:pre-wrap;"></div>' +
       '</div>';
-  }
 
-  var serverUrl = typeof getServerUrl === 'function' ? getServerUrl() : 'http://127.0.0.1:5080';
+    var stageEl = document.getElementById('ext-setup-stage');
+    var detailEl = document.getElementById('ext-setup-detail');
+    var logEl = document.getElementById('ext-setup-log');
 
-  // Step 1: Create the environment
-  fetch(serverUrl + '/env/create', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: extName })
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!data.success) {
-        alert('Environment creation failed: ' + (data.error || 'Unknown'));
-        if (listEl) _fetchExtensionList(listEl);
-        return;
+    function setStage(stage, detail) {
+      if (stageEl) stageEl.textContent = stage;
+      if (detailEl) detailEl.textContent = detail || '';
+    }
+
+    function appendLog(msg) {
+      if (logEl) {
+        logEl.textContent += msg + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
       }
+    }
 
-      // Step 2: Install requirements
-      var stageEl = document.getElementById('ext-env-stage');
-      var detailEl = document.getElementById('ext-env-detail');
-      if (stageEl) stageEl.textContent = 'Installing requirements\u2026';
-      if (detailEl) detailEl.textContent = requirementsText.trim().split('\n').slice(0, 5).join(', ');
+    function closeOverlay() {
+      var el = document.getElementById('ext-setup-overlay');
+      if (el) el.remove();
+    }
 
-      return fetch(serverUrl + '/env/install-requirements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ env: extName, requirements: requirementsText })
-      })
-        .then(function(r) { return r.json(); })
-        .then(function(installData) {
-          if (listEl) _fetchExtensionList(listEl);
-          if (installData.success) {
-            alert('Extension "' + extName + '" installed with environment.\nRestart the app to load it.');
-          } else {
-            alert('Extension installed, but some packages failed:\n' +
-                  (installData.error || 'Unknown'));
-          }
-        });
+    function showDone(message, isError) {
+      dialog.innerHTML =
+        '<div class="app-settings-progress" style="padding:32px 24px;">' +
+          '<div style="font-size:28px;margin-bottom:12px;">' + (isError ? '\u26A0' : '\u2705') + '</div>' +
+          '<div class="progress-stage">' + _escHtml(message) + '</div>' +
+          '<div style="margin-top:16px;">' +
+            '<button id="ext-setup-close-btn" class="app-settings-btn app-settings-btn-primary" style="min-width:100px;">OK</button>' +
+          '</div>' +
+        '</div>';
+      document.getElementById('ext-setup-close-btn').addEventListener('click', function() {
+        closeOverlay();
+        var listEl = document.getElementById('ext-list-container');
+        if (listEl) _fetchExtensionList(listEl);
+      });
+    }
+
+    var serverUrl = typeof getServerUrl === 'function' ? getServerUrl() : 'http://127.0.0.1:5080';
+
+    appendLog('Creating virtual environment...');
+
+    // Step 1: Create the environment
+    fetch(serverUrl + '/env/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: extName })
     })
-    .catch(function(err) {
-      alert('Setup error: ' + err.message);
-      if (listEl) _fetchExtensionList(listEl);
-    });
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.success) {
+          showDone('Environment creation failed: ' + (data.error || 'Unknown'), true);
+          return;
+        }
+
+        appendLog('Environment created.');
+
+        // Step 2: Install requirements
+        var pkgs = requirementsText.trim().split('\n')
+          .filter(function(l) { return l.trim() && l.trim()[0] !== '#'; });
+        setStage('Installing packages\u2026', pkgs.join(', '));
+        appendLog('Installing: ' + pkgs.join(', '));
+
+        return fetch(serverUrl + '/env/install-requirements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ env: extName, requirements: requirementsText })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(installData) {
+            if (installData.success) {
+              appendLog('All packages installed.');
+              showDone('Extension "' + extName + '" is ready. Restart the app to load it.', false);
+            } else {
+              appendLog('Error: ' + (installData.error || 'Unknown'));
+              showDone('Packages failed: ' + (installData.error || 'Unknown'), true);
+            }
+          });
+      })
+      .catch(function(err) {
+        showDone('Setup error: ' + err.message, true);
+      });
+  }
 }
 
 function _removeExtension(name, listEl) {

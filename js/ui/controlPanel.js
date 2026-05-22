@@ -224,6 +224,9 @@
     });
 
     buildAxisRows();
+    // Reset cached timestamp so refreshStatus repopulates the new rows
+    // even if the robot hasn't moved since last poll
+    _lastStatusTs = 0;
     refreshStatus(false);
   }
 

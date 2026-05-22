@@ -356,8 +356,8 @@ var devices = await ExtensionAPI.getDevices();
 // devices = {
 //   success: true,
 //   ports: [
-//     { port: '/dev/ttyUSB0', model: 'Mirobot', connected: true },
-//     { port: '/dev/ttyUSB1', model: 'MT4',     connected: true }
+//     { port: '/dev/ttyUSB0', model: 'Mirobot', connected: true, manual: false },
+//     { port: 'COM7',         model: 'MT4',     connected: true, manual: true  }
 //   ]
 // }
 ```
@@ -442,7 +442,10 @@ Connection status. No parameters.
 
 Scan serial ports for connected robotic arms. No parameters.
 
-**Response:** `{ success, ports: [{ port, model, connected }, ...] }`
+**Response:** `{ success, ports: [{ port, model, connected, manual }, ...] }`
+
+- `connected` — `true` if the serial connection is open, `false` if still detecting
+- `manual` — `true` if the port was added via "Connect manually…"
 
 ---
 

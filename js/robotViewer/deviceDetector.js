@@ -7,12 +7,10 @@
   var POLL_INTERVAL = 3000;
   var pollTimer = null;
 
-  // Maps model names returned by the server to the block's MODEL dropdown values.
-  // Add new models here as they become available.
-  var MODEL_VALUE_MAP = {
-    'Mirobot': 'Mirobot_UART',
-    'MT4': 'MT4_UART'
-  };
+  // Loaded from /robots at init — maps model name → Blockly dropdown value
+  var MODEL_VALUE_MAP = {};
+  // Full robot definitions from robots.json (for manual port picker)
+  var _robotDefs = [];
 
   // Shared state: populated by polling, read by the block's dropdown generator
   // detectedPorts: array of display labels for the dropdown, e.g. ['COM3 (Mirobot)', 'COM5']
@@ -31,12 +29,15 @@
 
         var newPorts = [];
         var newMap = {};
+        var newManualSet = new Set();
 
         for (var i = 0; i < data.ports.length; i++) {
           var entry = data.ports[i];
           var port = entry.port;
           var model = entry.model;
           var label = port;
+
+          if (entry.manual) newManualSet.add(port);
 
           // Skip ports that are still being detected
           if (model === 'Detecting...') {
@@ -55,38 +56,22 @@
           newPorts.push([label, port]);
         }
 
-        // Merge manual ports that have a model into the lists
-        var serverPortSet = new Set();
-        for (var k = 0; k < data.ports.length; k++) {
-          serverPortSet.add(data.ports[k].port);
-        }
-        var mergedLastDetected = data.ports.slice();
-        for (var m = 0; m < manualPorts.length; m++) {
-          var mp = manualPorts[m];
-          if (serverPortSet.has(mp)) continue;
-          var mm = manualPortModels[mp];
-          if (mm) {
-            newPorts.push([mp + ' (' + mm + ')', mp]);
-            var mv = MODEL_VALUE_MAP[mm];
-            if (mv) newMap[mp] = mv;
-            mergedLastDetected.push({ port: mp, description: '', model: mm });
-          }
-        }
+        _manualPortSet = newManualSet;
 
         // Only update if something changed
         var changed = (JSON.stringify(newPorts) !== JSON.stringify(window.detectedPorts));
         window.detectedPorts = newPorts;
         window.portModelMap = newMap;
 
-        lastDetectedPorts = mergedLastDetected;
+        lastDetectedPorts = data.ports.slice();
 
         if (changed) {
           console.log('[DeviceDetector] Ports updated:', newPorts, 'Model map:', newMap);
           // Reset last connected port so reconnect works after disconnect/reconnect
           _lastConnectedPort = null;
-          updateCommandPortSelect(mergedLastDetected);
-          updateControlPortSelect(mergedLastDetected);
-          updateTeachingPortSelect(mergedLastDetected);
+          updateCommandPortSelect(lastDetectedPorts);
+          updateControlPortSelect(lastDetectedPorts);
+          updateTeachingPortSelect(lastDetectedPorts);
         }
       })
       .catch(function(err) {
@@ -123,10 +108,6 @@
     });
   }
 
-  // Manually added ports (survive poll updates)
-  var manualPorts = [];  // array of port strings, e.g. ['COM7']
-  var manualPortModels = {};  // { portString -> modelName }, e.g. { 'COM7': 'Mirobot' }
-
   // Update the command tab's port dropdown with detected robot ports
   function updateCommandPortSelect(ports) {
     var select = document.getElementById('command-port-select');
@@ -141,8 +122,8 @@
     // Collect detected port values for dedup
     var detectedValues = new Set();
 
-    // If no detected ports AND no manual ports, show "No Connection"
-    if ((!ports || ports.length === 0) && manualPorts.length === 0) {
+    // If no detected ports, show "No Connection"
+    if (!ports || ports.length === 0) {
       var noConn = document.createElement('option');
       noConn.value = '';
       noConn.textContent = 'No Connection';
@@ -170,16 +151,6 @@
       }
     }
 
-    // Add manually configured ports (skip if already in detected list)
-    for (var k = 0; k < manualPorts.length; k++) {
-      if (!detectedValues.has(manualPorts[k])) {
-        var mOpt = document.createElement('option');
-        mOpt.value = manualPorts[k];
-        mOpt.textContent = manualPorts[k] + ' (manual)';
-        select.appendChild(mOpt);
-      }
-    }
-
     // Always add "Connect manually..." at the end
     var manualOpt = document.createElement('option');
     manualOpt.value = '__manual__';
@@ -198,7 +169,7 @@
 
     // If previous selection gone, select first real port and auto-connect
     if (!restored) {
-      var hasRealPort = (ports && ports.length > 0) || manualPorts.length > 0;
+      var hasRealPort = (ports && ports.length > 0);
       if (hasRealPort) {
         select.selectedIndex = 0;
         // Auto-connect since programmatic selection doesn't fire 'change'
@@ -413,11 +384,10 @@
         var btnGroup = document.createElement('div');
         btnGroup.className = 'port-picker-model-group';
 
-        var models = [
-          { label: 'Mirobot', value: 'Mirobot' },
-          { label: 'E4 / MT4', value: 'MT4' },
-          { label: 'None (raw serial)', value: null }
-        ];
+        var models = _robotDefs.map(function(r) {
+          return { label: r.label, value: r.name };
+        });
+        models.push({ label: 'None (raw serial)', value: null });
 
         models.forEach(function(m) {
           var btn = document.createElement('button');
@@ -658,6 +628,9 @@
     });
   }
 
+  // Track which ports are manual (populated from poll data)
+  var _manualPortSet = new Set();
+
   // Show/hide the remove button based on current selection
   function updateRemoveButton() {
     var select = document.getElementById('command-port-select');
@@ -665,14 +638,14 @@
     if (!select || !removeBtn) return;
 
     var val = select.value;
-    var isManual = val && manualPorts.indexOf(val) !== -1;
-    removeBtn.classList.toggle('visible', isManual);
+    removeBtn.classList.toggle('visible', val && _manualPortSet.has(val));
   }
 
   // Handle "Connect manually..." selection
   function setupManualConnect() {
     var select = document.getElementById('command-port-select');
     var removeBtn = document.getElementById('command-port-remove');
+    var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
     if (!select) return;
 
     select.addEventListener('change', function() {
@@ -687,48 +660,33 @@
           var port = result.port;
           var model = result.model;
 
-          if (manualPorts.indexOf(port) === -1) {
-            manualPorts.push(port);
-          }
-
-          // Store model for this manual port so poll cycles preserve it
-          if (model) {
-            manualPortModels[port] = model;
-
-            // Immediately update all shared state so UI reflects the change
-            // before the next poll cycle
-            var alreadyInDetected = false;
-            for (var i = 0; i < lastDetectedPorts.length; i++) {
-              if (lastDetectedPorts[i].port === port) { alreadyInDetected = true; break; }
+          // Register on the server so it's managed by the detector + SerialManager
+          fetch(serverUrl + '/cmd/add-manual-port', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port: port, model: model })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (!data.success) {
+              console.warn('[DeviceDetector] Failed to register manual port:', data.error);
             }
-            if (!alreadyInDetected) {
-              lastDetectedPorts.push({ port: port, description: '', model: model });
-            }
-            var modelValue = MODEL_VALUE_MAP[model];
-            if (modelValue) {
-              window.portModelMap[port] = modelValue;
-            }
-            var dpLabel = port + ' (' + model + ')';
-            var alreadyInDP = false;
-            for (var j = 0; j < window.detectedPorts.length; j++) {
-              if (window.detectedPorts[j][1] === port) { alreadyInDP = true; break; }
-            }
-            if (!alreadyInDP) {
-              window.detectedPorts.push([dpLabel, port]);
-            }
-          }
-
-          updateCommandPortSelect(lastDetectedPorts);
-          updateControlPortSelect(lastDetectedPorts);
-          updateTeachingPortSelect(lastDetectedPorts);
-          select.value = port;
-          updateRemoveButton();
-          connectToSelectedPort(port);
-          console.log('[DeviceDetector] Manually added port:', port, 'model:', model);
+            // Trigger an immediate poll so the UI updates right away
+            pollDevices();
+            // Select and connect after the poll refreshes the dropdown
+            setTimeout(function() {
+              select.value = port;
+              updateRemoveButton();
+              connectToSelectedPort(port);
+            }, 500);
+            console.log('[DeviceDetector] Manually added port:', port, 'model:', model);
+          })
+          .catch(function(err) {
+            console.error('[DeviceDetector] Error registering manual port:', err);
+          });
         });
       } else {
         updateRemoveButton();
-        // Connect to the selected port
         if (select.value && select.value !== '') {
           connectToSelectedPort(select.value);
         }
@@ -739,42 +697,38 @@
     if (removeBtn) {
       removeBtn.addEventListener('click', function() {
         var val = select.value;
-        var idx = manualPorts.indexOf(val);
-        if (idx === -1) return;
+        if (!_manualPortSet.has(val)) return;
 
         // Disconnect first
         if (typeof window.commandTabDisconnect === 'function') {
           window.commandTabDisconnect();
         }
 
-        manualPorts.splice(idx, 1);
-        // Also remove from lastDetectedPorts if it was manually added there
-        for (var j = lastDetectedPorts.length - 1; j >= 0; j--) {
-          if (lastDetectedPorts[j].port === val) {
-            lastDetectedPorts.splice(j, 1);
-            break;
+        // Remove on the server
+        fetch(serverUrl + '/cmd/remove-manual-port', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ port: val })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data.success) {
+            console.warn('[DeviceDetector] Failed to remove manual port:', data.error);
           }
-        }
-        delete window.portModelMap[val];
-        delete manualPortModels[val];
-        // Also remove from window.detectedPorts so setup_robot dropdown updates
-        for (var dp = window.detectedPorts.length - 1; dp >= 0; dp--) {
-          if (window.detectedPorts[dp][1] === val) {
-            window.detectedPorts.splice(dp, 1);
-            break;
-          }
-        }
-        updateCommandPortSelect(lastDetectedPorts);
-        updateControlPortSelect(lastDetectedPorts);
-        updateTeachingPortSelect(lastDetectedPorts);
-        updateRemoveButton();
-
-        // Auto-connect to first remaining port if available
-        if (select.value && select.value !== '' && select.value !== '__manual__') {
-          connectToSelectedPort(select.value);
-        }
-
-        console.log('[DeviceDetector] Removed manual port:', val);
+          _manualPortSet.delete(val);
+          // Trigger immediate poll to refresh UI
+          pollDevices();
+          setTimeout(function() {
+            updateRemoveButton();
+            if (select.value && select.value !== '' && select.value !== '__manual__') {
+              connectToSelectedPort(select.value);
+            }
+          }, 500);
+          console.log('[DeviceDetector] Removed manual port:', val);
+        })
+        .catch(function(err) {
+          console.error('[DeviceDetector] Error removing manual port:', err);
+        });
       });
     }
   }
@@ -839,13 +793,32 @@
     }
   };
 
-  // Start polling and set up auto-switch after DOM is ready
+  // Load robot definitions from server, then start polling
+  function loadRobotDefs(callback) {
+    var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
+    fetch(serverUrl + '/robots')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.success && data.robots) {
+          _robotDefs = data.robots;
+          MODEL_VALUE_MAP = {};
+          for (var i = 0; i < data.robots.length; i++) {
+            MODEL_VALUE_MAP[data.robots[i].name] = data.robots[i].blocklyValue;
+          }
+        }
+      })
+      .catch(function() { /* use empty defaults */ })
+      .then(callback);
+  }
+
   function init() {
-    pollDevices();
-    pollTimer = setInterval(pollDevices, POLL_INTERVAL);
-    setupAutoModelSwitch();
-    setupManualConnect();
-    console.log('[DeviceDetector] Started polling every', POLL_INTERVAL, 'ms');
+    loadRobotDefs(function() {
+      pollDevices();
+      pollTimer = setInterval(pollDevices, POLL_INTERVAL);
+      setupAutoModelSwitch();
+      setupManualConnect();
+      console.log('[DeviceDetector] Started polling every', POLL_INTERVAL, 'ms');
+    });
   }
 
   if (document.readyState === 'loading') {

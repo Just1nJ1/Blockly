@@ -4,3 +4,9 @@
 [submodule "extensions/cv-pick"]
 	path = extensions/cv-pick
 	url = https://github.com/wlkata/WLKATA-StudioX-cv-pick.git
+[submodule "extensions/drawing"]
+	path = extensions/drawing
+	url = https://github.com/wlkata/WLKATA-StudioX-drawing.git
+[submodule "extensions/keyboard-control"]
+	path = extensions/keyboard-control
+	url = https://github.com/wlkata/WLKATA-StudioX-keyboard-control.git

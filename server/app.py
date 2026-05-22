@@ -17,6 +17,7 @@ from .debugger import StepDebugger
 from .detector import scan_devices
 from .serial_manager import SerialManager
 from . import environments
+from .robots import ROBOTS
 
 # In-memory store for firmware flash jobs (desktop app, single user)
 _flash_jobs = {}
@@ -752,6 +753,46 @@ def cmd_probe_port():
         return jsonify({'success': True, 'model': model})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'model': None})
+
+
+@app.route('/cmd/add-manual-port', methods=['POST'])
+def cmd_add_manual_port():
+    """Register a manually added port so it is managed identically
+    to auto-detected ports (cached, connected, survives poll cycles)."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', '')
+        model = data.get('model', None)
+        if not port:
+            return jsonify({'success': False, 'error': 'No port provided'}), 400
+
+        from .detector import add_manual_port
+        add_manual_port(port, model)
+        return jsonify({'success': True, 'port': port, 'model': model})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/remove-manual-port', methods=['POST'])
+def cmd_remove_manual_port():
+    """Remove a manually added port and disconnect it."""
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', '')
+        if not port:
+            return jsonify({'success': False, 'error': 'No port provided'}), 400
+
+        from .detector import remove_manual_port
+        remove_manual_port(port)
+        return jsonify({'success': True, 'port': port})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/robots', methods=['GET'])
+def get_robots():
+    """Return the robot model definitions (from robots.json)."""
+    return jsonify({'success': True, 'robots': ROBOTS})
 
 
 @app.route('/list-all-ports', methods=['GET'])
