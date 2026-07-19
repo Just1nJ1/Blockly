@@ -122,7 +122,10 @@
         moves.push({ Axis1: 0, Axis2: 0, Axis3: 0, Axis4: 0, Axis5: 0, type: 'homing' });
       }
 
-      const wa = trimmed.match(/\.writeangle\s*\(\s*([^)]+)\s*\)/);
+      // writeAngle(positionMode, J1, J2, J3, J4, J5, J6)
+      //   args[0] = position mode (0=absolute, 1=incremental)
+      //   args[1..6] = joint angles
+      const wa = trimmed.match(/\.writeAngle\s*\(\s*([^)]+)\s*\)/);
       if (wa) {
         const args = wa[1].split(',').map(s => parseFloat(s.trim()) || 0);
         moves.push({
@@ -131,20 +134,28 @@
           Axis3: args[3] || 0,
           Axis4: args[4] || 0,
           Axis5: args[5] || 0,
-          type: 'writeangle'
+          Axis6: args[6] || 0,
+          incremental: args[0] === 1,
+          type: 'writeAngle'
         });
       }
 
-      const wc = trimmed.match(/\.(writecoordinate|set_wrist_pose|p2p_interpolation)\s*\(\s*([^)]+)\s*\)/);
+      // writeCoordinate(motionMode, positionMode, X, Y, Z, A, B, C)
+      //   args[0] = motion mode (0=fast, 1=linear, 2=joint)
+      //   args[1] = position mode (0=absolute, 1=incremental)
+      //   args[2..7] = X, Y, Z, A, B, C
+      const wc = trimmed.match(/\.writeCoordinate\s*\(\s*([^)]+)\s*\)/);
       if (wc) {
-        const args = wc[2].split(',').map(s => parseFloat(s.trim()) || 0);
+        const args = wc[1].split(',').map(s => parseFloat(s.trim()) || 0);
         moves.push({
-          Axis1: args[0] || 0,
-          Axis2: args[1] || 0,
-          Axis3: args[2] || 0,
-          Axis4: args[3] || 0,
-          Axis5: args[4] || 0,
-          type: wc[1]
+          Axis1: args[2] || 0,
+          Axis2: args[3] || 0,
+          Axis3: args[4] || 0,
+          Axis4: args[5] || 0,
+          Axis5: args[6] || 0,
+          Axis6: args[7] || 0,
+          incremental: args[1] === 1,
+          type: 'writeCoordinate'
         });
       }
     }

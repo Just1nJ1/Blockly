@@ -466,9 +466,9 @@ button:disabled {
   flex: 1;
   visibility: visible;
 }
-#model-area a-scene {
-  width: 100%;
-  height: 100%;
+#model-area canvas {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 /* Animation progress bar */

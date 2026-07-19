@@ -279,9 +279,20 @@
     </div>
   </div>
 
-  <!-- A-Frame for 3D Model Viewer -->
-  <script src="resources/6dof/aframe.min.js"></script>
-  <script src="js/robotViewer/aframeComponents.js"></script>
+  <!-- Three.js import map for RobotViewer (ES module) -->
+  <script type="importmap">
+  {
+      "imports": {
+          "three":         "./node_modules/three/build/three.module.js",
+          "three/addons/": "./node_modules/three/examples/jsm/"
+      }
+  }
+  </script>
+  <script type="module">
+  import { RobotViewer } from './resources/wlkata_arm_virtual-reality/RobotViewer.js';
+  window.RobotViewerClass = RobotViewer;
+  window.dispatchEvent(new Event('robotViewerReady'));
+  </script>
 
   <!-- Blockly -->
   <script src="./node_modules/blockly/blockly_compressed.js"></script>

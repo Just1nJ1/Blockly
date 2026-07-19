@@ -28,7 +28,8 @@
   "type": "commonjs",
   "dependencies": {
     "adm-zip": "^0.5.17",
-    "blockly": "^12.4.1"
+    "blockly": "^12.4.1",
+    "three": "^0.160.0"
   },
   "devDependencies": {
     "electron": "^40.8.0",
@@ -45,7 +46,7 @@
       "css/**/*",
       "js/**/*",
       "node_modules/**/*",
-      "resources/6dof/**/*",
+      "resources/wlkata_arm_virtual-reality/**/*",
       "resources/icons/**/*",
       "index.html",
       "main.js"

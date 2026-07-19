@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Mirobot",
+    "fwPrefix": ["Mirobot"],
+    "blocklyValue": "Mirobot_UART",
+    "label": "Mirobot"
+  },
+  {
+    "name": "MT4",
+    "fwPrefix": ["E4", "MT4"],
+    "blocklyValue": "MT4_UART",
+    "label": "E4 / MT4"
+  }
+]

@@ -1,23 +1,12 @@
 // Per-variable robot animation system.
+// Uses the Three.js-based RobotViewer (window._robotViewer) instead of A-Frame.
 // Depends on: codeAnalysis.js (window.parseMovesFromCode)
 // Exposes: window.RobotAnimation (shared state + functions)
 
 (function() {
-  const ANIM_CONSTS = { MOVE_DUR: 3000, INTERVAL: 1000, STAY_DUR: 3000 };
+  var ANIM_CONSTS = { MOVE_DUR: 3000, INTERVAL: 1000, STAY_DUR: 3000 };
 
-  const AXIS_MAP = {
-    pivot1: 'rotY', pivot2: 'rotZ', pivot3: 'rotZ',
-    pivot4: 'rotY', pivot5: 'rotZ'
-  };
-  const PRESET_BASE = {
-    pivot1: { rotX: 0, rotY: 0, rotZ: 0 },
-    pivot2: { rotX: -90, rotY: 0, rotZ: -90 },
-    pivot3: { rotX: 0, rotY: 0, rotZ: 0 },
-    pivot4: { rotX: 0, rotY: 0, rotZ: 0 },
-    pivot5: { rotX: -90, rotY: 0, rotZ: 0 }
-  };
-
-  let variableStates = {};
+  var variableStates = {};
 
   function getVariableState(variableName) {
     if (!variableStates[variableName]) {
@@ -26,12 +15,12 @@
         animationTimer: null,
         moveStartTime: null,
         pausedState: null,
-        pivots: null,
-        scene: null,
+        savedJoints: [0, 0, 0, 0, 0, 0],
         progressEl: null,
         progressLabel: null,
         progressFill: null,
-        rafId: null,
+        rafId: null,           // progress bar rAF
+        animRafId: null,       // joint interpolation rAF
         phase: null,
         phaseStart: null,
         phaseDuration: null
@@ -41,21 +30,24 @@
   }
 
   function getMovesSignature(variableName) {
-    const moves = window.parseMovesFromCode(variableName);
+    var moves = window.parseMovesFromCode(variableName);
     if (moves.length === 0) return 'empty';
-    return JSON.stringify(moves.map(m => ({ type: m.type, A1: m.Axis1, A2: m.Axis2, A3: m.Axis3, A4: m.Axis4, A5: m.Axis5 })));
+    return JSON.stringify(moves.map(function(m) {
+      return { type: m.type, A1: m.Axis1, A2: m.Axis2, A3: m.Axis3, A4: m.Axis4, A5: m.Axis5, A6: m.Axis6, inc: m.incremental };
+    }));
   }
 
-  // Progress bar helpers
+  // ── Progress bar helpers (unchanged) ─────────────────────────
+
   function tickProgress(varName) {
-    const st = getVariableState(varName);
+    var st = getVariableState(varName);
     if (!st.phase || !st.phaseStart || !st.progressFill || !st.progressLabel) return;
-    const now = Date.now();
-    const elapsed = now - st.phaseStart;
-    const dur = st.phaseDuration || 1;
-    const frac = Math.min(elapsed / dur, 1);
-    const elSec = (elapsed / 1000).toFixed(1);
-    const durSec = (dur / 1000).toFixed(1);
+    var now = Date.now();
+    var elapsed = now - st.phaseStart;
+    var dur = st.phaseDuration || 1;
+    var frac = Math.min(elapsed / dur, 1);
+    var elSec = (elapsed / 1000).toFixed(1);
+    var durSec = (dur / 1000).toFixed(1);
 
     st.progressFill.style.width = (frac * 100) + '%';
 
@@ -76,7 +68,7 @@
   }
 
   function startPhase(varName, phase, duration, moveDisplay) {
-    const st = getVariableState(varName);
+    var st = getVariableState(varName);
     if (st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
     st.phase = phase;
     st.phaseStart = Date.now();
@@ -87,78 +79,144 @@
   }
 
   function stopProgress(varName) {
-    const st = getVariableState(varName);
+    var st = getVariableState(varName);
     if (st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = null; }
     st.phase = null;
     if (st.progressFill) st.progressFill.style.width = '0%';
     if (st.progressLabel) st.progressLabel.textContent = '';
   }
 
-  // Core animation -- fully self-contained per variable
+  // ── Joint interpolation via requestAnimationFrame ────────────
+
+  /**
+   * Smoothly interpolate the viewer's joints from startJoints to targetJoints
+   * over durationMs using smoothstep easing.
+   */
+  function animateJoints(varName, startJoints, targetJoints, durationMs) {
+    var st = getVariableState(varName);
+    var viewer = window._robotViewer;
+    if (!viewer) return;
+
+    // Cancel any in-flight joint interpolation for this variable
+    if (st.animRafId) { cancelAnimationFrame(st.animRafId); st.animRafId = null; }
+
+    var t0 = performance.now();
+
+    function step() {
+      var elapsed = performance.now() - t0;
+      var t = Math.min(elapsed / durationMs, 1);
+      // smoothstep easing
+      var s = t * t * (3 - 2 * t);
+      var cur = [];
+      for (var i = 0; i < 6; i++) {
+        cur[i] = startJoints[i] + (targetJoints[i] - startJoints[i]) * s;
+      }
+      viewer.setJoints(cur);
+      if (t < 1) {
+        st.animRafId = requestAnimationFrame(step);
+      } else {
+        st.animRafId = null;
+      }
+    }
+
+    st.animRafId = requestAnimationFrame(step);
+  }
+
+  /**
+   * Compute the target 6-joint array from a parsed move object.
+   * Handles both absolute and incremental modes.
+   * For writeAngle: joints are taken from Axis1-Axis6.
+   * For writeCoordinate: uses IK (moveTo / moveBy).
+   */
+  function targetJointsFromMove(move) {
+    var viewer = window._robotViewer;
+    var type = move.type;
+
+    if (type === 'homing') {
+      return [0, 0, 0, 0, 0, 0];
+    }
+
+    if (type === 'writeAngle') {
+      var angles = [
+        move.Axis1 || 0,
+        move.Axis2 || 0,
+        move.Axis3 || 0,
+        move.Axis4 || 0,
+        move.Axis5 || 0,
+        move.Axis6 || 0
+      ];
+      if (move.incremental && viewer) {
+        // Incremental: add deltas to current joints
+        var cur = viewer.getJoints();
+        for (var i = 0; i < 6; i++) angles[i] += cur[i];
+      }
+      return angles;
+    }
+
+    // writeCoordinate — use IK if viewer is available
+    if (type === 'writeCoordinate' && viewer) {
+      var saved = viewer.getJoints();
+      if (move.incremental) {
+        viewer.moveBy(move.Axis1 || 0, move.Axis2 || 0, move.Axis3 || 0);
+      } else {
+        viewer.moveTo(move.Axis1 || 0, move.Axis2 || 0, move.Axis3 || 0);
+      }
+      var result = viewer.getJoints();
+      viewer.setJoints(saved);
+      return result;
+    }
+
+    // Fallback: treat as absolute joint angles
+    return [
+      move.Axis1 || 0,
+      move.Axis2 || 0,
+      move.Axis3 || 0,
+      move.Axis4 || 0,
+      move.Axis5 || 0,
+      move.Axis6 || 0
+    ];
+  }
+
+  // ── Core animation — fully self-contained per variable ──────
+
   function startVarAnimation(varName, resumeFrom) {
-    const st = getVariableState(varName);
-    const scene = st.scene;
-    if (!scene) return;
+    var st = getVariableState(varName);
+    var viewer = window._robotViewer;
+    if (!viewer) return;
 
     if (st.animationTimer) { clearTimeout(st.animationTimer); st.animationTimer = null; }
+    if (st.animRafId) { cancelAnimationFrame(st.animRafId); st.animRafId = null; }
     stopProgress(varName);
 
-    const moves = window.parseMovesFromCode(varName);
+    var moves = window.parseMovesFromCode(varName);
     if (moves.length === 0) {
       if (st.progressEl) st.progressEl.style.display = 'none';
       return;
     }
 
-    if (!st.pivots) {
-      st.pivots = {};
-      for (let i = 1; i <= 5; i++) {
-        st.pivots['pivot' + i] = scene.querySelector('#pivot' + i);
-      }
-    }
-    const pivots = st.pivots;
-
-    function applyAxisState(axisValues, durationMs) {
-      st.moveStartTime = Date.now();
-      for (const pivotId of Object.keys(AXIS_MAP)) {
-        const pivot = pivots[pivotId];
-        if (!pivot) continue;
-        const axis = AXIS_MAP[pivotId];
-        const base = PRESET_BASE[pivotId];
-        const axisNum = pivotId.slice(-1);
-        const offset = axisValues['Axis' + axisNum] || 0;
-        const targetRot = axis === 'rotY'
-          ? `${base.rotX} ${base.rotY + offset} ${base.rotZ}`
-          : `${base.rotX} ${base.rotY} ${base.rotZ + offset}`;
-        pivot.setAttribute('animation',
-          `property: rotation; to: ${targetRot}; dur: ${durationMs}; easing: easeInOutQuad`);
-      }
-    }
-
-    function resetToHome() {
-      for (const pivotId of Object.keys(AXIS_MAP)) {
-        const pivot = pivots[pivotId];
-        if (!pivot) continue;
-        const base = PRESET_BASE[pivotId];
-        pivot.removeAttribute('animation');
-        pivot.setAttribute('rotation', `${base.rotX} ${base.rotY} ${base.rotZ}`);
-      }
-    }
-
     function runSequence() {
       if (st.moveIndex >= moves.length) {
+        // All moves done — stay, then reset to home and loop
         startPhase(varName, 'stay', ANIM_CONSTS.STAY_DUR);
         st.animationTimer = setTimeout(function() {
-          resetToHome();
+          viewer.setJoints([0, 0, 0, 0, 0, 0]);
           st.moveIndex = 0;
           st.animationTimer = setTimeout(runSequence, 100);
         }, ANIM_CONSTS.STAY_DUR);
         return;
       }
 
-      const move = moves[st.moveIndex];
-      const label = (st.moveIndex + 1) + '/' + moves.length;
+      var move = moves[st.moveIndex];
+      var label = (st.moveIndex + 1) + '/' + moves.length;
       startPhase(varName, 'move', ANIM_CONSTS.MOVE_DUR, label);
-      applyAxisState(move, ANIM_CONSTS.MOVE_DUR);
+
+      var startJoints = viewer.getJoints();
+      var targetJoints = targetJointsFromMove(move);
+      st.moveStartTime = Date.now();
+      st.currentTargetJoints = targetJoints;
+      st.currentStartJoints = startJoints;
+
+      animateJoints(varName, startJoints, targetJoints, ANIM_CONSTS.MOVE_DUR);
       st.moveIndex++;
 
       st.animationTimer = setTimeout(function() {
@@ -170,31 +228,22 @@
     // Resume from paused state
     if (resumeFrom && resumeFrom.elapsedInMove < ANIM_CONSTS.MOVE_DUR
         && resumeFrom.moveIndex < moves.length) {
-      const resumeMove = moves[resumeFrom.moveIndex];
-      const frac = resumeFrom.elapsedInMove / ANIM_CONSTS.MOVE_DUR;
-      const remaining = ANIM_CONSTS.MOVE_DUR - resumeFrom.elapsedInMove;
+      var resumeMove = moves[resumeFrom.moveIndex];
+      var frac = resumeFrom.elapsedInMove / ANIM_CONSTS.MOVE_DUR;
+      var remaining = ANIM_CONSTS.MOVE_DUR - resumeFrom.elapsedInMove;
 
-      for (const pivotId of Object.keys(AXIS_MAP)) {
-        const pivot = pivots[pivotId];
-        if (!pivot) continue;
-        const axis = AXIS_MAP[pivotId];
-        const base = PRESET_BASE[pivotId];
-        const axisNum = pivotId.slice(-1);
-        const offset = resumeMove['Axis' + axisNum] || 0;
-        if (axis === 'rotY') {
-          const cur = base.rotY + offset * frac;
-          pivot.setAttribute('rotation', `${base.rotX} ${cur} ${base.rotZ}`);
-          pivot.setAttribute('animation',
-            `property: rotation; to: ${base.rotX} ${base.rotY + offset} ${base.rotZ}; dur: ${remaining}; easing: easeInOutQuad`);
-        } else {
-          const cur = base.rotZ + offset * frac;
-          pivot.setAttribute('rotation', `${base.rotX} ${base.rotY} ${cur}`);
-          pivot.setAttribute('animation',
-            `property: rotation; to: ${base.rotX} ${base.rotY} ${base.rotZ + offset}; dur: ${remaining}; easing: easeInOutQuad`);
-        }
-      }
-      st.moveIndex = resumeFrom.moveIndex + 1;
+      var targetJoints = targetJointsFromMove(resumeMove);
+      // Current joints are already at the paused interpolation point (saved by viewTabs)
+      var currentJoints = viewer.getJoints();
+
       st.moveStartTime = Date.now() - resumeFrom.elapsedInMove;
+      st.currentTargetJoints = targetJoints;
+      st.currentStartJoints = currentJoints;
+
+      // Animate from current position to target over the remaining time
+      animateJoints(varName, currentJoints, targetJoints, remaining);
+
+      st.moveIndex = resumeFrom.moveIndex + 1;
       st.phase = 'move';
       st.phaseStart = Date.now() - resumeFrom.elapsedInMove;
       st.phaseDuration = ANIM_CONSTS.MOVE_DUR;
@@ -215,21 +264,21 @@
 
   function pauseVarAnimation(varName) {
     if (!varName) return;
-    const st = getVariableState(varName);
-    const now = Date.now();
-    const elapsed = st.moveStartTime ? (now - st.moveStartTime) : 0;
-    const moves = window.parseMovesFromCode(varName);
-    const animIdx = (st.moveIndex > 0 && st.moveIndex <= moves.length) ? (st.moveIndex - 1) : null;
+    var st = getVariableState(varName);
+    var now = Date.now();
+    var elapsed = st.moveStartTime ? (now - st.moveStartTime) : 0;
+    var moves = window.parseMovesFromCode(varName);
+    var animIdx = (st.moveIndex > 0 && st.moveIndex <= moves.length) ? (st.moveIndex - 1) : null;
 
     if (st.animationTimer) { clearTimeout(st.animationTimer); st.animationTimer = null; }
+    if (st.animRafId) { cancelAnimationFrame(st.animRafId); st.animRafId = null; }
     stopProgress(varName);
     if (st.progressEl) st.progressEl.style.display = 'none';
 
-    if (st.pivots) {
-      for (const pivotId of Object.keys(st.pivots)) {
-        const pivot = st.pivots[pivotId];
-        if (pivot) pivot.removeAttribute('animation');
-      }
+    // Save current joints so they can be restored later
+    var viewer = window._robotViewer;
+    if (viewer) {
+      st.savedJoints = viewer.getJoints();
     }
 
     if (animIdx !== null && elapsed < ANIM_CONSTS.MOVE_DUR) {
@@ -240,15 +289,13 @@
   }
 
   function resumeVarAnimation(varName) {
-    const st = getVariableState(varName);
+    var st = getVariableState(varName);
     startVarAnimation(varName, st.pausedState);
   }
 
   // Expose globally
   window.RobotAnimation = {
     ANIM_CONSTS: ANIM_CONSTS,
-    AXIS_MAP: AXIS_MAP,
-    PRESET_BASE: PRESET_BASE,
     getVariableState: getVariableState,
     getMovesSignature: getMovesSignature,
     startVarAnimation: startVarAnimation,
