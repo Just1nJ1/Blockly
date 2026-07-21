@@ -1,11 +1,24 @@
 // Robot code analysis: parse generated Python to find robot variables and moves.
 // Exposes: window.analyzeRobotCode, window.extractMovesFromLines, window.parseMovesFromCode,
+//          window.refreshRecordedMoves, window.scheduleRecordedMovesRefresh,
 //          window.RobotCodeAnalysis (shared state)
+//
+// Move values for animation come from a server dry-run (/simulate-moves) that
+// executes the code with mock robots and records every writeCoordinate/writeAngle.
+// Static parsing below is only a last-resort fallback (literals only).
 
 (function() {
-  // Shared state for cached analysis
+  // Shared state for cached analysis / dry-run recordings
   window.RobotCodeAnalysis = {
-    lastAnalysis: null
+    lastAnalysis: null,
+    // movesByVar from server dry-run: { arm: [move, ...], ... }
+    recordedMoves: null,
+    // source code fingerprint that recordedMoves was built from
+    recordedMovesCode: null,
+    // true while a /simulate-moves request is in flight
+    recordingInFlight: false,
+    // last error message from dry-run (if any)
+    recordError: null
   };
 
   // Parse the generated Python code into structural info:
@@ -105,7 +118,9 @@
     return result;
   }
 
-  // Extract moves from an array of code lines for a given variable name
+  // Extract moves from an array of code lines for a given variable name.
+  // Fallback only: numeric literals via parseFloat; variables become 0.
+  // Prefer dry-run recordings (parseMovesFromCode) for real values / loops.
   function extractMovesFromLines(lines, varName) {
     const moves = [];
     let varPattern = null;
@@ -163,14 +178,22 @@
   }
 
   // Parse code to extract move sequence for a specific variable.
+  // Prefers server dry-run recordings when available and fresh for the
+  // current code; falls back to static literal parsing otherwise.
   function parseMovesFromCode(variableName) {
     const codeEl = document.getElementById('code-preview');
     if (!codeEl) return [];
     const code = codeEl.textContent || '';
+
+    const rec = window.RobotCodeAnalysis.recordedMoves;
+    const recCode = window.RobotCodeAnalysis.recordedMovesCode;
+    if (rec && recCode === code && variableName &&
+        Object.prototype.hasOwnProperty.call(rec, variableName)) {
+      return (rec[variableName] || []).slice();
+    }
+
     const allLines = code.split('\n');
-
     const analysis = window.RobotCodeAnalysis.lastAnalysis || analyzeRobotCode(code);
-
     const moves = [];
 
     if (variableName && analysis.callerToFunc[variableName]) {
@@ -217,8 +240,109 @@
     return moves;
   }
 
+  /**
+   * Ask the server to dry-run the current (or provided) code and cache
+   * the fully unrolled move lists per robot variable.
+   * Debounced callers should use scheduleRecordedMovesRefresh().
+   */
+  function refreshRecordedMoves(codeOverride) {
+    var codeEl = document.getElementById('code-preview');
+    var code = (codeOverride != null) ? codeOverride : (codeEl ? (codeEl.textContent || '') : '');
+    if (!code.trim()) {
+      window.RobotCodeAnalysis.recordedMoves = {};
+      window.RobotCodeAnalysis.recordedMovesCode = code;
+      window.RobotCodeAnalysis.recordError = null;
+      return Promise.resolve({ success: true, moves: {} });
+    }
+
+    // Skip if we already have a fresh recording for this exact code
+    if (window.RobotCodeAnalysis.recordedMoves &&
+        window.RobotCodeAnalysis.recordedMovesCode === code &&
+        !window.RobotCodeAnalysis.recordError) {
+      return Promise.resolve({
+        success: true,
+        moves: window.RobotCodeAnalysis.recordedMoves,
+        cached: true
+      });
+    }
+
+    var serverUrl = (typeof getServerUrl === 'function')
+      ? getServerUrl()
+      : 'http://127.0.0.1:5080';
+
+    window.RobotCodeAnalysis.recordingInFlight = true;
+
+    return fetch(serverUrl + '/simulate-moves', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code, timeout: 3.0 }),
+      signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
+        ? AbortSignal.timeout(10000)
+        : undefined
+    })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function(result) {
+        window.RobotCodeAnalysis.recordingInFlight = false;
+        if (result && result.moves) {
+          window.RobotCodeAnalysis.recordedMoves = result.moves;
+          window.RobotCodeAnalysis.recordedMovesCode = code;
+          window.RobotCodeAnalysis.recordError =
+            result.error || (result.timed_out ? 'Simulation timed out' : null);
+          console.log('[simulate-moves] Recorded moves for',
+            Object.keys(result.moves),
+            result.timed_out ? '(timed out, partial)' : '');
+        } else {
+          window.RobotCodeAnalysis.recordError =
+            (result && result.error) || 'No moves returned';
+        }
+        return result;
+      })
+      .catch(function(err) {
+        window.RobotCodeAnalysis.recordingInFlight = false;
+        window.RobotCodeAnalysis.recordError = String(err && err.message || err);
+        // Keep previous recordedMoves if any; static analysis remains fallback
+        console.warn('[simulate-moves] Failed:', err);
+        return { success: false, error: String(err && err.message || err) };
+      });
+  }
+
+  var _recordRefreshTimer = null;
+  var _recordRefreshPendingCode = null;
+
+  /**
+   * Debounced dry-run refresh. Fires `robotMovesRecorded` on window when done
+   * so viewers can restart animation with the unrolled sequence.
+   */
+  function scheduleRecordedMovesRefresh(delayMs) {
+    var codeEl = document.getElementById('code-preview');
+    var code = codeEl ? (codeEl.textContent || '') : '';
+    _recordRefreshPendingCode = code;
+    if (_recordRefreshTimer) clearTimeout(_recordRefreshTimer);
+    _recordRefreshTimer = setTimeout(function() {
+      _recordRefreshTimer = null;
+      var codeToRun = _recordRefreshPendingCode;
+      refreshRecordedMoves(codeToRun).then(function(result) {
+        try {
+          window.dispatchEvent(new CustomEvent('robotMovesRecorded', {
+            detail: {
+              moves: (result && result.moves) || window.RobotCodeAnalysis.recordedMoves,
+              code: codeToRun,
+              error: (result && result.error) || window.RobotCodeAnalysis.recordError,
+              cached: !!(result && result.cached)
+            }
+          }));
+        } catch (e) { /* ignore */ }
+      });
+    }, delayMs == null ? 400 : delayMs);
+  }
+
   // Expose globally
   window.analyzeRobotCode = analyzeRobotCode;
   window.extractMovesFromLines = extractMovesFromLines;
   window.parseMovesFromCode = parseMovesFromCode;
+  window.refreshRecordedMoves = refreshRecordedMoves;
+  window.scheduleRecordedMovesRefresh = scheduleRecordedMovesRefresh;
 })();

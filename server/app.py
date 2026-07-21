@@ -16,6 +16,7 @@ from .inspector import FunctionInspector, InstanceInspector
 from .debugger import StepDebugger
 from .detector import scan_devices
 from .serial_manager import SerialManager
+from .move_simulator import MoveSimulator
 from . import environments
 from .robots import ROBOTS
 
@@ -127,6 +128,37 @@ def execute_abort():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/simulate-moves', methods=['POST'])
+def simulate_moves():
+    """
+    Dry-run Blockly/Python code with mock robots (no serial I/O).
+
+    Executes loops/branches for real and records every writeCoordinate /
+    writeAngle / homing / zero call so the 3D animation viewer can play
+    the full unrolled move sequence.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+
+        code = data.get('code', '')
+        if not code or not str(code).strip():
+            return jsonify({'success': True, 'moves': {}})
+
+        timeout = data.get('timeout', 3.0)
+        try:
+            timeout = float(timeout)
+        except (TypeError, ValueError):
+            timeout = 3.0
+        timeout = max(0.5, min(timeout, 15.0))
+
+        result = MoveSimulator.simulate(code, timeout_s=timeout)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
 
 @app.route('/inspect', methods=['POST'])

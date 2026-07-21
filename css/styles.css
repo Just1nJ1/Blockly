@@ -454,7 +454,7 @@ button:disabled {
   display: none;
 }
 
-/* Model mode (full-size 3D viewer) */
+/* Model mode (3D viewer + side panel) */
 #model-area {
   display: flex;
   flex: 0;
@@ -466,9 +466,220 @@ button:disabled {
   flex: 1;
   visibility: visible;
 }
-#model-area canvas {
+#viewer-canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+#viewer-canvas canvas {
   width: 100% !important;
   height: 100% !important;
+}
+
+/* World view canvas (same layout as viewer-canvas) */
+#world-canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+#world-canvas canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Viewer side panel */
+#viewer-panel {
+  width: 260px;
+  border-left: 1px solid var(--border-primary);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  overflow-y: auto;
+}
+#viewer-panel-header {
+  padding: 10px;
+  background: var(--bg-header);
+  font-weight: bold;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border-primary);
+  color: var(--text-primary);
+}
+#viewer-panel-content {
+  padding: 0;
+  flex: 1;
+}
+.viewer-section {
+  border-bottom: 1px solid var(--border-primary);
+  padding: 12px;
+}
+.viewer-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.viewer-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+.viewer-control-row label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+/* Playback controls (play/pause/stop) */
+.viewer-playback-controls {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.viewer-playback-btn {
+  flex: 1;
+  padding: 6px 0;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  text-align: center;
+  line-height: 1;
+}
+.viewer-playback-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--tab-hover);
+}
+.viewer-playback-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.viewer-playback-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.viewer-toggle {
+  padding: 4px 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  min-width: 48px;
+  text-align: center;
+}
+.viewer-toggle:hover {
+  border-color: var(--accent);
+}
+.viewer-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Robot checklist in world panel */
+#world-robot-list {
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.world-robot-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.world-robot-item:hover {
+  background: var(--tab-hover);
+}
+.world-robot-item.selected {
+  background: rgba(33, 150, 243, 0.15);
+  border: 1px solid rgba(33, 150, 243, 0.5);
+  margin: -1px;
+}
+.world-robot-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.world-robot-item label {
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.world-robot-model {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Robot properties grid */
+.viewer-props-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  align-items: center;
+}
+.viewer-props-grid label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+/* Draggable property labels (Unity-style) */
+.viewer-prop-label {
+  cursor: ew-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background 0.15s, color 0.15s;
+}
+.viewer-prop-label:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.viewer-prop-label.dragging {
+  background: var(--accent);
+  color: #fff;
+}
+.viewer-prop-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border-primary);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  box-sizing: border-box;
+}
+.viewer-prop-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* Hide spinner arrows for a cleaner look */
+.viewer-prop-input::-webkit-inner-spin-button,
+.viewer-prop-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.viewer-prop-input {
+  -moz-appearance: textfield;
 }
 
 /* Animation progress bar */

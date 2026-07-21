@@ -1,0 +1,742 @@
+// World Viewer — FK-only Three.js scene with multiple robot arms.
+// Does NOT depend on kinematics.js; loads URDF meshes and applies
+// forward kinematics (qInit * qDelta) directly.
+// Exposes: window.WorldViewer
+
+(function() {
+  'use strict';
+
+  // We access THREE from the global that RobotViewer's ES module import exposes.
+  // Three.js is loaded via import map, but the OrbitControls and STLLoader
+  // need to be loaded dynamically since this is a plain script.
+  var THREE_NS = null;       // will be set to the THREE namespace
+  var STLLoaderClass = null;
+  var OrbitControlsClass = null;
+  var threeReady = false;
+  var threeReadyPromise = null;
+
+  function ensureThree() {
+    if (threeReadyPromise) return threeReadyPromise;
+    threeReadyPromise = Promise.all([
+      import('three'),
+      import('three/addons/loaders/STLLoader.js'),
+      import('three/addons/controls/OrbitControls.js')
+    ]).then(function(modules) {
+      THREE_NS = modules[0];
+      STLLoaderClass = modules[1].STLLoader;
+      OrbitControlsClass = modules[2].OrbitControls;
+      threeReady = true;
+    });
+    return threeReadyPromise;
+  }
+
+  // ── FK-only URDF loader (same parsing as RobotViewer's URDFLoader,
+  //    but stores joint data locally instead of in kinematics.js) ──
+
+  function parseOrigin(el) {
+    var xyz = (el.getAttribute('xyz') || '0 0 0').split(/\s+/).map(Number);
+    var rpy = (el.getAttribute('rpy') || '0 0 0').split(/\s+/).map(Number);
+    return {
+      position: new THREE_NS.Vector3(xyz[0], xyz[1], xyz[2]),
+      rotation: new THREE_NS.Euler(rpy[0], rpy[1], rpy[2], 'XYZ')
+    };
+  }
+
+  function parseColor(rgba) {
+    var v = rgba.trim().split(/\s+/).map(Number);
+    return new THREE_NS.Color(v[0], v[1], v[2]);
+  }
+
+  function makeMaterial(colorEl, linkName) {
+    var color = new THREE_NS.Color(0.667, 0.698, 0.769);
+    if (colorEl) {
+      var rgba = colorEl.getAttribute('rgba');
+      if (rgba) color = parseColor(rgba);
+    } else if (linkName) {
+      var map = {
+        base_link: 0x888888, link1: 0x4a90e2, link2: 0x50c878,
+        link3: 0xf39c12, link4: 0xe74c3c, link5: 0x9b59b6, link6: 0x1abc9c
+      };
+      if (map[linkName]) color = new THREE_NS.Color(map[linkName]);
+    }
+    return new THREE_NS.MeshStandardMaterial({
+      color: color, metalness: 0.9, roughness: 0.2, envMapIntensity: 1.0
+    });
+  }
+
+  /**
+   * Load a URDF and return { group, joints } where joints is a Map
+   * of jointName → { linkGroup, axis, initialRotation }.
+   */
+  function loadURDF(urdfPath, meshBasePath) {
+    var stl = new STLLoaderClass();
+
+    function resolvePath(raw) {
+      var rel = raw.replace(/package:\/\/[^/]+\//, '');
+      return (meshBasePath || '') + rel;
+    }
+
+    function loadSTL(path) {
+      var resolved = resolvePath(path);
+      return new Promise(function(resolve, reject) {
+        stl.load(resolved, resolve, undefined, function(err) {
+          console.error('[WorldViewer] STL load failed:', resolved, err);
+          reject(err);
+        });
+      });
+    }
+
+    function processVisual(vis, linkName) {
+      var geomEl = vis.querySelector('geometry');
+      var meshEl = geomEl ? geomEl.querySelector('mesh') : null;
+      var file = meshEl ? meshEl.getAttribute('filename') : null;
+      if (!file) return Promise.resolve(null);
+      return loadSTL(file).then(function(geometry) {
+        var matEl = vis.querySelector('material');
+        var colEl = matEl ? matEl.querySelector('color') : null;
+        var material = makeMaterial(colEl, linkName);
+        var mesh = new THREE_NS.Mesh(geometry, material);
+        var originEl = vis.querySelector('origin');
+        if (originEl) {
+          var o = parseOrigin(originEl);
+          mesh.position.copy(o.position);
+          mesh.rotation.copy(o.rotation);
+        }
+        return mesh;
+      }).catch(function() { return null; });
+    }
+
+    return fetch(urdfPath)
+      .then(function(resp) { return resp.text(); })
+      .then(function(text) {
+        var xml = new DOMParser().parseFromString(text, 'text/xml');
+        var robot = xml.querySelector('robot');
+        if (!robot) throw new Error('No <robot> element in URDF');
+
+        var linkMap = new Map();
+        var linkEls = robot.querySelectorAll('link');
+        linkEls.forEach(function(link) {
+          var g = new THREE_NS.Group();
+          g.name = link.getAttribute('name');
+          linkMap.set(g.name, g);
+        });
+
+        // Load all visuals
+        var visualPromises = [];
+        linkEls.forEach(function(link) {
+          var name = link.getAttribute('name');
+          var group = linkMap.get(name);
+          var visuals = link.querySelectorAll('visual');
+          visuals.forEach(function(vis) {
+            visualPromises.push(
+              processVisual(vis, name).then(function(m) {
+                if (m) group.add(m);
+              })
+            );
+          });
+        });
+
+        return Promise.all(visualPromises).then(function() {
+          var joints = new Map();
+          var jointEls = robot.querySelectorAll('joint');
+          jointEls.forEach(function(jEl) {
+            var originEl = jEl.querySelector('origin');
+            var parent = jEl.querySelector('parent');
+            var child = jEl.querySelector('child');
+            var axisEl = jEl.querySelector('axis');
+
+            var pName = parent ? parent.getAttribute('link') : null;
+            var cName = child ? child.getAttribute('link') : null;
+            var pGroup = linkMap.get(pName);
+            var cGroup = linkMap.get(cName);
+            if (!pGroup || !cGroup) return;
+
+            if (originEl) {
+              var o = parseOrigin(originEl);
+              cGroup.position.copy(o.position);
+              cGroup.rotation.copy(o.rotation);
+            }
+
+            var axis = new THREE_NS.Vector3(0, 0, 1);
+            if (axisEl) {
+              var v = (axisEl.getAttribute('xyz') || '0 0 1').split(/\s+/).map(Number);
+              axis = new THREE_NS.Vector3(v[0], v[1], v[2]);
+            }
+
+            var jName = jEl.getAttribute('name');
+            joints.set(jName, {
+              linkGroup: cGroup,
+              axis: axis,
+              initialRotation: cGroup.rotation.clone()
+            });
+
+            pGroup.add(cGroup);
+          });
+
+          var rootGroup = new THREE_NS.Group();
+          var base = linkMap.get('base_link');
+          if (base) rootGroup.add(base);
+
+          return { group: rootGroup, joints: joints };
+        });
+      });
+  }
+
+  // ── FK: apply joint angles to a loaded robot's joints map ──
+
+  function applyJoints(jointsMap, angles) {
+    for (var i = 1; i <= 6; i++) {
+      var info = jointsMap.get('joint' + i);
+      if (!info) continue;
+      var angleRad = (angles[i - 1] * Math.PI) / 180;
+      var qInit = new THREE_NS.Quaternion().setFromEuler(info.initialRotation);
+      var qDelta = new THREE_NS.Quaternion().setFromAxisAngle(
+        info.axis.clone().normalize(), angleRad
+      );
+      info.linkGroup.quaternion.copy(qInit).multiply(qDelta);
+    }
+  }
+
+  // ── Name-tag sprite (canvas-based billboard text) ──
+
+  /**
+   * Create a sprite that renders text as a billboard above the robot.
+   * Returns a THREE.Sprite positioned at (0, 0, TAG_HEIGHT).
+   */
+  var TAG_HEIGHT = 0.28;  // metres above robot base
+  var TAG_SCALE  = 0.04;  // world-space height of the tag
+
+  function makeNameTag(text) {
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d');
+
+    // Measure text to size the canvas
+    var fontSize = 48;
+    ctx.font = 'bold ' + fontSize + 'px Arial, sans-serif';
+    var metrics = ctx.measureText(text);
+    var textW = metrics.width;
+
+    var pad = 20;
+    canvas.width  = textW + pad * 2;
+    canvas.height = fontSize + pad * 2;
+
+    // Rounded-rect background
+    ctx.fillStyle = 'rgba(30, 30, 30, 0.82)';
+    roundRect(ctx, 0, 0, canvas.width, canvas.height, 14);
+    ctx.fill();
+
+    // 1px border
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2;
+    roundRect(ctx, 1, 1, canvas.width - 2, canvas.height - 2, 13);
+    ctx.stroke();
+
+    // Text
+    ctx.font = 'bold ' + fontSize + 'px Arial, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    var texture = new THREE_NS.CanvasTexture(canvas);
+    texture.minFilter = THREE_NS.LinearFilter;
+    var mat = new THREE_NS.SpriteMaterial({
+      map: texture,
+      depthTest: false,       // always render on top
+      transparent: true
+    });
+    var sprite = new THREE_NS.Sprite(mat);
+
+    // Scale proportionally so height = TAG_SCALE
+    var aspect = canvas.width / canvas.height;
+    sprite.scale.set(TAG_SCALE * aspect, TAG_SCALE, 1);
+    sprite.position.set(0, 0, TAG_HEIGHT);
+    sprite.renderOrder = 999;  // draw after scene geometry
+
+    return sprite;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+
+  // ── Per-robot axes gizmo (shown only when selected) ──
+
+  var AXES_LENGTH  = 0.12;  // metres
+  var AXES_RADIUS  = 0.004;
+  var CONE_RADIUS  = 0.012;
+  var CONE_HEIGHT  = 0.03;
+
+  /**
+   * Build a small XYZ axes gizmo group (coloured arrows with cone tips).
+   * X = red, Y = green, Z = blue.
+   */
+  function makeAxesGizmo() {
+    var g = new THREE_NS.Group();
+    g.renderOrder = 998;
+
+    function makeArrow(color, dir) {
+      var mat = new THREE_NS.MeshBasicMaterial({ color: color, depthTest: false });
+
+      // Shaft
+      var shaft = new THREE_NS.Mesh(
+        new THREE_NS.CylinderGeometry(AXES_RADIUS, AXES_RADIUS, AXES_LENGTH, 8),
+        mat
+      );
+      shaft.renderOrder = 998;
+      // Position shaft so its base is at origin, tip at AXES_LENGTH along dir
+      shaft.position.copy(dir.clone().multiplyScalar(AXES_LENGTH / 2));
+      shaft.quaternion.setFromUnitVectors(new THREE_NS.Vector3(0, 1, 0), dir);
+
+      // Cone tip
+      var cone = new THREE_NS.Mesh(
+        new THREE_NS.ConeGeometry(CONE_RADIUS, CONE_HEIGHT, 12),
+        mat
+      );
+      cone.renderOrder = 998;
+      cone.position.copy(dir.clone().multiplyScalar(AXES_LENGTH + CONE_HEIGHT / 2));
+      cone.quaternion.setFromUnitVectors(new THREE_NS.Vector3(0, 1, 0), dir);
+
+      g.add(shaft);
+      g.add(cone);
+    }
+
+    makeArrow(0xff3333, new THREE_NS.Vector3(1, 0, 0));  // X — red
+    makeArrow(0x33ff33, new THREE_NS.Vector3(0, 1, 0));  // Y — green
+    makeArrow(0x3388ff, new THREE_NS.Vector3(0, 0, 1));  // Z — blue
+
+    return g;
+  }
+
+  // ── WorldViewer: manages the shared 3D scene ──
+
+  var ROBOT_SPACING = 0.3; // metres between robot bases on X axis
+
+  var container = null;
+  var scene = null;
+  var camera = null;
+  var renderer = null;
+  var controls = null;
+  var animFrameId = null;
+  var resizeObserver = null;
+  var initialized = false;
+
+  // Map of varName → { group, joints, currentAngles, pose: {x,y,z,rotZ}, visible }
+  var robots = {};
+  var robotOrder = []; // ordered list of variable names
+  var selectedRobot = null;      // currently selected varName
+  var selectionBox = null;       // THREE.BoxHelper for highlight
+  var selectionAxes = null;      // axes gizmo for selected robot
+  var raycaster = null;
+  var pointerVec = null;
+  var onSelectionChange = null;  // callback(varName|null)
+
+  function initScene(containerEl) {
+    if (initialized) return;
+    container = containerEl;
+    initialized = true;
+
+    var w = container.clientWidth || 600;
+    var h = container.clientHeight || 400;
+
+    scene = new THREE_NS.Scene();
+    scene.background = new THREE_NS.Color('#555555');
+
+    camera = new THREE_NS.PerspectiveCamera(75, w / h, 0.1, 1000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(1.0, 0.8, 0.6);
+
+    renderer = new THREE_NS.WebGLRenderer({ antialias: true });
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE_NS.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+    container.appendChild(renderer.domElement);
+
+    controls = new OrbitControlsClass(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    // Lights (same as RobotViewer)
+    scene.add(new THREE_NS.AmbientLight(0xffffff, 1.2));
+    addDirLight(1, 2, 1, 1.9);
+    addDirLight(-1, 1, -1, 1.25);
+    addDirLight(0, 1, 2, 1.0);
+    addDirLight(0, 0, -2, 0.85);
+    addDirLight(-2, 0.8, 0.6, 0.75);
+    addDirLight(1.8, -1.2, 1.0, 0.65);
+    scene.add(new THREE_NS.HemisphereLight(0xffffff, 0x666666, 0.45));
+
+    // Grid (XY plane, Z up)
+    var grid = new THREE_NS.GridHelper(2, 20, 0x444444, 0x222222);
+    grid.rotation.x = Math.PI / 2;
+    scene.add(grid);
+
+    // Axes
+    scene.add(makeAxes(0.5));
+
+    // Resize observer
+    resizeObserver = new ResizeObserver(function() {
+      var rw = container.clientWidth;
+      var rh = container.clientHeight;
+      if (rw && rh) {
+        camera.aspect = rw / rh;
+        camera.updateProjectionMatrix();
+        renderer.setSize(rw, rh);
+      }
+    });
+    resizeObserver.observe(container);
+
+    // Raycaster for click-to-select
+    raycaster = new THREE_NS.Raycaster();
+    pointerVec = new THREE_NS.Vector2();
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+
+    tick();
+    console.log('[WorldViewer] Scene initialized');
+  }
+
+  // ── Click-to-select ──
+
+  function onPointerDown(event) {
+    if (!renderer || !camera) return;
+
+    var rect = renderer.domElement.getBoundingClientRect();
+    pointerVec.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerVec.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(pointerVec, camera);
+
+    // Test visible robots in order — pick the first hit
+    for (var i = 0; i < robotOrder.length; i++) {
+      var name = robotOrder[i];
+      var r = robots[name];
+      if (!r || !r.visible) continue;
+
+      var hits = raycaster.intersectObject(r.group, true);
+      if (hits.length > 0) {
+        selectRobot(name);
+        return;
+      }
+    }
+
+    // Clicked empty space — deselect
+    selectRobot(null);
+  }
+
+  function addDirLight(x, y, z, intensity) {
+    var light = new THREE_NS.DirectionalLight(0xffffff, intensity);
+    light.position.set(x, y, z);
+    light.castShadow = true;
+    scene.add(light);
+  }
+
+  function makeAxes(len) {
+    var g = new THREE_NS.Group();
+    var matR = new THREE_NS.MeshBasicMaterial({ color: 0xff0000 });
+    var matG = new THREE_NS.MeshBasicMaterial({ color: 0x00ff00 });
+    var matB = new THREE_NS.MeshBasicMaterial({ color: 0x0000ff });
+    function arrow(mat, dir) {
+      var shaft = new THREE_NS.Mesh(
+        new THREE_NS.CylinderGeometry(0.005, 0.005, len, 8),
+        mat
+      );
+      shaft.position.copy(dir.clone().multiplyScalar(len / 2));
+      shaft.quaternion.setFromUnitVectors(new THREE_NS.Vector3(0, 1, 0), dir);
+      g.add(shaft);
+    }
+    arrow(matR, new THREE_NS.Vector3(1, 0, 0));
+    arrow(matG, new THREE_NS.Vector3(0, 1, 0));
+    arrow(matB, new THREE_NS.Vector3(0, 0, 1));
+    return g;
+  }
+
+  // ── Selection highlight ──
+
+  function selectRobot(varName) {
+    // Remove old highlight
+    if (selectionBox) {
+      scene.remove(selectionBox);
+      selectionBox.dispose();
+      selectionBox = null;
+    }
+    // Remove old axes gizmo
+    if (selectionAxes) {
+      scene.remove(selectionAxes);
+      selectionAxes = null;
+    }
+
+    if (varName && robots[varName] && robots[varName].visible) {
+      selectedRobot = varName;
+      var r = robots[varName];
+      selectionBox = new THREE_NS.BoxHelper(r.group, 0x00aaff);
+      selectionBox.material.linewidth = 2;
+      scene.add(selectionBox);
+
+      // Axes gizmo at the robot's base position
+      selectionAxes = makeAxesGizmo();
+      selectionAxes.position.set(r.pose.x, r.pose.y, r.pose.z);
+      scene.add(selectionAxes);
+    } else {
+      selectedRobot = null;
+    }
+
+    // Notify listener
+    if (onSelectionChange) {
+      onSelectionChange(selectedRobot);
+    }
+  }
+
+  function getSelectedRobot() {
+    return selectedRobot;
+  }
+
+  function setOnSelectionChange(cb) {
+    onSelectionChange = cb;
+  }
+
+  function tick() {
+    if (!renderer) return;
+    animFrameId = requestAnimationFrame(tick);
+    if (controls) controls.update();
+    // Keep selection box in sync with the robot's animated pose
+    if (selectionBox) selectionBox.update();
+    // Keep axes gizmo at selected robot's base
+    if (selectionAxes && selectedRobot && robots[selectedRobot]) {
+      var sp = robots[selectedRobot].pose;
+      selectionAxes.position.set(sp.x, sp.y, sp.z);
+    }
+    // Keep name tags positioned above each robot
+    for (var ti = 0; ti < robotOrder.length; ti++) {
+      var tr = robots[robotOrder[ti]];
+      if (tr && tr.nameTag) {
+        tr.nameTag.position.set(tr.pose.x, tr.pose.y, tr.pose.z + TAG_HEIGHT);
+      }
+    }
+    renderer.render(scene, camera);
+  }
+
+  // ── Public API ──
+
+  /**
+   * Ensure a robot for the given variable name is loaded into the world scene.
+   * Returns a promise that resolves when the robot is ready.
+   */
+  function addRobot(varName) {
+    if (robots[varName]) return Promise.resolve();
+
+    return ensureThree().then(function() {
+      var containerEl = document.getElementById('world-canvas');
+      if (!containerEl) return Promise.reject(new Error('#world-canvas not found'));
+      initScene(containerEl);
+
+      return loadURDF(
+        './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
+        './resources/wlkata_arm_virtual-reality/'
+      );
+    }).then(function(result) {
+      // Default position: space along X axis
+      var index = robotOrder.length;
+      var offsetX = (index - (index) / 2) * ROBOT_SPACING;
+
+      scene.add(result.group);
+
+      // Create floating name tag (added to scene, not robot group,
+      // so it doesn't inflate the BoxHelper bounding box or catch raycasts)
+      var model = 'Mirobot';
+      if (typeof getRobotModelForVarName === 'function') {
+        model = getRobotModelForVarName(varName) || model;
+      }
+      var nameTag = makeNameTag(varName + ' (' + model + ')');
+      scene.add(nameTag);
+
+      var pose = { x: offsetX, y: 0, z: 0, rotZ: 0 };
+      robots[varName] = {
+        group: result.group,
+        joints: result.joints,
+        currentAngles: [0, 0, 0, 0, 0, 0],
+        pose: pose,
+        visible: true,
+        nameTag: nameTag
+      };
+      robotOrder.push(varName);
+
+      // Apply initial pose and re-center
+      repositionAllRobots();
+
+      console.log('[WorldViewer] Robot added for:', varName, 'at pose:', pose);
+    });
+  }
+
+  /**
+   * Apply a robot's stored pose to its Three.js group.
+   * Pose is in metres (x, y, z) and degrees (rotZ).
+   */
+  function applyRobotPose(r) {
+    r.group.position.set(r.pose.x, r.pose.y, r.pose.z);
+    // Only rotate around Z axis (upright robots)
+    r.group.rotation.set(0, 0, r.pose.rotZ * Math.PI / 180);
+  }
+
+  /**
+   * Re-apply all robot poses. Called after adding a new robot
+   * to assign default spacing.
+   */
+  function repositionAllRobots() {
+    // Re-center default poses: evenly space visible robots around X=0
+    var visibleNames = [];
+    for (var i = 0; i < robotOrder.length; i++) {
+      var name = robotOrder[i];
+      var r = robots[name];
+      if (r && r.visible) visibleNames.push(name);
+    }
+    var count = visibleNames.length;
+    for (var i = 0; i < count; i++) {
+      var r = robots[visibleNames[i]];
+      // Only update X if the robot is still at its auto-assigned position
+      // (i.e., hasn't been manually moved yet)
+      if (!r._userMoved) {
+        r.pose.x = (i - (count - 1) / 2) * ROBOT_SPACING;
+      }
+      applyRobotPose(r);
+    }
+  }
+
+  /**
+   * Set the world pose of a specific robot.
+   * @param {string} varName
+   * @param {{x?:number, y?:number, z?:number, rotZ?:number}} pose — in metres and degrees
+   */
+  function setRobotPose(varName, pose) {
+    var r = robots[varName];
+    if (!r) return;
+    if (pose.x !== undefined) r.pose.x = pose.x;
+    if (pose.y !== undefined) r.pose.y = pose.y;
+    if (pose.z !== undefined) r.pose.z = pose.z;
+    if (pose.rotZ !== undefined) r.pose.rotZ = pose.rotZ;
+    r._userMoved = true;
+    applyRobotPose(r);
+  }
+
+  /**
+   * Get the world pose of a specific robot.
+   * @returns {{x:number, y:number, z:number, rotZ:number}} in metres and degrees
+   */
+  function getRobotPose(varName) {
+    var r = robots[varName];
+    if (!r) return { x: 0, y: 0, z: 0, rotZ: 0 };
+    return {
+      x: r.pose.x,
+      y: r.pose.y,
+      z: r.pose.z,
+      rotZ: r.pose.rotZ
+    };
+  }
+
+  /**
+   * Show or hide a robot in the world scene.
+   */
+  function setRobotVisible(varName, visible) {
+    var r = robots[varName];
+    if (!r) return;
+    r.visible = visible;
+    r.group.visible = visible;
+    if (r.nameTag) r.nameTag.visible = visible;
+    // Clear selection if the hidden robot was selected
+    if (!visible && selectedRobot === varName) {
+      selectRobot(null);
+    }
+  }
+
+  /**
+   * Check if a robot is currently visible in the world.
+   */
+  function isRobotVisible(varName) {
+    var r = robots[varName];
+    return r ? r.visible : false;
+  }
+
+  /**
+   * Get only the visible robot names.
+   */
+  function getVisibleRobotNames() {
+    var result = [];
+    for (var i = 0; i < robotOrder.length; i++) {
+      var name = robotOrder[i];
+      var r = robots[name];
+      if (r && r.visible) result.push(name);
+    }
+    return result;
+  }
+
+  /**
+   * Set joint angles for a specific robot.
+   */
+  function setJoints(varName, angles) {
+    var r = robots[varName];
+    if (!r) return;
+    for (var i = 0; i < 6; i++) {
+      r.currentAngles[i] = angles[i] || 0;
+    }
+    applyJoints(r.joints, r.currentAngles);
+  }
+
+  /**
+   * Get current joint angles for a specific robot.
+   */
+  function getJoints(varName) {
+    var r = robots[varName];
+    if (!r) return [0, 0, 0, 0, 0, 0];
+    return r.currentAngles.slice();
+  }
+
+  /**
+   * Get list of robot variable names currently in the world.
+   */
+  function getRobotNames() {
+    return robotOrder.slice();
+  }
+
+  /**
+   * Check if a robot is loaded.
+   */
+  function hasRobot(varName) {
+    return !!robots[varName];
+  }
+
+  /**
+   * Check if the world scene is initialized.
+   */
+  function isInitialized() {
+    return initialized;
+  }
+
+  window.WorldViewer = {
+    addRobot: addRobot,
+    setJoints: setJoints,
+    getJoints: getJoints,
+    getRobotNames: getRobotNames,
+    getVisibleRobotNames: getVisibleRobotNames,
+    hasRobot: hasRobot,
+    setRobotVisible: setRobotVisible,
+    isRobotVisible: isRobotVisible,
+    isInitialized: isInitialized,
+    selectRobot: selectRobot,
+    getSelectedRobot: getSelectedRobot,
+    setOnSelectionChange: setOnSelectionChange,
+    setRobotPose: setRobotPose,
+    getRobotPose: getRobotPose
+  };
+})();

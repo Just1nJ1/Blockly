@@ -269,9 +269,53 @@
             </div>
           </div>
 
-          <!-- Model mode: full-size 3D viewer (scene created lazily on tab click) -->
-          <div id="model-area" style="position:relative;">
-            <!-- progress bars are created per-variable in createModelScene -->
+          <!-- Model mode: 3D viewer + side control panel -->
+          <div id="model-area">
+            <div id="viewer-canvas" style="position:relative;">
+              <!-- Three.js canvas and progress bars are injected here -->
+            </div>
+            <div id="world-canvas" style="position:relative; display:none;">
+              <!-- World view: multiple robots in one scene -->
+            </div>
+            <div id="viewer-panel">
+              <div id="viewer-panel-header">Viewer Controls</div>
+              <div id="viewer-panel-content">
+                <!-- Animation section -->
+                <div class="viewer-section">
+                  <div class="viewer-section-title">Animation</div>
+                  <div class="viewer-playback-controls">
+                    <button id="anim-play-btn" class="viewer-playback-btn" title="Play">▶</button>
+                    <button id="anim-pause-btn" class="viewer-playback-btn" title="Pause" disabled>⏸</button>
+                    <button id="anim-stop-btn" class="viewer-playback-btn" title="Stop" disabled>⏹</button>
+                  </div>
+                  <div class="viewer-control-row">
+                    <label for="loop-toggle">Loop playback</label>
+                    <button id="loop-toggle-btn" class="viewer-toggle active" title="Toggle loop playback">ON</button>
+                  </div>
+                </div>
+                <!-- Robots section (visible only in world mode) -->
+                <div class="viewer-section" id="world-robots-section" style="display:none;">
+                  <div class="viewer-section-title">Robots</div>
+                  <div id="world-robot-list">
+                    <!-- Populated dynamically by viewTabs.js -->
+                  </div>
+                </div>
+                <!-- Properties section (visible when a robot is selected in world mode) -->
+                <div class="viewer-section" id="robot-properties-section" style="display:none;">
+                  <div class="viewer-section-title">Properties — <span id="props-robot-name"></span></div>
+                  <div class="viewer-props-grid">
+                    <label class="viewer-prop-label" data-target="prop-x">X (m)</label>
+                    <input type="number" id="prop-x" step="0.01" class="viewer-prop-input">
+                    <label class="viewer-prop-label" data-target="prop-y">Y (m)</label>
+                    <input type="number" id="prop-y" step="0.01" class="viewer-prop-input">
+                    <label class="viewer-prop-label" data-target="prop-z">Z (m)</label>
+                    <input type="number" id="prop-z" step="0.01" class="viewer-prop-input">
+                    <label class="viewer-prop-label" data-target="prop-rot-z">Rotation Z (°)</label>
+                    <input type="number" id="prop-rot-z" step="1" class="viewer-prop-input">
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -349,6 +393,8 @@
   <!-- Robot Viewer: Code Analysis, Animation, View Tabs -->
   <script src="js/robotViewer/codeAnalysis.js"></script>
   <script src="js/robotViewer/animation.js"></script>
+  <script src="js/robotViewer/worldViewer.js"></script>
+  <script src="js/robotViewer/worldAnimation.js"></script>
   <script src="js/robotViewer/viewTabs.js"></script>
 </body>
 </html>

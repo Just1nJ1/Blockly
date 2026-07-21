@@ -16,6 +16,8 @@
         moveStartTime: null,
         pausedState: null,
         savedJoints: [0, 0, 0, 0, 0, 0],
+        loopEnabled: true,
+        animationDone: false,  // true when play-once finishes
         progressEl: null,
         progressLabel: null,
         progressFill: null,
@@ -196,7 +198,18 @@
 
     function runSequence() {
       if (st.moveIndex >= moves.length) {
-        // All moves done — stay, then reset to home and loop
+        if (!st.loopEnabled) {
+          // Play-once mode: show "Done", keep final pose, stop
+          st.animationDone = true;
+          if (st.progressEl) st.progressEl.style.display = '';
+          if (st.progressFill) {
+            st.progressFill.style.width = '100%';
+            st.progressFill.style.background = '#9E9E9E';
+          }
+          if (st.progressLabel) st.progressLabel.textContent = 'Done';
+          return;
+        }
+        // Loop mode: stay, then reset to home and loop
         startPhase(varName, 'stay', ANIM_CONSTS.STAY_DUR);
         st.animationTimer = setTimeout(function() {
           viewer.setJoints([0, 0, 0, 0, 0, 0]);
@@ -226,35 +239,40 @@
     }
 
     // Resume from paused state
-    if (resumeFrom && resumeFrom.elapsedInMove < ANIM_CONSTS.MOVE_DUR
-        && resumeFrom.moveIndex < moves.length) {
-      var resumeMove = moves[resumeFrom.moveIndex];
-      var frac = resumeFrom.elapsedInMove / ANIM_CONSTS.MOVE_DUR;
-      var remaining = ANIM_CONSTS.MOVE_DUR - resumeFrom.elapsedInMove;
+    if (resumeFrom && resumeFrom.moveIndex <= moves.length) {
+      if (resumeFrom.elapsedInMove < ANIM_CONSTS.MOVE_DUR
+          && resumeFrom.moveIndex < moves.length) {
+        // Paused mid-move — finish the interrupted move from current position
+        var resumeMove = moves[resumeFrom.moveIndex];
+        var remaining = ANIM_CONSTS.MOVE_DUR - resumeFrom.elapsedInMove;
 
-      var targetJoints = targetJointsFromMove(resumeMove);
-      // Current joints are already at the paused interpolation point (saved by viewTabs)
-      var currentJoints = viewer.getJoints();
+        var targetJoints = targetJointsFromMove(resumeMove);
+        var currentJoints = viewer.getJoints();
 
-      st.moveStartTime = Date.now() - resumeFrom.elapsedInMove;
-      st.currentTargetJoints = targetJoints;
-      st.currentStartJoints = currentJoints;
+        st.moveStartTime = Date.now() - resumeFrom.elapsedInMove;
+        st.currentTargetJoints = targetJoints;
+        st.currentStartJoints = currentJoints;
 
-      // Animate from current position to target over the remaining time
-      animateJoints(varName, currentJoints, targetJoints, remaining);
+        // Animate from current position to target over the remaining time
+        animateJoints(varName, currentJoints, targetJoints, remaining);
 
-      st.moveIndex = resumeFrom.moveIndex + 1;
-      st.phase = 'move';
-      st.phaseStart = Date.now() - resumeFrom.elapsedInMove;
-      st.phaseDuration = ANIM_CONSTS.MOVE_DUR;
-      st.moveDisplay = (resumeFrom.moveIndex + 1) + '/' + moves.length;
-      if (st.progressEl) st.progressEl.style.display = '';
-      st.rafId = requestAnimationFrame(function() { tickProgress(varName); });
+        st.moveIndex = resumeFrom.moveIndex + 1;
+        st.phase = 'move';
+        st.phaseStart = Date.now() - resumeFrom.elapsedInMove;
+        st.phaseDuration = ANIM_CONSTS.MOVE_DUR;
+        st.moveDisplay = (resumeFrom.moveIndex + 1) + '/' + moves.length;
+        if (st.progressEl) st.progressEl.style.display = '';
+        st.rafId = requestAnimationFrame(function() { tickProgress(varName); });
 
-      st.animationTimer = setTimeout(function() {
-        startPhase(varName, 'interval', ANIM_CONSTS.INTERVAL);
-        st.animationTimer = setTimeout(runSequence, ANIM_CONSTS.INTERVAL);
-      }, remaining);
+        st.animationTimer = setTimeout(function() {
+          startPhase(varName, 'interval', ANIM_CONSTS.INTERVAL);
+          st.animationTimer = setTimeout(runSequence, ANIM_CONSTS.INTERVAL);
+        }, remaining);
+      } else {
+        // Paused during interval — the move was complete, continue from next step
+        st.moveIndex = resumeFrom.moveIndex;
+        st.animationTimer = setTimeout(runSequence, 100);
+      }
       return;
     }
 
@@ -265,6 +283,11 @@
   function pauseVarAnimation(varName) {
     if (!varName) return;
     var st = getVariableState(varName);
+
+    // Nothing to pause if no animation is active
+    var hasActivity = st.animationTimer !== null || st.animRafId !== null;
+    if (!hasActivity) return;
+
     var now = Date.now();
     var elapsed = st.moveStartTime ? (now - st.moveStartTime) : 0;
     var moves = window.parseMovesFromCode(varName);
@@ -282,9 +305,12 @@
     }
 
     if (animIdx !== null && elapsed < ANIM_CONSTS.MOVE_DUR) {
+      // Paused mid-move — save the move index and how far we got
       st.pausedState = { moveIndex: animIdx, elapsedInMove: elapsed };
     } else {
-      st.pausedState = null;
+      // Paused during interval or between moves — save the next step index
+      // so we can resume from the right position instead of restarting
+      st.pausedState = { moveIndex: st.moveIndex, elapsedInMove: ANIM_CONSTS.MOVE_DUR };
     }
   }
 
@@ -293,13 +319,57 @@
     startVarAnimation(varName, st.pausedState);
   }
 
+  /**
+   * Stop animation and reset robot to home position.
+   */
+  function stopVarAnimation(varName) {
+    if (!varName) return;
+    var st = getVariableState(varName);
+    if (st.animationTimer) { clearTimeout(st.animationTimer); st.animationTimer = null; }
+    if (st.animRafId) { cancelAnimationFrame(st.animRafId); st.animRafId = null; }
+    stopProgress(varName);
+    if (st.progressEl) st.progressEl.style.display = 'none';
+
+    st.moveIndex = 0;
+    st.pausedState = null;
+    st.animationDone = false;
+
+    var viewer = window._robotViewer;
+    if (viewer) {
+      viewer.setJoints([0, 0, 0, 0, 0, 0]);
+    }
+    st.savedJoints = [0, 0, 0, 0, 0, 0];
+  }
+
+  /**
+   * Toggle loop mode for a variable and restart its animation from the beginning.
+   */
+  function setLoopEnabled(varName, enabled) {
+    var st = getVariableState(varName);
+    st.loopEnabled = enabled;
+    st.animationDone = false;
+
+    // Restart animation from the beginning
+    var viewer = window._robotViewer;
+    if (viewer) {
+      viewer.setJoints([0, 0, 0, 0, 0, 0]);
+    }
+    st.moveIndex = 0;
+    st.pausedState = null;
+    st.savedJoints = [0, 0, 0, 0, 0, 0];
+    startVarAnimation(varName, null);
+  }
+
   // Expose globally
   window.RobotAnimation = {
     ANIM_CONSTS: ANIM_CONSTS,
     getVariableState: getVariableState,
     getMovesSignature: getMovesSignature,
+    targetJointsFromMove: targetJointsFromMove,
     startVarAnimation: startVarAnimation,
     pauseVarAnimation: pauseVarAnimation,
-    resumeVarAnimation: resumeVarAnimation
+    resumeVarAnimation: resumeVarAnimation,
+    stopVarAnimation: stopVarAnimation,
+    setLoopEnabled: setLoopEnabled
   };
 })();
