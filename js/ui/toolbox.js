@@ -117,22 +117,66 @@ function getToolboxConfig() {
           { kind: 'block', type: 'setup_robot' },
           { kind: 'block', type: 'robot_homing' },
           { kind: 'block', type: 'robot_zero' },
-          { kind: 'block', type: 'robot_speed' },
-          { kind: 'block', type: 'write_coordinate' },
-          { kind: 'block', type: 'write_angle' },
+          { kind: 'block', type: 'robot_speed',
+            inputs: {
+              SPEED: { shadow: { type: 'math_number', fields: { NUM: 0 } } }
+            }
+          },
+          { kind: 'block', type: 'write_coordinate',
+            inputs: {
+              AXIS_X: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_Y: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_Z: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_A: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_B: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_C: { shadow: { type: 'math_number', fields: { NUM: 0 } } }
+            }
+          },
+          { kind: 'block', type: 'write_angle',
+            inputs: {
+              AXIS_X: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_Y: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_Z: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_A: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_B: { shadow: { type: 'math_number', fields: { NUM: 0 } } },
+              AXIS_C: { shadow: { type: 'math_number', fields: { NUM: 0 } } }
+            }
+          },
           { kind: 'block', type: 'robot_wait_idle' },
-          { kind: 'block', type: 'robot_send_msg' },
+          { kind: 'block', type: 'robot_send_msg',
+            inputs: {
+              MESSAGE: { shadow: { type: 'text', fields: { TEXT: '' } } }
+            }
+          },
           { kind: 'block', type: 'robot_delay',
             inputs: {
               TIME: {
-                shadow: { type: 'math_number', fields: { NUM: 0 } }
+                shadow: { type: 'math_number', fields: { NUM: 1 } }
               }
             }
           },
+        ],
+      },
+      {
+        kind: 'category',
+        name: 'Accessories',
+        colour: '#16A085',
+        contents: [
           { kind: 'block', type: 'robot_pump' },
           { kind: 'block', type: 'robot_gripper' },
           { kind: 'block', type: 'robot_three_finger' },
+          { kind: 'block', type: 'robot_conveyor',
+            inputs: {
+              D: { shadow: { type: 'math_number', fields: { NUM: 0 } } }
+            }
+          },
         ],
+      },
+      {
+        kind: 'category',
+        name: 'Workflows',
+        colour: '#5B8C5A',
+        contents: [],
       },
       {
         kind: 'category',
@@ -147,6 +191,56 @@ function getToolboxConfig() {
       },
     ],
   };
+}
+
+/**
+ * Fill the Workflows toolbox category from WorkflowRegistry and refresh the toolbox.
+ * Safe to call after templates load or when registry changes.
+ */
+function refreshWorkflowsToolbox() {
+  const workspace = getWorkspace ? getWorkspace() : null;
+  if (!workspace || !workspace.initialToolbox) return;
+
+  const templates = (window.WorkflowRegistry && window.WorkflowRegistry.getAll)
+    ? window.WorkflowRegistry.getAll()
+    : [];
+
+  const contents = templates.map(function(t) {
+    return {
+      kind: 'block',
+      type: 'workflow_run',
+      extraState: {
+        templateId: t.id,
+        slots: {},
+        context: {}
+      }
+    };
+  });
+
+  const cats = workspace.initialToolbox.contents;
+  let found = false;
+  for (let i = 0; i < cats.length; i++) {
+    if (cats[i].kind === 'category' && cats[i].name === 'Workflows') {
+      cats[i].contents = contents;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    cats.push({
+      kind: 'category',
+      name: 'Workflows',
+      colour: '#5B8C5A',
+      contents: contents
+    });
+  }
+
+  // Rebuild toolbox (preserves dynamic module categories via updateToolboxDisplay)
+  if (typeof updateToolboxDisplay === 'function') {
+    updateToolboxDisplay();
+  } else {
+    workspace.updateToolbox(JSON.parse(JSON.stringify(workspace.initialToolbox)));
+  }
 }
 
 /**

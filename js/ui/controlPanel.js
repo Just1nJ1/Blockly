@@ -22,9 +22,9 @@
         { label: 'X', statusKey: 'X', sdkParam: 'x' },
         { label: 'Y', statusKey: 'Y', sdkParam: 'y' },
         { label: 'Z', statusKey: 'Z', sdkParam: 'z' },
-        { label: 'A', statusKey: 'Rx', sdkParam: 'a' },
-        { label: 'B', statusKey: 'Ry', sdkParam: 'b' },
-        { label: 'C', statusKey: 'Rz', sdkParam: 'c' }
+        { label: 'RX', statusKey: 'Rx', sdkParam: 'a' },
+        { label: 'RY', statusKey: 'Ry', sdkParam: 'b' },
+        { label: 'RZ', statusKey: 'Rz', sdkParam: 'c' }
       ]
     },
     'MT4': {
@@ -38,7 +38,7 @@
         { label: 'X', statusKey: 'X', sdkParam: 'x' },
         { label: 'Y', statusKey: 'Y', sdkParam: 'y' },
         { label: 'Z', statusKey: 'Z', sdkParam: 'z' },
-        { label: 'A', statusKey: 'Rx', sdkParam: 'a' }
+        { label: 'RX', statusKey: 'Rx', sdkParam: 'a' }
       ]
     }
   };
@@ -115,10 +115,11 @@
         plusBtn.textContent = '+';
         plusBtn.addEventListener('click', function() { jog(axis.sdkParam, _stepSize); });
 
+        // Layout: name | − | + | value  (four equal columns, each centered)
         row.appendChild(label);
         row.appendChild(minusBtn);
-        row.appendChild(valueInput);
         row.appendChild(plusBtn);
+        row.appendChild(valueInput);
         container.appendChild(row);
       })(axes[i]);
     }
@@ -339,6 +340,14 @@
     refreshStatus(true);  // force query on first connect (no cached status yet)
     startStatusPolling();
 
+    // Built-in virtual devices: no firmware update checks (not real hardware).
+    // Manually added ports can still be real devices — keep update flow for them.
+    if (isVirtualPort(port)) {
+      _portFirmwareVersions[port] = { extender: null, robot: 'virtual', virtual: true };
+      dismissFirmwareUpdateNotification();
+      return;
+    }
+
     // Fetch firmware version once on connect (cached until disconnect)
     if (!_portFirmwareVersions[port]) {
       fetch(getServerUrl() + '/cmd/firmware-version', {
@@ -354,21 +363,44 @@
         }
       })
       .catch(function() {});
+    } else {
+      checkFirmwareUpdates(port);
     }
+  }
+
+  /** Built-in VirtualMirobot / VirtualMT4 — not flashable. */
+  function isVirtualPort(port) {
+    return port === 'VirtualMirobot' || port === 'VirtualMT4';
   }
 
   // ── Firmware update check ──
 
   var _pendingUpdates = {};  // port -> { extender: {current,latest,url}|null, robot: ... }
 
+  function dismissFirmwareUpdateNotification() {
+    var panel = document.querySelector('.ctrl-panel');
+    if (!panel) return;
+    var existing = panel.querySelector('.ctrl-fw-update-bar');
+    if (existing) existing.remove();
+  }
+
   function checkFirmwareUpdates(port) {
+    if (isVirtualPort(port)) {
+      dismissFirmwareUpdateNotification();
+      return;
+    }
     var versions = _portFirmwareVersions[port];
-    if (!versions) return;
+    if (!versions || versions.virtual) return;
 
     fetch(getServerUrl() + '/cmd/check-firmware-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ extender: versions.extender, robot: versions.robot, model: _currentModel })
+      body: JSON.stringify({
+        extender: versions.extender,
+        robot: versions.robot,
+        model: _currentModel,
+        port: port
+      })
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -397,6 +429,8 @@
   }
 
   function showFirmwareUpdateNotification(port, updates) {
+    if (isVirtualPort(port)) return;
+
     // Build notification text
     var parts = [];
     if (updates.extender) {
@@ -719,6 +753,21 @@
     var armBtn = document.getElementById('ctrl-settings-arm-fw-btn');
     if (!exBtn || !armBtn) return;
 
+    // Built-in virtual devices: never offer flash/update
+    if (isVirtualPort(_currentPort) || versions.virtual) {
+      exBtn.disabled = true;
+      armBtn.disabled = true;
+      exBtn.textContent = '\u21E7 Extender Box';
+      armBtn.textContent = '\u21E7 Robot Arm';
+      exBtn.classList.remove('ctrl-btn-fw-force');
+      armBtn.classList.remove('ctrl-btn-fw-force');
+      exBtn.title = 'Firmware update is not available on virtual devices';
+      armBtn.title = 'Firmware update is not available on virtual devices';
+      return;
+    }
+    exBtn.title = '';
+    armBtn.title = '';
+
     // Normal rules:
     // - ExBox button enabled if extender firmware detected
     // - Robot arm button enabled if robot firmware detected AND extender NOT detected
@@ -726,7 +775,7 @@
     var armAvail = !!versions.robot && !versions.extender;
 
     if (isDeveloperMode()) {
-      // Developer mode: both always enabled
+      // Developer mode: both always enabled (real / manual ports only)
       exBtn.disabled  = false;
       armBtn.disabled = false;
 
@@ -765,8 +814,13 @@
 
     // Populate firmware version display and button states
     var versions = _portFirmwareVersions[_currentPort] || {};
-    document.getElementById('ctrl-settings-ext-ver').textContent   = versions.extender || '—';
-    document.getElementById('ctrl-settings-robot-ver').textContent = versions.robot    || '—';
+    if (isVirtualPort(_currentPort) || versions.virtual) {
+      document.getElementById('ctrl-settings-ext-ver').textContent   = '—';
+      document.getElementById('ctrl-settings-robot-ver').textContent = 'virtual (not flashable)';
+    } else {
+      document.getElementById('ctrl-settings-ext-ver').textContent   = versions.extender || '—';
+      document.getElementById('ctrl-settings-robot-ver').textContent = versions.robot    || '—';
+    }
 
     updateFirmwareButtons();
 

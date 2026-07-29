@@ -26,6 +26,7 @@ import serial.tools.list_ports
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .serial_manager import SerialManager
 from .robots import FW_PREFIX_MAP
+from .virtual_serial import is_virtual_port, virtual_device_entries, VIRTUAL_DEVICES
 
 
 # Cache: port_device_path -> {model, description}
@@ -42,10 +43,38 @@ _probing = {}
 # Manually added ports — protected from eviction and unregistration
 _manual_ports = set()
 
+# Built-in virtual ports (always available, never evicted)
+_virtual_ports = {d['port'] for d in VIRTUAL_DEVICES}
+
+
+def _seed_virtual_ports():
+    """Ensure VirtualMirobot / VirtualMT4 exist in the cache permanently."""
+    for d in virtual_device_entries():
+        port = d['port']
+        if port not in _cache or _cache[port].get('model') is None:
+            _cache[port] = {
+                'model': d['model'],
+                'description': d.get('description') or '(virtual)',
+            }
+        _missing.discard(port)
+
+
+_seed_virtual_ports()
+
 
 def add_manual_port(port, model, description=''):
     """Register a manually added port. It gets cached and connected
     through the same pipeline as auto-detected ports."""
+    if is_virtual_port(port):
+        # Virtual ports are always present; just (re)connect with model
+        _cache[port] = {
+            'model': model or _cache.get(port, {}).get('model'),
+            'description': description or '(virtual)',
+        }
+        mgr = SerialManager.get_instance()
+        if model:
+            mgr.ensure_connected(port, model=model)
+        return
     _cache[port] = {'model': model, 'description': description or '(manual)'}
     _manual_ports.add(port)
     _missing.discard(port)
@@ -55,7 +84,10 @@ def add_manual_port(port, model, description=''):
 
 
 def remove_manual_port(port):
-    """Remove a manually added port and unregister it."""
+    """Remove a manually added port and unregister it.
+    Built-in virtual ports cannot be removed."""
+    if is_virtual_port(port):
+        return
     _manual_ports.discard(port)
     _cache.pop(port, None)
     mgr = SerialManager.get_instance()
@@ -297,12 +329,18 @@ def scan_devices():
     all_ports = _dedup_platform_ports(all_ports)
     current_devices = {p.device for p in all_ports}
 
+    # Keep virtual devices seeded every scan
+    _seed_virtual_ports()
+
     # --- Evict ports that have been missing for two consecutive scans ---
-    # Manual ports are never evicted.
-    still_missing = _missing - current_devices - _manual_ports
+    # Manual + virtual ports are never evicted.
+    still_missing = _missing - current_devices - _manual_ports - _virtual_ports
     for port in still_missing:
         _cache.pop(port, None)
-    _missing = {p for p in _cache if p not in current_devices and p not in _manual_ports}
+    _missing = {
+        p for p in _cache
+        if p not in current_devices and p not in _manual_ports and p not in _virtual_ports
+    }
 
     # --- Identify which ports need probing ---
     # Skip ports already cached, already being probed, or locked for flashing
@@ -346,6 +384,7 @@ def scan_devices():
                 'model': info['model'],
                 'connected': conn.connected if conn else False,
                 'manual': device in _manual_ports,
+                'virtual': device in _virtual_ports,
             })
 
     # Include ports currently being probed (show as "Detecting...")
@@ -365,10 +404,19 @@ def scan_devices():
             })
 
     # Unregister ports that were previously registered but no longer detected
-    # Manual ports are never unregistered by the scan cycle.
+    # Manual + virtual ports are never unregistered by the scan cycle.
     for reg in mgr.get_registered_ports():
-        if reg['port'] not in current_robot_ports and reg['port'] not in _cache and reg['port'] not in _manual_ports:
+        if (reg['port'] not in current_robot_ports
+                and reg['port'] not in _cache
+                and reg['port'] not in _manual_ports
+                and reg['port'] not in _virtual_ports):
             mgr.unregister_port(reg['port'])
 
-    results.sort(key=lambda r: r['port'])
+    # Virtual ports first so they stay visible even with real hardware
+    def _sort_key(r):
+        if r.get('virtual'):
+            return (0, r['port'])
+        return (1, r['port'])
+
+    results.sort(key=_sort_key)
     return {'ports': results}

@@ -675,6 +675,41 @@ ipcMain.handle('dialog:createFolder', async () => {
 });
 
 /**
+ * Native "Save As" file dialog.
+ * opts: { title?, defaultPath?, filters? }
+ * Returns absolute file path, or null if cancelled.
+ */
+ipcMain.handle('dialog:saveFile', async (event, opts = {}) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: opts.title || 'Save File',
+    defaultPath: opts.defaultPath || undefined,
+    filters: opts.filters || [{ name: 'All Files', extensions: ['*'] }],
+    buttonLabel: opts.buttonLabel || 'Save',
+  });
+  if (result.canceled || !result.filePath) return null;
+  return result.filePath;
+});
+
+/**
+ * Native "Open File" dialog.
+ * opts: { title?, defaultPath?, filters?, multiSelections? }
+ * Returns path string (or array if multi), or null if cancelled.
+ */
+ipcMain.handle('dialog:openFile', async (event, opts = {}) => {
+  const props = ['openFile'];
+  if (opts.multiSelections) props.push('multiSelections');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: opts.title || 'Open File',
+    defaultPath: opts.defaultPath || undefined,
+    filters: opts.filters || [{ name: 'All Files', extensions: ['*'] }],
+    properties: props,
+    buttonLabel: opts.buttonLabel || 'Open',
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return opts.multiSelections ? result.filePaths : result.filePaths[0];
+});
+
+/**
  * Open a firmware file using the native OS file picker.
  * Defaults to the resources/firmware folder in the app.
  * Returns { path, name } or null if cancelled.

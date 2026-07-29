@@ -100,13 +100,22 @@ class PortConnection:
 
     def connect(self, existing_serial=None):
         """Connect to the port. If existing_serial is provided, reuse it
-        instead of opening a new connection (faster, avoids reconnect delay)."""
+        instead of opening a new connection (faster, avoids reconnect delay).
+        Virtual ports use an in-memory serial simulator (no hardware)."""
         if self.connected:
             self.disconnect()
         try:
-            if existing_serial and existing_serial.is_open:
+            from .virtual_serial import is_virtual_port, VirtualSerial
+
+            if existing_serial and getattr(existing_serial, 'is_open', False):
                 self._serial = existing_serial
-                self._serial.timeout = 0.1  # ensure correct timeout
+                if hasattr(self._serial, 'timeout'):
+                    self._serial.timeout = 0.1
+            elif is_virtual_port(self.port):
+                self._serial = VirtualSerial(
+                    self.port, model=self.model or 'Mirobot',
+                    baudrate=self.baudrate, timeout=0.1,
+                )
             else:
                 self._serial = serial.Serial(self.port, self.baudrate, timeout=0.1)
 
@@ -120,10 +129,14 @@ class PortConnection:
             self._init_robot()
 
             # Enable auto-report: robot sends status after each movement completes
-            time.sleep(0.3)
+            time.sleep(0.05 if is_virtual_port(self.port) else 0.3)
             self._serial.write(b'$40=1\r\n')
 
-            self.add_history('sys', f'Connected to {self.port} ({self.model or "unknown"})')
+            kind = 'virtual' if is_virtual_port(self.port) else 'serial'
+            self.add_history(
+                'sys',
+                f'Connected to {self.port} ({self.model or "unknown"}, {kind})',
+            )
             return True
         except Exception as e:
             self.connected = False

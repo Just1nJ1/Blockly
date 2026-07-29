@@ -13,6 +13,13 @@
     lastAnalysis: null,
     // movesByVar from server dry-run: { arm: [move, ...], ... }
     recordedMoves: null,
+    // waitIdle-aware segments (legacy coarse split)
+    recordedSegments: null,
+    // Concurrent schedule: [{ var, start, end, move }, ...] unit time slots
+    // start/end are integers; real waitIdle semantics (see move_simulator).
+    recordedSchedule: null,
+    // Named timeline from dry-run (for client-side schedule rebuild)
+    recordedTimeline: null,
     // source code fingerprint that recordedMoves was built from
     recordedMovesCode: null,
     // true while a /simulate-moves request is in flight
@@ -21,9 +28,12 @@
     recordError: null
   };
 
+  // Match any wlkatapython robot constructor: Mirobot_UART, MT4_UART, E4_UART, etc.
+  var ROBOT_CTOR_RE = /^(\w+)\s*=\s*wlkatapython\.(\w+_UART)\s*\(/;
+
   // Parse the generated Python code into structural info:
-  //   - which variables are direct Mirobot_UART assignments at top level
-  //   - which functions internally create Mirobot_UART and return it
+  //   - which variables are direct robot UART assignments at top level
+  //   - which functions internally create a robot UART and return it
   //   - which variables are assigned from calling those functions
   function analyzeRobotCode(code) {
     const lines = code.split('\n');
@@ -31,7 +41,9 @@
       directVars: [],
       funcReturnVars: [],
       robotFunctions: {},
-      callerToFunc: {}
+      callerToFunc: {},
+      // varName -> constructor class name (e.g. 'MT4_UART')
+      varModels: {}
     };
 
     let inFunc = null;
@@ -74,7 +86,7 @@
           funcReturnsRobot = false;
         } else {
           funcBodyLines.push(trimmed);
-          const innerAssign = trimmed.match(/^(\w+)\s*=\s*wlkatapython\.Mirobot_UART\s*\(/);
+          const innerAssign = trimmed.match(ROBOT_CTOR_RE);
           if (innerAssign) {
             funcInternalVar = innerAssign[1];
           }
@@ -88,9 +100,10 @@
         }
       }
 
-      const directMatch = trimmed.match(/^(\w+)\s*=\s*wlkatapython\.Mirobot_UART\s*\(/);
+      const directMatch = trimmed.match(ROBOT_CTOR_RE);
       if (directMatch) {
         result.directVars.push(directMatch[1]);
+        result.varModels[directMatch[1]] = directMatch[2];
         continue;
       }
 
@@ -250,18 +263,26 @@
     var code = (codeOverride != null) ? codeOverride : (codeEl ? (codeEl.textContent || '') : '');
     if (!code.trim()) {
       window.RobotCodeAnalysis.recordedMoves = {};
+      window.RobotCodeAnalysis.recordedSegments = [];
+      window.RobotCodeAnalysis.recordedSchedule = [];
+      window.RobotCodeAnalysis.recordedTimeline = [];
       window.RobotCodeAnalysis.recordedMovesCode = code;
       window.RobotCodeAnalysis.recordError = null;
-      return Promise.resolve({ success: true, moves: {} });
+      return Promise.resolve({ success: true, moves: {}, segments: [], schedule: [], timeline: [] });
     }
 
-    // Skip if we already have a fresh recording for this exact code
+    // Skip if we already have a fresh recording for this exact code.
+    // Require schedule to be an array so pre-schedule cache entries re-fetch.
     if (window.RobotCodeAnalysis.recordedMoves &&
         window.RobotCodeAnalysis.recordedMovesCode === code &&
-        !window.RobotCodeAnalysis.recordError) {
+        !window.RobotCodeAnalysis.recordError &&
+        Array.isArray(window.RobotCodeAnalysis.recordedSchedule)) {
       return Promise.resolve({
         success: true,
         moves: window.RobotCodeAnalysis.recordedMoves,
+        segments: window.RobotCodeAnalysis.recordedSegments || [],
+        schedule: window.RobotCodeAnalysis.recordedSchedule || [],
+        timeline: window.RobotCodeAnalysis.recordedTimeline || [],
         cached: true
       });
     }
@@ -288,11 +309,22 @@
         window.RobotCodeAnalysis.recordingInFlight = false;
         if (result && result.moves) {
           window.RobotCodeAnalysis.recordedMoves = result.moves;
+          window.RobotCodeAnalysis.recordedSegments =
+            Array.isArray(result.segments) ? result.segments : null;
+          window.RobotCodeAnalysis.recordedTimeline =
+            Array.isArray(result.timeline) ? result.timeline : null;
+          var sch = Array.isArray(result.schedule) ? result.schedule : null;
+          // Rebuild from timeline if server omitted schedule (older backend)
+          if ((!sch || !sch.length) && result.timeline && result.timeline.length) {
+            sch = buildScheduleFromTimeline(result.timeline);
+          }
+          window.RobotCodeAnalysis.recordedSchedule = sch || [];
           window.RobotCodeAnalysis.recordedMovesCode = code;
           window.RobotCodeAnalysis.recordError =
             result.error || (result.timed_out ? 'Simulation timed out' : null);
           console.log('[simulate-moves] Recorded moves for',
             Object.keys(result.moves),
+            'schedule slots:', (window.RobotCodeAnalysis.recordedSchedule || []).length,
             result.timed_out ? '(timed out, partial)' : '');
         } else {
           window.RobotCodeAnalysis.recordError =
@@ -329,6 +361,8 @@
           window.dispatchEvent(new CustomEvent('robotMovesRecorded', {
             detail: {
               moves: (result && result.moves) || window.RobotCodeAnalysis.recordedMoves,
+              segments: (result && result.segments) || window.RobotCodeAnalysis.recordedSegments,
+              schedule: (result && result.schedule) || window.RobotCodeAnalysis.recordedSchedule,
               code: codeToRun,
               error: (result && result.error) || window.RobotCodeAnalysis.recordError,
               cached: !!(result && result.cached)
@@ -339,10 +373,90 @@
     }, delayMs == null ? 400 : delayMs);
   }
 
+  /**
+   * Mirror of server build_move_schedule — real waitIdle semantics.
+   *
+   * Motion is non-blocking (queued per robot). waitIdle(R) only stalls the
+   * *program* until R is free; wait on an already-idle robot is a no-op.
+   *
+   * Example: A.1, A.2, waitIdle(B), A.3, B.1
+   *   → A at t=0,1,2; B at t=0  (B starts with A; wait B does nothing)
+   */
+  function buildScheduleFromTimeline(timeline) {
+    if (!Array.isArray(timeline) || timeline.length === 0) return [];
+    var codeTime = 0;
+    var freeAt = {};
+    var schedule = [];
+    for (var i = 0; i < timeline.length; i++) {
+      var ev = timeline[i];
+      var name = ev.var || ev.varName;
+      if (!name) continue;
+      if (ev.type === 'move') {
+        var start = Math.max(freeAt[name] || 0, codeTime);
+        var end = start + 1;
+        freeAt[name] = end;
+        schedule.push({
+          var: name,
+          start: start,
+          end: end,
+          move: ev.move
+        });
+      } else if (ev.type === 'waitIdle') {
+        codeTime = Math.max(codeTime, freeAt[name] || 0);
+      }
+    }
+    return schedule;
+  }
+
+  /**
+   * Concurrent move schedule for World animation (true waitIdle semantics).
+   * [{ var, start, end, move }, ...] with integer unit times.
+   */
+  function getAnimationSchedule() {
+    var sch = window.RobotCodeAnalysis.recordedSchedule;
+    if (Array.isArray(sch) && sch.length > 0) {
+      // Coerce start/end to numbers (defensive against JSON quirks)
+      return sch.map(function(item) {
+        return {
+          var: item.var || item.varName,
+          start: Number(item.start) || 0,
+          end: Number(item.end) || ((Number(item.start) || 0) + 1),
+          move: item.move
+        };
+      });
+    }
+    // Rebuild from timeline if available
+    var tl = window.RobotCodeAnalysis.recordedTimeline;
+    if (Array.isArray(tl) && tl.length > 0) {
+      var rebuilt = buildScheduleFromTimeline(tl);
+      if (rebuilt.length) return rebuilt;
+    }
+    // Last resort: sequential slots from flat move lists (ignores waitIdle)
+    var moves = window.RobotCodeAnalysis.recordedMoves;
+    if (!moves) return [];
+    var out = [];
+    Object.keys(moves).forEach(function(k) {
+      var list = moves[k] || [];
+      for (var i = 0; i < list.length; i++) {
+        out.push({ var: k, start: i, end: i + 1, move: list[i] });
+      }
+    });
+    return out;
+  }
+
+  /** @deprecated use getAnimationSchedule */
+  function getAnimationSegments() {
+    var segs = window.RobotCodeAnalysis.recordedSegments;
+    if (Array.isArray(segs) && segs.length > 0) return segs;
+    return [];
+  }
+
   // Expose globally
   window.analyzeRobotCode = analyzeRobotCode;
   window.extractMovesFromLines = extractMovesFromLines;
   window.parseMovesFromCode = parseMovesFromCode;
   window.refreshRecordedMoves = refreshRecordedMoves;
   window.scheduleRecordedMovesRefresh = scheduleRecordedMovesRefresh;
+  window.getAnimationSegments = getAnimationSegments;
+  window.getAnimationSchedule = getAnimationSchedule;
 })();

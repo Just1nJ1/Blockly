@@ -48,6 +48,71 @@
       }
     });
 
+    function updateSelectionRect(e) {
+      if (!_selecting || !_rectEl) return;
+      var point = svgToWorkspaceCoords(svgEl, e, ws);
+      var x = Math.min(_startX, point.x);
+      var y = Math.min(_startY, point.y);
+      var w = Math.abs(point.x - _startX);
+      var h = Math.abs(point.y - _startY);
+      _rectEl.setAttribute('x', x);
+      _rectEl.setAttribute('y', y);
+      _rectEl.setAttribute('width', w);
+      _rectEl.setAttribute('height', h);
+    }
+
+    function finishAreaSelection(e) {
+      if (!_selecting) return;
+      if (e) e.preventDefault();
+
+      var point = e
+        ? svgToWorkspaceCoords(svgEl, e, ws)
+        : { x: _startX, y: _startY };
+      var selRect = {
+        left: Math.min(_startX, point.x),
+        top: Math.min(_startY, point.y),
+        right: Math.max(_startX, point.x),
+        bottom: Math.max(_startY, point.y)
+      };
+
+      document.removeEventListener('mousemove', onDocSelectMove, true);
+      document.removeEventListener('mouseup', onDocSelectUp, true);
+
+      if (_rectEl && _rectEl.parentNode) {
+        _rectEl.parentNode.removeChild(_rectEl);
+      }
+      _rectEl = null;
+      _selecting = false;
+
+      // Disable overlay unless we re-enable for group drag
+      if (_overlay) {
+        _overlay.style.pointerEvents = 'none';
+      }
+
+      // Skip tiny drags (workspace units; ~5px at 1x scale)
+      var scale = (typeof ws.getScale === 'function') ? ws.getScale() : 1;
+      var minSize = 5 / (scale || 1);
+      if ((selRect.right - selRect.left) < minSize &&
+          (selRect.bottom - selRect.top) < minSize) {
+        return;
+      }
+
+      _selectedBlocks = [];
+      findBlocksInRect(ws, selRect);
+      console.log('[Selection] Selected', _selectedBlocks.length, 'blocks');
+      _enableDragOverlay();
+    }
+
+    function onDocSelectMove(e) {
+      if (!_selecting) return;
+      e.preventDefault();
+      updateSelectionRect(e);
+    }
+
+    function onDocSelectUp(e) {
+      finishAreaSelection(e);
+    }
+
     // Mouse down on overlay: start area selection (only with Cmd/Ctrl)
     _overlay.addEventListener('mousedown', function(e) {
       if (e.button !== 0) return;
@@ -62,7 +127,7 @@
       _startX = point.x;
       _startY = point.y;
 
-      // Create selection rectangle in workspace canvas
+      // Create selection rectangle in workspace canvas (workspace coords)
       var canvas = ws.getCanvas();
       _rectEl = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       _rectEl.setAttribute('class', 'blockly-selection-rect');
@@ -70,62 +135,13 @@
       _rectEl.setAttribute('y', _startY);
       _rectEl.setAttribute('width', 0);
       _rectEl.setAttribute('height', 0);
+      // Keep stroke width visually stable when zoomed
+      _rectEl.setAttribute('vector-effect', 'non-scaling-stroke');
       canvas.appendChild(_rectEl);
-    });
 
-    // Mouse move: update rectangle
-    _overlay.addEventListener('mousemove', function(e) {
-      if (!_selecting || !_rectEl) return;
-      e.preventDefault();
-
-      var point = svgToWorkspaceCoords(svgEl, e, ws);
-      var x = Math.min(_startX, point.x);
-      var y = Math.min(_startY, point.y);
-      var w = Math.abs(point.x - _startX);
-      var h = Math.abs(point.y - _startY);
-
-      _rectEl.setAttribute('x', x);
-      _rectEl.setAttribute('y', y);
-      _rectEl.setAttribute('width', w);
-      _rectEl.setAttribute('height', h);
-    });
-
-    // Mouse up: finish selection
-    _overlay.addEventListener('mouseup', function(e) {
-      if (!_selecting) return;
-      e.preventDefault();
-
-      var point = svgToWorkspaceCoords(svgEl, e, ws);
-      var selRect = {
-        left: Math.min(_startX, point.x),
-        top: Math.min(_startY, point.y),
-        right: Math.max(_startX, point.x),
-        bottom: Math.max(_startY, point.y)
-      };
-
-      // Remove selection rectangle
-      if (_rectEl && _rectEl.parentNode) {
-        _rectEl.parentNode.removeChild(_rectEl);
-      }
-      _rectEl = null;
-      _selecting = false;
-
-      // Disable overlay
-      _overlay.style.pointerEvents = 'none';
-
-      // Skip tiny drags
-      if ((selRect.right - selRect.left) < 5 && (selRect.bottom - selRect.top) < 5) {
-        return;
-      }
-
-      // Find intersecting blocks (checks each block's own bounds)
-      _selectedBlocks = [];
-      findBlocksInRect(ws, selRect);
-
-      console.log('[Selection] Selected', _selectedBlocks.length, 'blocks');
-
-      // Enable drag overlay so group drag works
-      _enableDragOverlay();
+      // Track on document so drag still works if cursor leaves the overlay
+      document.addEventListener('mousemove', onDocSelectMove, true);
+      document.addEventListener('mouseup', onDocSelectUp, true);
     });
 
     // Clear selection on any workspace click without modifier
@@ -196,6 +212,7 @@
         _overlay.style.pointerEvents = 'auto';
         _overlay.style.cursor = 'grab';
         _dragOverlayActive = true;
+        showSelectionToolbar(ws);
       }
     }
 
@@ -205,6 +222,8 @@
         _overlay.style.pointerEvents = 'none';
         _overlay.style.cursor = 'crosshair';
       }
+      hideSelectionToolbar();
+      hideSelectionContextMenu();
     }
 
     // Hook into selection completion
@@ -213,6 +232,14 @@
       _origClearSelection();
       _disableDragOverlay();
     };
+
+    // Right-click multi-selection: bulk set robot variable
+    _overlay.addEventListener('contextmenu', function(e) {
+      if (_selectedBlocks.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showSelectionContextMenu(ws, e.clientX, e.clientY);
+    });
 
     // Override the mouseup in area selection to enable drag overlay after selecting
     // (we'll call _enableDragOverlay from the area selection mouseup)
@@ -430,22 +457,43 @@
              a.bottom < b.top || a.top > b.bottom);
   }
 
+  /**
+   * Convert a mouse event to Blockly workspace (canvas) coordinates.
+   * The selection rect lives on ws.getCanvas(), same space as block XY.
+   *
+   * Prefer Blockly's screenToWsCoordinates — manual CTM + metrics math
+   * drifts badly with scroll/zoom/injection offsets (marquee starts far
+   * from the cursor).
+   */
   function svgToWorkspaceCoords(svgEl, mouseEvent, ws) {
+    if (Blockly.utils && Blockly.utils.svgMath &&
+        typeof Blockly.utils.svgMath.screenToWsCoordinates === 'function' &&
+        Blockly.utils.Coordinate) {
+      var screen = new Blockly.utils.Coordinate(
+        mouseEvent.clientX,
+        mouseEvent.clientY
+      );
+      var wsCoord = Blockly.utils.svgMath.screenToWsCoordinates(ws, screen);
+      return { x: wsCoord.x, y: wsCoord.y };
+    }
+
+    // Fallback for older Blockly builds
     var svgPoint = svgEl.createSVGPoint();
     svgPoint.x = mouseEvent.clientX;
     svgPoint.y = mouseEvent.clientY;
+    var ctm = svgEl.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    var svgCoord = svgPoint.matrixTransform(ctm.inverse());
 
-    // Transform screen coords to SVG coords
-    var ctm = svgEl.getScreenCTM().inverse();
-    var svgCoord = svgPoint.matrixTransform(ctm);
-
-    // Account for workspace scroll and scale
-    var metrics = ws.getMetrics();
-    var scale = ws.getScale();
-
+    // Map SVG-root coords into the block canvas (workspace surface)
+    var origin = { x: 0, y: 0 };
+    if (typeof ws.getOriginOffsetInPixels === 'function') {
+      origin = ws.getOriginOffsetInPixels();
+    }
+    var scale = ws.scale || (typeof ws.getScale === 'function' ? ws.getScale() : 1);
     return {
-      x: (svgCoord.x - metrics.absoluteLeft) / scale + metrics.viewLeft,
-      y: (svgCoord.y - metrics.absoluteTop) / scale + metrics.viewTop
+      x: (svgCoord.x - origin.x) / scale,
+      y: (svgCoord.y - origin.y) / scale
     };
   }
 
@@ -464,6 +512,278 @@
       highlightBlock(_selectedBlocks[i], false);
     }
     _selectedBlocks = [];
+    hideSelectionToolbar();
+    hideSelectionContextMenu();
+  }
+
+  // ── Bulk robot variable for multi-selection ─────────────────
+
+  var _selectionToolbar = null;
+  var _selectionCtxMenu = null;
+
+  /** Blocks in the multi-selection that have a robot VARIABLE field. */
+  function getSelectedRobotBlocks() {
+    var out = [];
+    for (var i = 0; i < _selectedBlocks.length; i++) {
+      var b = _selectedBlocks[i];
+      if (!b || b.isDisposed()) continue;
+      if (b.getField('VARIABLE')) out.push(b);
+    }
+    return out;
+  }
+
+  /**
+   * Variable names the user can assign: from setup_robot first, then
+   * any other workspace variables (so robot_1 etc. appear).
+   */
+  function getAvailableRobotVarNames(ws) {
+    var names = [];
+    var seen = Object.create(null);
+
+    function add(n) {
+      if (!n || seen[n]) return;
+      seen[n] = true;
+      names.push(n);
+    }
+
+    if (!ws) return names;
+
+    var setups = ws.getBlocksByType('setup_robot', false);
+    for (var i = 0; i < setups.length; i++) {
+      var f = setups[i].getField('VARIABLE');
+      if (!f) continue;
+      if (typeof f.getVariable === 'function') {
+        var vm = f.getVariable();
+        if (vm) add(vm.name);
+      } else {
+        add(f.getValue());
+      }
+    }
+
+    if (typeof ws.getAllVariables === 'function') {
+      var all = ws.getAllVariables();
+      for (var j = 0; j < all.length; j++) {
+        if (all[j] && all[j].name) add(all[j].name);
+      }
+    }
+
+    return names;
+  }
+
+  /**
+   * Set VARIABLE on one block to varName.
+   * setup_robot uses FieldVariable (id); movement blocks use name string.
+   */
+  function setBlockRobotVariable(block, varName, ws) {
+    var field = block.getField('VARIABLE');
+    if (!field || !varName) return false;
+
+    try {
+      if (typeof field.getVariable === 'function') {
+        // FieldVariable — need variable id
+        var existing = null;
+        if (typeof ws.getVariable === 'function') {
+          existing = ws.getVariable(varName) || ws.getVariable(varName, '');
+        }
+        if (!existing && typeof ws.getAllVariables === 'function') {
+          var all = ws.getAllVariables();
+          for (var i = 0; i < all.length; i++) {
+            if (all[i] && all[i].name === varName) { existing = all[i]; break; }
+          }
+        }
+        if (!existing && typeof ws.createVariable === 'function') {
+          existing = ws.createVariable(varName);
+        }
+        if (!existing) return false;
+        field.setValue(existing.getId());
+      } else {
+        // FieldDropdown — value is the name string
+        field.setValue(varName);
+      }
+      return true;
+    } catch (err) {
+      console.warn('[Selection] Failed to set VARIABLE on', block.type, err);
+      return false;
+    }
+  }
+
+  /**
+   * Apply varName to every selected block that has a VARIABLE field.
+   * One undo group.
+   */
+  function applyRobotVariableToSelected(varName) {
+    var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+    if (!ws || !varName) return;
+
+    var targets = getSelectedRobotBlocks();
+    if (targets.length === 0) return;
+
+    Blockly.Events.setGroup(true);
+    var count = 0;
+    for (var i = 0; i < targets.length; i++) {
+      if (setBlockRobotVariable(targets[i], varName, ws)) count++;
+    }
+    Blockly.Events.setGroup(false);
+
+    if (typeof updateRobotBlockColors === 'function') {
+      updateRobotBlockColors();
+    }
+    if (typeof updateCodePreview === 'function') {
+      updateCodePreview();
+    }
+    console.log('[Selection] Set robot variable to', varName, 'on', count, 'blocks');
+
+    // Keep toolbar select in sync
+    if (_selectionToolbar) {
+      var sel = _selectionToolbar.querySelector('select');
+      if (sel) sel.value = varName;
+    }
+  }
+
+  function showSelectionToolbar(ws) {
+    hideSelectionToolbar();
+    var robotBlocks = getSelectedRobotBlocks();
+    if (robotBlocks.length === 0) return;
+
+    var names = getAvailableRobotVarNames(ws);
+    if (names.length === 0) return;
+
+    var bar = document.createElement('div');
+    bar.className = 'blockly-selection-toolbar';
+    bar.setAttribute('role', 'toolbar');
+
+    var label = document.createElement('span');
+    label.className = 'blockly-selection-toolbar-label';
+    label.textContent = 'Set robot (' + robotBlocks.length + ')';
+    bar.appendChild(label);
+
+    var sel = document.createElement('select');
+    sel.className = 'blockly-selection-toolbar-select';
+    sel.title = 'Change VARIABLE on all selected robot blocks';
+
+    // Placeholder showing mixed state
+    var current = null;
+    var mixed = false;
+    for (var i = 0; i < robotBlocks.length; i++) {
+      var f = robotBlocks[i].getField('VARIABLE');
+      var n = null;
+      if (f && typeof f.getVariable === 'function') {
+        var vm = f.getVariable();
+        n = vm ? vm.name : null;
+      } else if (f) {
+        n = f.getValue();
+      }
+      if (current === null) current = n;
+      else if (n !== current) mixed = true;
+    }
+
+    if (mixed) {
+      var optMix = document.createElement('option');
+      optMix.value = '';
+      optMix.textContent = '(mixed)';
+      optMix.disabled = true;
+      optMix.selected = true;
+      sel.appendChild(optMix);
+    }
+
+    for (var j = 0; j < names.length; j++) {
+      var opt = document.createElement('option');
+      opt.value = names[j];
+      opt.textContent = names[j];
+      if (!mixed && names[j] === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+
+    sel.addEventListener('change', function() {
+      if (!sel.value) return;
+      applyRobotVariableToSelected(sel.value);
+    });
+    // Don't clear selection when interacting with toolbar
+    sel.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    sel.addEventListener('click', function(e) { e.stopPropagation(); });
+
+    bar.appendChild(sel);
+
+    var hint = document.createElement('span');
+    hint.className = 'blockly-selection-toolbar-hint';
+    hint.textContent = 'or right-click selection';
+    bar.appendChild(hint);
+
+    var blocklyDiv = document.getElementById('blocklyDiv');
+    if (blocklyDiv) {
+      blocklyDiv.appendChild(bar);
+      _selectionToolbar = bar;
+    }
+  }
+
+  function hideSelectionToolbar() {
+    if (_selectionToolbar && _selectionToolbar.parentNode) {
+      _selectionToolbar.parentNode.removeChild(_selectionToolbar);
+    }
+    _selectionToolbar = null;
+  }
+
+  function showSelectionContextMenu(ws, clientX, clientY) {
+    hideSelectionContextMenu();
+    var robotBlocks = getSelectedRobotBlocks();
+    if (robotBlocks.length === 0) return;
+
+    var names = getAvailableRobotVarNames(ws);
+    if (names.length === 0) return;
+
+    var menu = document.createElement('div');
+    menu.className = 'blockly-selection-ctx-menu';
+    menu.style.left = clientX + 'px';
+    menu.style.top = clientY + 'px';
+
+    var title = document.createElement('div');
+    title.className = 'blockly-selection-ctx-title';
+    title.textContent = 'Set robot variable (' + robotBlocks.length + ' blocks)';
+    menu.appendChild(title);
+
+    for (var i = 0; i < names.length; i++) {
+      (function(name) {
+        var item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'blockly-selection-ctx-item';
+        item.textContent = name;
+        item.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          applyRobotVariableToSelected(name);
+          hideSelectionContextMenu();
+        });
+        menu.appendChild(item);
+      })(names[i]);
+    }
+
+    document.body.appendChild(menu);
+    _selectionCtxMenu = menu;
+
+    // Close on outside click / Escape
+    setTimeout(function() {
+      document.addEventListener('mousedown', _ctxOutsideClose, true);
+      document.addEventListener('keydown', _ctxEscClose, true);
+    }, 0);
+  }
+
+  function _ctxOutsideClose(e) {
+    if (_selectionCtxMenu && !_selectionCtxMenu.contains(e.target)) {
+      hideSelectionContextMenu();
+    }
+  }
+
+  function _ctxEscClose(e) {
+    if (e.key === 'Escape') hideSelectionContextMenu();
+  }
+
+  function hideSelectionContextMenu() {
+    if (_selectionCtxMenu && _selectionCtxMenu.parentNode) {
+      _selectionCtxMenu.parentNode.removeChild(_selectionCtxMenu);
+    }
+    _selectionCtxMenu = null;
+    document.removeEventListener('mousedown', _ctxOutsideClose, true);
+    document.removeEventListener('keydown', _ctxEscClose, true);
   }
 
   function deleteSelectedBlocks(ws) {

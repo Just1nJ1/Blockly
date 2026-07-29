@@ -3,6 +3,14 @@
  * Handles running Python code on the server and displaying output.
  */
 
+/** Update only the label under a toolbar icon button (preserve SVG). */
+function setToolbarBtnLabel(btn, label) {
+  if (!btn) return;
+  var el = btn.querySelector('.toolbar-btn-label');
+  if (el) el.textContent = label;
+  else btn.textContent = label;
+}
+
 /**
  * Execute the current workspace code on the Python server.
  * This function is called when the user clicks the Run button.
@@ -14,7 +22,8 @@ async function runCode() {
 
   // Disable button during execution
   runBtn.disabled = true;
-  runBtn.textContent = '⏳ Running...';
+  setToolbarBtnLabel(runBtn, '…');
+  runBtn.title = 'Running…';
 
   // Clear previous output
   outputContent.innerHTML = '';
@@ -93,7 +102,8 @@ async function runCode() {
     appendOutput('Make sure the Python server is running.', 'stderr');
   } finally {
     runBtn.disabled = false;
-    runBtn.textContent = '▶ Run';
+    setToolbarBtnLabel(runBtn, 'Run');
+    runBtn.title = 'Run';
 
     // Mark control panel as stale after execution
     if (typeof window.controlPanelMarkStale === 'function') {
@@ -136,7 +146,8 @@ async function stopAllRobots() {
   const runBtn = document.getElementById('runBtn');
   if (runBtn) {
     runBtn.disabled = false;
-    runBtn.textContent = '\u25B6 Run';
+    setToolbarBtnLabel(runBtn, 'Run');
+    runBtn.title = 'Run';
   }
 
   appendOutput('EMERGENCY STOP — all operations cancelled.', 'error');

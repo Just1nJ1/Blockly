@@ -21,4 +21,7 @@ function initCustomBlocks() {
   initProcedureOverrides();
   installFilteredVariableDropdown();
   setupLocalVarIconListener();
+  if (typeof initWorkflowBlocks === 'function') {
+    initWorkflowBlocks();
+  }
 }

@@ -1,11 +1,13 @@
-// World Animation — synchronized multi-robot animation for the World tab.
-// All robots play their moves in lockstep: each "step" advances every robot
-// by one move simultaneously. When a robot runs out of moves, it holds its
-// final pose until the slowest robot finishes. Then all reset together.
+// World Animation — multi-robot animation for the World tab.
 //
-// Depends on: animation.js (window.RobotAnimation — for ANIM_CONSTS and
-//             targetJointsFromMove), worldViewer.js (window.WorldViewer),
-//             codeAnalysis.js (window.parseMovesFromCode)
+// Layers:
+//   1. Dry-run schedule — waitIdle concurrent timing (free_at / code_time).
+//   2. Per-robot IK chain — joint home (J=0°) then moveBy/moveTo via
+//      RobotAnimation.computeMoveTargets (proven path, not XYZ origin).
+//   3. Playback — unit time slots + pause/resume.
+//
+// Depends on: animation.js, worldViewer.js, codeAnalysis.js
+// Optional: window.ensureIkViewer(varName) → Promise (loads _robotViewer mesh)
 // Exposes: window.WorldAnimation
 
 (function() {
@@ -20,11 +22,11 @@
 
   // Saved state for pause/resume
   var savedStepIndex = 0;
-  var savedAllTargets = null;
+  var savedAllTargets = null;   // { name: [{start, end, joints, move}, ...] }
   var savedRobotNames = null;
-  var savedMaxSteps = 0;
-  var pausedMoveElapsed = 0;   // how far into the current move when paused
-  var pausedPhase = null;       // 'move', 'interval', or null
+  var savedMaxSteps = 0;        // max end time (unit slots)
+  var pausedMoveElapsed = 0;
+  var pausedPhase = null;
 
   // Progress bar refs (created by viewTabs)
   var progressEl = null;
@@ -43,6 +45,14 @@
       ANIM_CONSTS = window.RobotAnimation.ANIM_CONSTS;
     }
     return ANIM_CONSTS;
+  }
+
+  /** Joint home: J1…J6 = 0° (not Cartesian XYZ origin). */
+  function jointHome() {
+    if (window.RobotAnimation && typeof window.RobotAnimation.jointHome === 'function') {
+      return window.RobotAnimation.jointHome();
+    }
+    return [0, 0, 0, 0, 0, 0];
   }
 
   // ── Progress bar (mirrors animation.js pattern) ──
@@ -133,42 +143,123 @@
   // ── Pre-compute all move targets for a variable ──
 
   /**
-   * Compute the full list of target joint arrays for a variable's moves.
-   * Uses the individual RobotViewer's IK (via targetJointsFromMove) for
-   * coordinate moves, then restores the viewer's state.
+   * Joint targets for an ordered move list via proven moveBy/moveTo chain.
    */
-  function precomputeTargets(varName) {
-    var moves = window.parseMovesFromCode(varName);
-    if (moves.length === 0) return [];
+  function precomputeTargetsFromMoves(varName, moves, startJoints) {
+    if (!moves || moves.length === 0) return [];
+    var compute = window.RobotAnimation && window.RobotAnimation.computeMoveTargets;
+    var seed = startJoints || jointHome();
+    if (compute) return compute(moves, seed);
 
-    var targetFn = window.RobotAnimation.targetJointsFromMove;
+    var targetFn = window.RobotAnimation && window.RobotAnimation.targetJointsFromMove;
     if (!targetFn) return [];
-
-    // Save individual viewer state
     var viewer = window._robotViewer;
-    var savedJoints = viewer ? viewer.getJoints() : [0, 0, 0, 0, 0, 0];
-
-    // Reset viewer to home for consistent computation
-    if (viewer) viewer.setJoints([0, 0, 0, 0, 0, 0]);
-
+    var saved = viewer ? viewer.getJoints() : null;
+    if (viewer) viewer.setJoints(seed.slice());
     var targets = [];
     for (var i = 0; i < moves.length; i++) {
       var target = targetFn(moves[i]);
       targets.push(target);
-      // For incremental moves, the viewer needs to be at the target position
-      // for the next move's computation
       if (viewer) viewer.setJoints(target);
     }
-
-    // Restore viewer state
-    if (viewer) viewer.setJoints(savedJoints);
-
+    if (viewer && saved) viewer.setJoints(saved);
     return targets;
+  }
+
+  function precomputeTargets(varName) {
+    var moves = window.parseMovesFromCode(varName);
+    return precomputeTargetsFromMoves(varName, moves, jointHome());
   }
 
   // ── Core synchronized animation loop ──
 
   var moveStartTime = 0; // tracks when the current move phase started
+
+  /**
+   * Group schedule rows by robot (sorted by start time).
+   */
+  function groupScheduleByRobot(robotNames, schedule) {
+    var groups = {};
+    var r, i, item, name;
+    for (r = 0; r < robotNames.length; r++) {
+      groups[robotNames[r]] = [];
+    }
+    for (i = 0; i < schedule.length; i++) {
+      item = schedule[i];
+      name = item.var || item.varName;
+      if (robotNames.indexOf(name) < 0) continue;
+      if (!groups[name]) groups[name] = [];
+      groups[name].push(item);
+    }
+    for (r = 0; r < robotNames.length; r++) {
+      groups[robotNames[r]].sort(function(a, b) {
+        return (Number(a.start) || 0) - (Number(b.start) || 0);
+      });
+    }
+    return groups;
+  }
+
+  /**
+   * Sync IK for one robot's schedule items (caller must load matching model first).
+   * Returns [{ start, end, joints, move }, ...]
+   */
+  function precomputeRobotSlots(items) {
+    var home = jointHome();
+    if (!items || !items.length) return [];
+
+    var moves = [];
+    var i;
+    for (i = 0; i < items.length; i++) {
+      moves.push(items[i].move);
+    }
+
+    var jointTargets = precomputeTargetsFromMoves(null, moves, home);
+    var slots = [];
+    for (i = 0; i < items.length; i++) {
+      slots.push({
+        start: Number(items[i].start) || 0,
+        end: Number(items[i].end) || ((Number(items[i].start) || 0) + 1),
+        joints: (jointTargets[i] && jointTargets[i].slice)
+          ? jointTargets[i].slice()
+          : home.slice(),
+        move: items[i].move
+      });
+    }
+    return slots;
+  }
+
+  /**
+   * Build per-robot { start, end, joints } from the concurrent schedule.
+   * Loads each robot's IK model when window.ensureIkViewer is available so
+   * Mirobot vs MT4 kinematics match the mesh family.
+   * @returns {Promise<object>}
+   */
+  function precomputeScheduleTargets(robotNames, schedule) {
+    var groups = groupScheduleByRobot(robotNames, schedule);
+    var byRobot = {};
+    var ensure = typeof window.ensureIkViewer === 'function'
+      ? window.ensureIkViewer
+      : null;
+
+    var chain = Promise.resolve();
+    var r;
+
+    for (r = 0; r < robotNames.length; r++) {
+      (function(name) {
+        chain = chain.then(function() {
+          var load = ensure ? ensure(name) : Promise.resolve(window._robotViewer);
+          return load.then(function() {
+            byRobot[name] = precomputeRobotSlots(groups[name] || []);
+          }).catch(function(err) {
+            console.warn('[WorldAnimation] IK precompute failed for', name, err);
+            byRobot[name] = precomputeRobotSlots(groups[name] || []);
+          });
+        });
+      })(robotNames[r]);
+    }
+
+    return chain.then(function() { return byRobot; });
+  }
 
   function startAnimation() {
     var C = getConsts();
@@ -179,7 +270,6 @@
     running = true;
     paused = false;
 
-    // Only animate visible (checked) robots
     var robotNames = WV.getVisibleRobotNames();
     if (robotNames.length === 0) {
       if (progressEl) progressEl.style.display = '';
@@ -192,102 +282,151 @@
       return;
     }
 
-    // Pre-compute all targets for visible robots only
-    var allTargets = {};
-    var maxSteps = 0;
-    for (var r = 0; r < robotNames.length; r++) {
-      var name = robotNames[r];
-      var targets = precomputeTargets(name);
-      allTargets[name] = targets;
-      if (targets.length > maxSteps) maxSteps = targets.length;
-    }
+    var schedule = (typeof window.getAnimationSchedule === 'function')
+      ? window.getAnimationSchedule()
+      : [];
 
-    if (maxSteps === 0) {
+    schedule = (schedule || []).filter(function(item) {
+      var v = item.var || item.varName;
+      return robotNames.indexOf(v) >= 0;
+    });
+
+    if (schedule.length === 0) {
       if (progressEl) progressEl.style.display = 'none';
       running = false;
       return;
     }
 
-    // Save for pause/resume
-    savedAllTargets = allTargets;
-    savedRobotNames = robotNames;
-    savedMaxSteps = maxSteps;
-
-    // Reset visible robots to home
-    for (var r = 0; r < robotNames.length; r++) {
-      WV.setJoints(robotNames[r], [0, 0, 0, 0, 0, 0]);
+    var maxEnd = 0;
+    for (var i = 0; i < schedule.length; i++) {
+      if (schedule[i].end > maxEnd) maxEnd = schedule[i].end;
     }
 
-    savedStepIndex = 0;
-    runStepLoop(robotNames, allTargets, maxSteps, 0, 500);
+    if (progressLabel) {
+      progressLabel.textContent = 'Preparing IK…';
+    }
+    if (progressEl) progressEl.style.display = '';
+
+    // Capture generation so a newer start/stop can cancel this prepare
+    var prepareGen = (startAnimation._gen = (startAnimation._gen || 0) + 1);
+
+    precomputeScheduleTargets(robotNames, schedule).then(function(allTargets) {
+      if (!running || prepareGen !== startAnimation._gen) return;
+
+      savedAllTargets = allTargets;
+      savedRobotNames = robotNames;
+      savedMaxSteps = maxEnd;
+      savedStepIndex = 0;
+
+      var homePose = jointHome();
+      for (var r = 0; r < robotNames.length; r++) {
+        WV.setJoints(robotNames[r], homePose.slice());
+      }
+
+      runTimeLoop(robotNames, allTargets, maxEnd, 0, 300);
+    }).catch(function(err) {
+      console.error('[WorldAnimation] start failed:', err);
+      running = false;
+      if (progressLabel) progressLabel.textContent = 'IK prepare failed';
+    });
   }
 
   /**
-   * Run the step loop starting at stepIndex, with an initial delay.
+   * Advance global unit time t = 0 .. maxEnd-1.
+   * At each t, robots that have a move with start===t animate; others hold.
+   * Empty slots (no robot moving) are skipped immediately — waitIdle does not
+   * insert its own pause; program stalls only delay later move *start* times.
    */
-  function runStepLoop(robotNames, allTargets, maxSteps, stepIndex, initialDelay) {
+  function runTimeLoop(robotNames, allTargets, maxEnd, t, initialDelay) {
     var C = getConsts();
     var WV = window.WorldViewer;
 
+    function finishOrLoop() {
+      if (!loopEnabled) {
+        if (progressEl) progressEl.style.display = '';
+        if (progressFill) {
+          progressFill.style.width = '100%';
+          progressFill.style.background = '#9E9E9E';
+        }
+        if (progressLabel) progressLabel.textContent = 'Done';
+        running = false;
+        return;
+      }
+      startPhase('stay', C.STAY_DUR);
+      animTimer = setTimeout(function() {
+        var home = jointHome();
+        for (var r = 0; r < robotNames.length; r++) {
+          WV.setJoints(robotNames[r], home.slice());
+        }
+        t = 0;
+        savedStepIndex = 0;
+        animTimer = setTimeout(runStep, 100);
+      }, C.STAY_DUR);
+    }
+
+    function scheduleNext(afterMs) {
+      animTimer = setTimeout(function() {
+        pausedPhase = null;
+        runStep();
+      }, afterMs);
+    }
+
     function runStep() {
       if (!running || paused) return;
-      savedStepIndex = stepIndex;
+      savedStepIndex = t;
 
-      if (stepIndex >= maxSteps) {
-        if (!loopEnabled) {
-          if (progressEl) progressEl.style.display = '';
-          if (progressFill) {
-            progressFill.style.width = '100%';
-            progressFill.style.background = '#9E9E9E';
-          }
-          if (progressLabel) progressLabel.textContent = 'Done';
-          running = false;
-          return;
-        }
-        startPhase('stay', C.STAY_DUR);
-        animTimer = setTimeout(function() {
-          for (var r = 0; r < robotNames.length; r++) {
-            WV.setJoints(robotNames[r], [0, 0, 0, 0, 0, 0]);
-          }
-          stepIndex = 0;
-          savedStepIndex = 0;
-          animTimer = setTimeout(runStep, 100);
-        }, C.STAY_DUR);
+      if (t >= maxEnd) {
+        finishOrLoop();
         return;
       }
 
-      // Build interpolation targets
       var interpTargets = {};
+      var anyMoving = false;
       for (var r = 0; r < robotNames.length; r++) {
         var name = robotNames[r];
-        var robotTargets = allTargets[name];
+        var slots = allTargets[name] || [];
         var startJoints = WV.getJoints(name);
-        var endJoints;
-
-        if (stepIndex < robotTargets.length) {
-          endJoints = robotTargets[stepIndex];
-        } else {
-          endJoints = startJoints.slice();
+        var endJoints = startJoints.slice();
+        for (var s = 0; s < slots.length; s++) {
+          if (Number(slots[s].start) === t) {
+            endJoints = slots[s].joints;
+            anyMoving = true;
+            break;
+          }
         }
-
         interpTargets[name] = { start: startJoints, end: endJoints };
       }
 
-      var label = (stepIndex + 1) + '/' + maxSteps;
+      // Skip empty time slots instantly (no artificial lag / "segment gap")
+      if (!anyMoving) {
+        t++;
+        savedStepIndex = t;
+        scheduleNext(0);
+        return;
+      }
+
+      var label = (t + 1) + '/' + maxEnd;
       startPhase('move', C.MOVE_DUR, label);
       moveStartTime = Date.now();
       pausedPhase = 'move';
       animateAllRobots(interpTargets, C.MOVE_DUR);
-      stepIndex++;
-      savedStepIndex = stepIndex;
+      t++;
+      savedStepIndex = t;
 
+      // After the last move: go straight to done/loop (no trailing interval lag)
+      if (t >= maxEnd) {
+        animTimer = setTimeout(function() {
+          pausedPhase = null;
+          finishOrLoop();
+        }, C.MOVE_DUR);
+        return;
+      }
+
+      // Normal inter-move gap (same as single-robot animation)
       animTimer = setTimeout(function() {
         pausedPhase = 'interval';
         startPhase('interval', C.INTERVAL);
-        animTimer = setTimeout(function() {
-          pausedPhase = null;
-          runStep();
-        }, C.INTERVAL);
+        scheduleNext(C.INTERVAL);
       }, C.MOVE_DUR);
     }
 
@@ -298,6 +437,8 @@
    * Halt all timers and animation frames (internal helper).
    */
   function haltAnimation() {
+    // Invalidate in-flight async IK prepare
+    startAnimation._gen = (startAnimation._gen || 0) + 1;
     if (animTimer) { clearTimeout(animTimer); animTimer = null; }
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     stopPhase();
@@ -313,12 +454,13 @@
     pausedPhase = null;
     savedStepIndex = 0;
 
-    // Reset all visible robots to home
+    // Reset all visible robots to joint home (J1…J6 = 0°)
     var WV = window.WorldViewer;
     if (WV) {
+      var home = jointHome();
       var names = WV.getVisibleRobotNames();
       for (var i = 0; i < names.length; i++) {
-        WV.setJoints(names[i], [0, 0, 0, 0, 0, 0]);
+        WV.setJoints(names[i], home.slice());
       }
     }
     if (progressEl) progressEl.style.display = 'none';
@@ -364,58 +506,67 @@
     }
 
     if (pausedPhase === 'move' && pausedMoveElapsed < C.MOVE_DUR) {
-      // We were mid-move. savedStepIndex was already incremented to the
-      // NEXT step, so the move we interrupted is at savedStepIndex - 1.
-      var pausedStepIdx = savedStepIndex - 1;
-      if (pausedStepIdx < 0) pausedStepIdx = 0;
+      // savedStepIndex was already advanced to the next unit time; the
+      // interrupted move is at unit time (savedStepIndex - 1).
+      var pausedT = savedStepIndex - 1;
+      if (pausedT < 0) pausedT = 0;
 
       var remaining = C.MOVE_DUR - pausedMoveElapsed;
 
-      // Build interpolation targets: current joints → original target
+      // Build interpolation targets: current joints → slot with start === pausedT
       var interpTargets = {};
       for (var r = 0; r < savedRobotNames.length; r++) {
         var name = savedRobotNames[r];
-        var robotTargets = savedAllTargets[name];
+        var slots = savedAllTargets[name] || [];
         var currentJoints = WV.getJoints(name);
-        var endJoints;
-
-        if (pausedStepIdx < robotTargets.length) {
-          endJoints = robotTargets[pausedStepIdx];
-        } else {
-          endJoints = currentJoints.slice();
+        var endJoints = currentJoints.slice();
+        for (var s = 0; s < slots.length; s++) {
+          if (Number(slots[s].start) === pausedT) {
+            endJoints = slots[s].joints;
+            break;
+          }
         }
-
         interpTargets[name] = { start: currentJoints, end: endJoints };
       }
 
-      // Finish the interrupted move over the remaining time
-      var label = (pausedStepIdx + 1) + '/' + savedMaxSteps;
+      var label = (pausedT + 1) + '/' + savedMaxSteps;
       startPhase('move', remaining, label);
-      // Backdate phase start so progress bar shows cumulative time
       phaseStart = Date.now() - pausedMoveElapsed;
       phaseDuration = C.MOVE_DUR;
       moveStartTime = Date.now() - pausedMoveElapsed;
       animateAllRobots(interpTargets, remaining);
 
-      // After the remaining move time, continue with interval → next step
       animTimer = setTimeout(function() {
+        if (savedStepIndex >= savedMaxSteps) {
+          pausedPhase = null;
+          _resumeStepLoop(savedStepIndex, 0);
+          return;
+        }
         pausedPhase = 'interval';
         startPhase('interval', C.INTERVAL);
         animTimer = setTimeout(function() {
           pausedPhase = null;
-          runStepLoop(savedRobotNames, savedAllTargets, savedMaxSteps, savedStepIndex, 0);
+          _resumeStepLoop(savedStepIndex, 0);
         }, C.INTERVAL);
       }, remaining);
 
     } else if (pausedPhase === 'interval') {
-      // Paused during interval — just continue to the next step
       pausedPhase = null;
-      runStepLoop(savedRobotNames, savedAllTargets, savedMaxSteps, savedStepIndex, 100);
+      _resumeStepLoop(savedStepIndex, 100);
 
     } else {
-      // Paused in an unknown phase — resume from next step
-      runStepLoop(savedRobotNames, savedAllTargets, savedMaxSteps, savedStepIndex, 100);
+      _resumeStepLoop(savedStepIndex, 100);
     }
+  }
+
+  function _resumeStepLoop(stepIndex, delay) {
+    runTimeLoop(
+      savedRobotNames,
+      savedAllTargets,
+      savedMaxSteps,
+      stepIndex,
+      delay
+    );
   }
 
   function setProgressElements(el, label, fill) {
@@ -426,12 +577,13 @@
 
   function setLoop(enabled) {
     loopEnabled = enabled;
-    // Restart from beginning
+    // Restart from joint home
     var WV = window.WorldViewer;
     if (WV) {
+      var home = jointHome();
       var names = WV.getRobotNames();
       for (var i = 0; i < names.length; i++) {
-        WV.setJoints(names[i], [0, 0, 0, 0, 0, 0]);
+        WV.setJoints(names[i], home.slice());
       }
     }
     startAnimation();

@@ -15,14 +15,69 @@
   var lastMovesSignatures = {};
   var viewerInstance = null;        // single shared RobotViewer for individual tabs
   var modelLoaded = false;
+  var loadedViewerModelId = null;   // 'mirobot' | 'haro380' currently in individual viewer
   var initializedVars = {};
 
   // World tab state
   var worldProgressEl = null;
   var worldProgressCreated = false;
 
+  // Blockly workspace scroll/zoom — preserved across World/individual switches
+  var savedBlocklyView = null;
+
   // Will be populated once RobotAnimation is available
   var RA = null;
+
+  function saveBlocklyView() {
+    if (typeof getWorkspace !== 'function' || typeof Blockly === 'undefined') return;
+    var ws = getWorkspace();
+    if (!ws) return;
+    savedBlocklyView = {
+      scrollX: ws.scrollX,
+      scrollY: ws.scrollY,
+      scale: ws.scale
+    };
+  }
+
+  /**
+   * Resize Blockly and restore the last scroll/zoom so switching
+   * World ↔ Blockly does not jump the canvas to the origin.
+   */
+  function restoreBlocklyView() {
+    if (typeof getWorkspace !== 'function' || typeof Blockly === 'undefined') return;
+    var ws = getWorkspace();
+    if (!ws) return;
+
+    function apply() {
+      try {
+        Blockly.svgResize(ws);
+      } catch (e) { /* ignore */ }
+      if (!savedBlocklyView) return;
+      try {
+        if (typeof ws.setScale === 'function') {
+          ws.setScale(savedBlocklyView.scale);
+        } else {
+          ws.scale = savedBlocklyView.scale;
+        }
+        if (typeof ws.scroll === 'function') {
+          ws.scroll(savedBlocklyView.scrollX, savedBlocklyView.scrollY);
+        } else {
+          ws.scrollX = savedBlocklyView.scrollX;
+          ws.scrollY = savedBlocklyView.scrollY;
+          if (ws.scrollbar && typeof ws.scrollbar.resize === 'function') {
+            ws.scrollbar.resize();
+          }
+        }
+      } catch (e2) {
+        console.warn('[View] Could not restore Blockly view', e2);
+      }
+    }
+
+    // Layout must be visible first (display:none zeros metrics)
+    requestAnimationFrame(function() {
+      requestAnimationFrame(apply);
+    });
+  }
 
   function ensureRA() {
     if (!RA && window.RobotAnimation) {
@@ -224,6 +279,7 @@
     for (var i = 0; i < currentRobotVars.length; i++) {
       var varName = currentRobotVars[i];
       var model = getRobotModel(varName);
+      // Default selected (checked) for new/unknown robots; respect user toggles once loaded
       var isVisible = WV ? WV.isRobotVisible(varName) : true;
 
       var item = document.createElement('div');
@@ -450,7 +506,10 @@
   // ── Leave-mode helpers (clean up when switching away) ─────────
 
   function leaveCurrentMode() {
-    if (currentMode === 'individual') {
+    if (currentMode === 'workspace') {
+      // Capture scroll/zoom before the Blockly pane is hidden
+      saveBlocklyView();
+    } else if (currentMode === 'individual') {
       // Pause individual animation and save joints
       if (currentVariableName && RA) {
         if (viewerInstance) {
@@ -469,26 +528,66 @@
 
   // ── Individual viewer lifecycle ───────────────────────────────
 
-  function ensureViewer() {
-    if (viewerInstance) return Promise.resolve(viewerInstance);
+  /**
+   * Resolve viewer config for a robot variable (Mirobot / MT4 / E4).
+   */
+  function viewerConfigForVar(varName) {
+    var model = getRobotModel(varName);
+    if (typeof resolveRobotViewerConfig === 'function') {
+      return resolveRobotViewerConfig(model === 'Unknown' ? 'Mirobot' : model);
+    }
+    return {
+      id: 'mirobot',
+      label: 'Mirobot',
+      urdf: './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
+      meshBasePath: './resources/wlkata_arm_virtual-reality/',
+      tcpOffset: [0, 0, 0.02428]
+    };
+  }
+
+  /**
+   * Ensure the individual RobotViewer exists and has the correct mesh
+   * for the given variable (reloads when switching Mirobot ↔ MT4/E4).
+   * Also used as the shared IK solver for World animation precompute.
+   */
+  function ensureViewer(varName) {
     if (!window.RobotViewerClass) return Promise.resolve(null);
 
-    viewerInstance = new window.RobotViewerClass(viewerCanvas);
-    window._robotViewer = viewerInstance;
-    console.log('[RobotViewer] Instance created');
+    var cfg = viewerConfigForVar(varName || currentVariableName || 'robot');
 
-    return viewerInstance.loadModel(
-      './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
-      {
-        meshBasePath: './resources/wlkata_arm_virtual-reality/',
-        tcpOffset: [0, 0, 0.02428]
+    if (!viewerInstance) {
+      // Prefer the off-screen individual canvas; fall back to a detached div
+      // so World-only sessions still get an IK solver without opening a model tab.
+      var host = viewerCanvas;
+      if (!host) {
+        host = document.createElement('div');
+        host.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;';
+        document.body.appendChild(host);
       }
-    ).then(function() {
+      viewerInstance = new window.RobotViewerClass(host);
+      window._robotViewer = viewerInstance;
+      console.log('[RobotViewer] Instance created (IK / individual)');
+    }
+
+    if (modelLoaded && loadedViewerModelId === cfg.id) {
+      return Promise.resolve(viewerInstance);
+    }
+
+    return viewerInstance.loadModel(cfg.urdf, {
+      meshBasePath: cfg.meshBasePath,
+      tcpOffset: cfg.tcpOffset
+    }).then(function() {
       modelLoaded = true;
-      console.log('[RobotViewer] Mirobot model loaded');
+      loadedViewerModelId = cfg.id;
+      console.log('[RobotViewer] Model loaded:', cfg.id, '(' + cfg.label + ')');
       return viewerInstance;
     });
   }
+
+  /** Global hook for WorldAnimation precompute (per-robot mesh family). */
+  window.ensureIkViewer = function(varName) {
+    return ensureViewer(varName);
+  };
 
   // ── World viewer lifecycle ────────────────────────────────────
 
@@ -524,13 +623,19 @@
 
     ensureWorldProgressBar();
 
-    // Load all current robot variables into the world scene
-    var loadPromises = [];
-    for (var i = 0; i < currentRobotVars.length; i++) {
-      loadPromises.push(WV.addRobot(currentRobotVars[i]));
-    }
+    // Sync scene to current vars (add / remove / reload model on change)
+    var syncPromise = (typeof WV.syncRobots === 'function')
+      ? WV.syncRobots(currentRobotVars)
+      : Promise.all(currentRobotVars.map(function(n) { return WV.addRobot(n); }));
 
-    Promise.all(loadPromises).then(function() {
+    // Warm the shared IK viewer (first robot's model) so Play is not cold
+    var ikWarm = currentRobotVars.length
+      ? ensureViewer(currentRobotVars[0]).catch(function(e) {
+          console.warn('[RobotViewer] IK warm-up failed', e);
+        })
+      : Promise.resolve();
+
+    Promise.all([syncPromise, ikWarm]).then(function() {
       // Sync progress elements (in case WorldAnimation was loaded after creation)
       if (worldProgressEl) {
         WA.setProgressElements(
@@ -572,11 +677,31 @@
     }
     currentRobotVars = uniqueVars;
 
+    // Keep world scene membership / mesh family in sync with code changes
+    // (e.g. Mirobot → MT4, or a robot var removed entirely).
+    // New robots are visible/selected in the checklist by default.
+    var WV = window.WorldViewer;
+    if (WV && typeof WV.syncRobots === 'function' && WV.isInitialized()) {
+      WV.syncRobots(uniqueVars).then(function() {
+        if (currentMode === 'world') updateWorldRobotList();
+      });
+    } else if (currentMode === 'world') {
+      updateWorldRobotList();
+    }
+
     var viewTabs = document.getElementById('view-tabs');
     if (!viewTabs) return;
 
     var activeBtn = viewTabs.querySelector('.view-tab-btn.active');
     var activeView = activeBtn ? activeBtn.dataset.view : 'workspace';
+
+    // Individual model tabs are no longer shown — map any leftover state to World
+    if (activeView.indexOf('var:') === 0 || currentMode === 'individual') {
+      activeView = 'world';
+    }
+    if (activeView !== 'workspace' && activeView !== 'world') {
+      activeView = 'workspace';
+    }
 
     viewTabs.innerHTML = '';
 
@@ -587,27 +712,26 @@
     blocklyBtn.textContent = 'Blockly';
     viewTabs.appendChild(blocklyBtn);
 
-    // World tab (only when ≥2 robot variables)
-    if (uniqueVars.length >= 2) {
-      var worldBtn = document.createElement('button');
-      worldBtn.className = 'view-tab-btn' + (activeView === 'world' ? ' active' : '');
-      worldBtn.dataset.view = 'world';
-      worldBtn.textContent = 'World';
-      viewTabs.appendChild(worldBtn);
-    }
-
-    // Individual variable tabs
-    for (var v = 0; v < uniqueVars.length; v++) {
-      var varName = uniqueVars[v];
-      var btn = document.createElement('button');
-      var viewKey = 'var:' + varName;
-      btn.className = 'view-tab-btn' + (activeView === viewKey ? ' active' : '');
-      btn.dataset.view = viewKey;
-      btn.textContent = varName;
-      viewTabs.appendChild(btn);
-    }
+    // World tab always shown (0, 1, or many robots — all listed when present)
+    var worldBtn = document.createElement('button');
+    worldBtn.className = 'view-tab-btn' + (activeView === 'world' ? ' active' : '');
+    worldBtn.dataset.view = 'world';
+    worldBtn.textContent = 'World';
+    viewTabs.appendChild(worldBtn);
 
     attachViewTabHandlers();
+
+    // Keep canvas/mode aligned with the active tab after rebuilds
+    var newActive = viewTabs.querySelector('.view-tab-btn.active');
+    if (newActive) {
+      var want = newActive.dataset.view;
+      var needSwitch = false;
+      if (want === 'workspace' && currentMode !== 'workspace') needSwitch = true;
+      else if (want === 'world' && currentMode !== 'world') needSwitch = true;
+      if (needSwitch) {
+        handleViewTabClick(newActive);
+      }
+    }
 
     console.log('[RobotTabs] Detected variables:', uniqueVars,
       '| direct:', analysis.directVars,
@@ -673,9 +797,7 @@
       showWorldRobotsSection(false);
       console.log('[View] Switched to Blockly workspace');
       updatePlaybackButtons();
-      if (typeof getWorkspace === 'function' && typeof Blockly !== 'undefined') {
-        Blockly.svgResize(getWorkspace());
-      }
+      restoreBlocklyView();
 
     } else if (view === 'world') {
       // ── World view ──
@@ -714,8 +836,8 @@
       }
       currentVariableName = variableName;
 
-      // Ensure viewer exists (creates + loads model on first call)
-      ensureViewer().then(function(viewer) {
+      // Ensure viewer exists with the correct mesh for this variable's model
+      ensureViewer(variableName).then(function(viewer) {
         if (!viewer || !RA) return;
 
         initVarState(variableName);
@@ -818,5 +940,5 @@
     }
   }, 500);
 
-  console.log('[Init] View tabs ready. Dynamic robot tabs enabled (Three.js RobotViewer).');
+  console.log('[Init] View tabs ready (Blockly + World). Individual model tabs hidden.');
 })();

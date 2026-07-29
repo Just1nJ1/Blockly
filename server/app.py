@@ -857,9 +857,25 @@ def detect_devices():
         return jsonify({'success': False, 'error': f'Detection error: {str(e)}', 'ports': []})
 
 
+def _reject_virtual_firmware(port):
+    """Return an error jsonify response if port is a built-in virtual device."""
+    try:
+        from .virtual_serial import is_virtual_port
+        if is_virtual_port(port):
+            return jsonify({
+                'success': False,
+                'error': 'Firmware operations are not available on virtual devices',
+                'virtual': True,
+            })
+    except Exception:
+        pass
+    return None
+
+
 @app.route('/cmd/firmware-version', methods=['POST'])
 def cmd_firmware_version():
-    """Fetch and cache firmware version for the connected robot."""
+    """Fetch and cache firmware version for the connected robot.
+    Built-in virtual ports return a fixed virtual marker (no GitHub checks)."""
     try:
         data = request.get_json() or {}
         port = data.get('port', None)
@@ -870,9 +886,19 @@ def cmd_firmware_version():
             conn = mgr._ports[port]
         elif mgr.active_connection:
             conn = mgr.active_connection
+            port = port or conn.port
 
         if not conn or not conn.connected:
             return jsonify({'success': False, 'error': 'Not connected'})
+
+        from .virtual_serial import is_virtual_port
+        if is_virtual_port(port or conn.port):
+            return jsonify({
+                'success': True,
+                'extender': None,
+                'robot': 'virtual',
+                'virtual': True,
+            })
 
         result = conn.fetch_firmware_version()
         return jsonify(result)
@@ -949,6 +975,10 @@ def cmd_flash_firmware():
     flash_size = request.form.get('flash_size', '4MB').strip()
     address = request.form.get('address', '0x0').strip()
 
+    blocked = _reject_virtual_firmware(port)
+    if blocked:
+        return blocked, 400
+
     mgr = SerialManager.get_instance()
     if port:
         mgr.lock_for_flash(port)
@@ -1011,6 +1041,10 @@ def cmd_flash_firmware_path():
     flash_size = data.get('flash_size', '4MB').strip()
     address = data.get('address', '0x0').strip()
 
+    blocked = _reject_virtual_firmware(port)
+    if blocked:
+        return blocked, 400
+
     if not file_path or not os.path.isfile(file_path):
         return jsonify({'success': False, 'error': 'Invalid firmware file path'})
 
@@ -1070,6 +1104,10 @@ def cmd_flash_arm_firmware():
     device = request.form.get('device', 'atmega2560').strip()
     baud = request.form.get('baud', '115200').strip()
     programmer = request.form.get('programmer', 'wiring').strip()
+
+    blocked = _reject_virtual_firmware(port)
+    if blocked:
+        return blocked, 400
 
     mgr = SerialManager.get_instance()
     if port:
@@ -1131,6 +1169,10 @@ def cmd_flash_arm_firmware_path():
     device = data.get('device', 'atmega2560').strip()
     baud = data.get('baud', '115200').strip()
     programmer = data.get('programmer', 'wiring').strip()
+
+    blocked = _reject_virtual_firmware(port)
+    if blocked:
+        return blocked, 400
 
     if not file_path or not os.path.isfile(file_path):
         return jsonify({'success': False, 'error': 'Invalid firmware file path'})
@@ -1231,9 +1273,8 @@ def cmd_check_firmware_update():
     """Check GitHub releases for newer firmware.
 
     Expects JSON: { extender: "20230710" | null, robot: "20230710" | null,
-                    model: "Mirobot" | "MT4" | "E4" | null }
-    Scans all recent releases to find the newest asset matching each type,
-    since different releases may contain firmware for different models.
+                    model: "Mirobot" | "MT4" | "E4" | null, port: optional }
+    Built-in virtual ports never report updates (manual ports still can).
     Returns: { success, updates: { extender: {current, latest, url} | null,
                                     robot: {current, latest, url} | null } }
     """
@@ -1243,6 +1284,15 @@ def cmd_check_firmware_update():
         current_ext = data.get('extender')
         current_robot = data.get('robot')
         model = data.get('model', '')  # e.g. 'Mirobot', 'MT4', 'E4'
+        port = data.get('port', None)
+
+        from .virtual_serial import is_virtual_port
+        if is_virtual_port(port) or current_robot == 'virtual':
+            return jsonify({
+                'success': True,
+                'updates': {'extender': None, 'robot': None},
+                'virtual': True,
+            })
 
         try:
             releases = _fetch_all_releases()
@@ -1386,6 +1436,10 @@ def cmd_download_firmware():
         port = data.get('port', '').strip()
         fw_url = data.get('url', '').strip()
         fw_type = data.get('type', 'extender')
+
+        blocked = _reject_virtual_firmware(port)
+        if blocked:
+            return blocked, 400
 
         # Extender flash params
         baud = data.get('baud', '460800')

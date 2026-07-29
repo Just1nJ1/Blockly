@@ -13,11 +13,22 @@
   var _robotDefs = [];
 
   // Shared state: populated by polling, read by the block's dropdown generator
-  // detectedPorts: array of display labels for the dropdown, e.g. ['COM3 (Mirobot)', 'COM5']
-  // portModelMap:  { portValue -> modelValue }, e.g. { 'COM3': 'Mirobot_UART' }
-  // portList:      raw array of { port, description, model } from server
-  window.detectedPorts = [];
-  window.portModelMap = {};
+  // detectedPorts: array of [label, value] pairs, e.g. [['VirtualMirobot (Mirobot)', 'VirtualMirobot']]
+  // portModelMap:  { portValue -> modelValue }, e.g. { 'VirtualMirobot': 'Mirobot_UART' }
+  // Seed virtual devices so Blockly/teaching work before the first poll
+  // (and when the server is offline). Server always re-advertises these too.
+  window.detectedPorts = [
+    ['VirtualMirobot (Mirobot)', 'VirtualMirobot'],
+    ['VirtualMT4 (MT4)', 'VirtualMT4']
+  ];
+  window.portModelMap = {
+    'VirtualMirobot': 'Mirobot_UART',
+    'VirtualMT4': 'MT4_UART'
+  };
+  var lastDetectedPorts = [
+    { port: 'VirtualMirobot', model: 'Mirobot', description: 'Virtual Mirobot (no hardware)', virtual: true },
+    { port: 'VirtualMT4', model: 'MT4', description: 'Virtual MT4 (no hardware)', virtual: true }
+  ];
 
   function pollDevices() {
     var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
@@ -774,8 +785,7 @@
     select.selectedIndex = 0;
   }
 
-  // Keep a reference to the last detected ports for rebuilding after manual add
-  var lastDetectedPorts = [];
+  // lastDetectedPorts is declared near the top (seeded with virtual devices)
 
   // Refresh control panel dropdown labels (called when workspace blocks change)
   function refreshControlPortLabels() {
@@ -813,6 +823,11 @@
 
   function init() {
     loadRobotDefs(function() {
+      // Populate UI with virtual devices immediately (before first poll)
+      updateCommandPortSelect(lastDetectedPorts);
+      updateControlPortSelect(lastDetectedPorts);
+      updateTeachingPortSelect(lastDetectedPorts);
+
       pollDevices();
       pollTimer = setInterval(pollDevices, POLL_INTERVAL);
       setupAutoModelSwitch();

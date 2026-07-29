@@ -108,9 +108,14 @@ function setCurrentWorkspace(wsPath) {
 
   // Update title bar
   document.title = _currentWorkspaceName + ' - WLKATA StudioX';
-  // Update toolbar indicator
-  var indicator = document.getElementById('workspace-name-indicator');
-  if (indicator) indicator.textContent = _currentWorkspaceName;
+  // Update toolbar indicator (label only — keep the chevron)
+  var label = document.getElementById('workspace-name-label');
+  if (label) {
+    label.textContent = _currentWorkspaceName;
+  } else {
+    var indicator = document.getElementById('workspace-name-indicator');
+    if (indicator) indicator.textContent = _currentWorkspaceName;
+  }
 }
 
 // ── Block save/load ─────────────────────────────────────────────

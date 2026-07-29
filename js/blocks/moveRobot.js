@@ -13,26 +13,41 @@
  * Shared by all robot blocks.
  */
 function robotVarDropdownGenerator(block) {
-  var ws = block.workspace;
-  if (!ws) return [['robot', 'robot']];
-
   var options = [];
-  var enclosingProc = findEnclosingProcedure(block);
+  var ws = block.workspace;
 
-  if (enclosingProc) {
-    var info = getProcLocalNames(enclosingProc);
-    for (var i = 0; i < info.all.length; i++) {
-      options.push([info.all[i], info.all[i]]);
-    }
-  } else {
-    var localNames = getAllLocalScopeNames(ws);
-    var allVars = ws.getAllVariables();
-    for (var j = 0; j < allVars.length; j++) {
-      if (!localNames.has(allVars[j].name)) {
-        options.push([allVars[j].name, allVars[j].name]);
+  if (ws) {
+    var enclosingProc = findEnclosingProcedure(block);
+
+    if (enclosingProc) {
+      var info = getProcLocalNames(enclosingProc);
+      for (var i = 0; i < info.all.length; i++) {
+        options.push([info.all[i], info.all[i]]);
+      }
+    } else {
+      var localNames = getAllLocalScopeNames(ws);
+      var allVars = ws.getAllVariables();
+      for (var j = 0; j < allVars.length; j++) {
+        if (!localNames.has(allVars[j].name)) {
+          options.push([allVars[j].name, allVars[j].name]);
+        }
       }
     }
   }
+
+  // Keep the currently selected name visible even if it is an orphan (e.g. r3
+  // with no setup_robot) or was just renamed on import (robot → robot_1).
+  try {
+    var field = block.getField && block.getField('VARIABLE');
+    var cur = field ? field.getValue() : null;
+    if (cur) {
+      var found = false;
+      for (var k = 0; k < options.length; k++) {
+        if (options[k][1] === cur) { found = true; break; }
+      }
+      if (!found) options.unshift([cur, cur]);
+    }
+  } catch (e) { /* ignore */ }
 
   if (options.length === 0) {
     options.push(['robot', 'robot']);
@@ -40,11 +55,94 @@ function robotVarDropdownGenerator(block) {
   return options;
 }
 
+/**
+ * FieldDropdown for robot variable names.
+ *
+ * Blockly's default validation rejects any value not currently returned by the
+ * menu generator. That silently rewrites import renames (robot_1) and orphan
+ * names (r3) back to the first option ("robot"). Accept any non-empty string;
+ * the generator still drives the open menu.
+ *
+ * @param {Blockly.Block} block
+ * @param {Function=} opt_validator  optional change validator (coord/joint axes)
+ * @returns {Blockly.FieldDropdown}
+ */
+function createRobotVarDropdown(fieldBlock, opt_validator) {
+  var field = new Blockly.FieldDropdown(
+    function() { return robotVarDropdownGenerator(fieldBlock); },
+    opt_validator
+  );
+  field.doClassValidation_ = function(newValue) {
+    if (newValue === undefined || newValue === null || newValue === '') {
+      return null;
+    }
+    return String(newValue);
+  };
+  return field;
+}
+
+/**
+ * Attach a default number shadow block to a value input connection.
+ * Uses setShadowState when available (Blockly 9+), else XML setShadowDom.
+ */
+function setNumberShadow(connection, value) {
+  if (!connection) return;
+  var num = (value === undefined || value === null || value === '') ? 0 : value;
+  try {
+    if (typeof connection.setShadowState === 'function') {
+      connection.setShadowState({
+        type: 'math_number',
+        fields: { NUM: num }
+      });
+      return;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    var xml = Blockly.utils.xml.textToDom(
+      '<shadow type="math_number"><field name="NUM">' + num + '</field></shadow>'
+    );
+    connection.setShadowDom(xml);
+  } catch (e2) {
+    console.warn('[moveRobot] Could not set number shadow', e2);
+  }
+}
+
+/**
+ * Attach a default text shadow block to a value input connection.
+ */
+function setTextShadow(connection, text) {
+  if (!connection) return;
+  var t = (text === undefined || text === null) ? '' : String(text);
+  try {
+    if (typeof connection.setShadowState === 'function') {
+      connection.setShadowState({
+        type: 'text',
+        fields: { TEXT: t }
+      });
+      return;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    var escaped = t
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+    var xml = Blockly.utils.xml.textToDom(
+      '<shadow type="text"><field name="TEXT">' + escaped + '</field></shadow>'
+    );
+    connection.setShadowDom(xml);
+  } catch (e2) {
+    console.warn('[moveRobot] Could not set text shadow', e2);
+  }
+}
+
 function initMoveRobotBlocks() {
 
-  var COORD_LABELS_6 = ['X', 'Y', 'Z', 'A', 'B', 'C'];
+  // Labels shown on the block; keys stay A/B/C for generators & shadows (AXIS_A…)
+  var COORD_LABELS_6 = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ'];
   var COORD_KEYS_6   = ['X', 'Y', 'Z', 'A', 'B', 'C'];
-  var COORD_LABELS_4 = ['X', 'Y', 'Z', 'A'];
+  var COORD_LABELS_4 = ['X', 'Y', 'Z', 'RX'];
   var COORD_KEYS_4   = ['X', 'Y', 'Z', 'A'];
 
   var JOINT_LABELS_6 = ['Joint 1', 'Joint 2', 'Joint 3', 'Joint 4', 'Joint 5', 'Joint 6'];
@@ -78,8 +176,12 @@ function initMoveRobotBlocks() {
     for (var i = 0; i < ALL_AXIS_KEYS.length; i++) {
       var inp = block.getInput('AXIS_' + ALL_AXIS_KEYS[i]);
       if (inp && inp.connection && inp.connection.targetBlock()) {
-        savedBlocks[ALL_AXIS_KEYS[i]] = inp.connection.targetBlock();
-        inp.connection.disconnect();
+        // Keep real (non-shadow) blocks; shadows will be recreated
+        var tb = inp.connection.targetBlock();
+        if (tb && !tb.isShadow()) {
+          savedBlocks[ALL_AXIS_KEYS[i]] = tb;
+          inp.connection.disconnect();
+        }
       }
       if (inp) block.removeInput('AXIS_' + ALL_AXIS_KEYS[i]);
     }
@@ -89,6 +191,8 @@ function initMoveRobotBlocks() {
           .appendField(labels[j]);
       if (savedBlocks[keys[j]] && newInp.connection) {
         newInp.connection.connect(savedBlocks[keys[j]].outputConnection);
+      } else if (newInp.connection) {
+        setNumberShadow(newInp.connection, 0);
       }
     }
   }
@@ -137,10 +241,7 @@ function initMoveRobotBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); },
-            createVarValidator(this, 'coord')
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block, createVarValidator(this, 'coord')), 'VARIABLE')
           .appendField('.writeCoordinate');
       this.appendDummyInput('OPTS_ROW')
           .appendField('motion')
@@ -155,11 +256,12 @@ function initMoveRobotBlocks() {
             ['Incremental', '1']
           ]), 'POSITION');
 
-      // Default: 6 axes
+      // Default: 6 axes, each with a number shadow (0)
       for (var i = 0; i < COORD_KEYS_6.length; i++) {
-        this.appendValueInput('AXIS_' + COORD_KEYS_6[i])
+        var cInp = this.appendValueInput('AXIS_' + COORD_KEYS_6[i])
             .setCheck('Number')
             .appendField(COORD_LABELS_6[i]);
+        if (cInp.connection) setNumberShadow(cInp.connection, 0);
       }
 
       this.setInputsInline(true);
@@ -175,10 +277,7 @@ function initMoveRobotBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); },
-            createVarValidator(this, 'joint')
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block, createVarValidator(this, 'joint')), 'VARIABLE')
           .appendField('.writeAngle');
       this.appendDummyInput('OPTS_ROW')
           .appendField('mode')
@@ -187,11 +286,12 @@ function initMoveRobotBlocks() {
             ['Incremental', '1']
           ]), 'POSITION');
 
-      // Default: 6 axes
+      // Default: 6 axes, each with a number shadow (0)
       for (var i = 0; i < JOINT_KEYS_6.length; i++) {
-        this.appendValueInput('AXIS_' + JOINT_KEYS_6[i])
+        var jInp = this.appendValueInput('AXIS_' + JOINT_KEYS_6[i])
             .setCheck('Number')
             .appendField(JOINT_LABELS_6[i]);
+        if (jInp.connection) setNumberShadow(jInp.connection, 0);
       }
 
       this.setInputsInline(true);
@@ -213,9 +313,7 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('.homing()');
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
@@ -230,9 +328,7 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('.zero()');
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
@@ -247,12 +343,11 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('.speed(');
-      this.appendValueInput('SPEED')
+      var speedInp = this.appendValueInput('SPEED')
           .setCheck('Number');
+      if (speedInp.connection) setNumberShadow(speedInp.connection, 0);
       this.appendDummyInput()
           .appendField(')');
       this.setInputsInline(true);
@@ -268,8 +363,9 @@ function initRobotCommandBlocks() {
     init: function() {
       this.appendDummyInput()
           .appendField('delay');
-      this.appendValueInput('TIME')
+      var timeInp = this.appendValueInput('TIME')
           .setCheck('Number');
+      if (timeInp.connection) setNumberShadow(timeInp.connection, 1);
       this.appendDummyInput()
           .appendField('seconds');
       this.setInputsInline(true);
@@ -285,12 +381,11 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('.sendMsg(');
-      this.appendValueInput('MESSAGE')
+      var msgInp = this.appendValueInput('MESSAGE')
           .setCheck('String');
+      if (msgInp.connection) setTextShadow(msgInp.connection, '');
       this.appendDummyInput()
           .appendField(')');
       this.setInputsInline(true);
@@ -305,9 +400,7 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('.waitIdle()');
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
@@ -322,9 +415,7 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('suction cup')
           .appendField(new Blockly.FieldDropdown([
             ['SUCTION', '1'],
@@ -344,9 +435,7 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('gripper')
           .appendField(new Blockly.FieldDropdown([
             ['OPEN', '1'],
@@ -366,9 +455,7 @@ function initRobotCommandBlocks() {
     init: function() {
       var block = this;
       this.appendDummyInput()
-          .appendField(new Blockly.FieldDropdown(
-            function() { return robotVarDropdownGenerator(block); }
-          ), 'VARIABLE')
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
           .appendField('three-finger gripper')
           .appendField(new Blockly.FieldDropdown([
             ['OPEN', '1'],
@@ -380,6 +467,40 @@ function initRobotCommandBlocks() {
       this.setNextStatement(true, null);
       this.setColour('#E67E22');
       this.setTooltip('Control the three-finger soft gripper: Open (1), Close (2), Stop (0).');
+    }
+  };
+
+  // ── Conveyor belt / 7th-axis (writeExpand) ──
+  Blockly.Blocks['robot_conveyor'] = {
+    init: function() {
+      var block = this;
+      this.appendDummyInput()
+          .appendField(createRobotVarDropdown(block), 'VARIABLE')
+          .appendField('conveyor belt');
+      this.appendDummyInput('OPTS_ROW')
+          .appendField('motion')
+          .appendField(new Blockly.FieldDropdown([
+            ['Fast (G00)', '0'],
+            ['Linear (G01)', '1']
+          ]), 'MOTION')
+          .appendField('mode')
+          .appendField(new Blockly.FieldDropdown([
+            ['Absolute', '0'],
+            ['Incremental', '1']
+          ]), 'POSITION');
+      this.appendDummyInput()
+          .appendField('D');
+      var dInp = this.appendValueInput('D')
+          .setCheck('Number');
+      if (dInp.connection) setNumberShadow(dInp.connection, 0);
+      this.setInputsInline(true);
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour('#E67E22');
+      this.setTooltip(
+        'Move the 7th axis (conveyor belt / external rail). ' +
+        'Calls writeExpand(motion, position, d).'
+      );
     }
   };
 }
@@ -404,7 +525,8 @@ var _robotVarColorMap = {};  // varName -> color
 var ROBOT_BLOCK_TYPES = [
   'setup_robot', 'write_coordinate', 'write_angle',
   'robot_homing', 'robot_zero', 'robot_speed', 'robot_wait_idle',
-  'robot_send_msg', 'robot_pump', 'robot_gripper', 'robot_three_finger'
+  'robot_send_msg', 'robot_pump', 'robot_gripper', 'robot_three_finger',
+  'robot_conveyor'
 ];
 
 /**
@@ -481,6 +603,37 @@ function getRobotModelForVarName(varName) {
   }
   return null;
 }
+
+/**
+ * Map a logical robot model name to 3D viewer assets (URDF + TCP offset).
+ * MT4 / E4 share the Haro380 meshes from wlkata_arm_virtual-reality.
+ *
+ * @param {string|null} model — 'Mirobot' | 'MT4' | 'E4' | ...
+ * @returns {{id:string, label:string, urdf:string, meshBasePath:string, tcpOffset:number[]}}
+ */
+function resolveRobotViewerConfig(model) {
+  var BASE = './resources/wlkata_arm_virtual-reality/';
+  var key = model || 'Mirobot';
+  if (key === 'MT4' || key === 'E4' || key === 'Haro380' || key === 'haro380') {
+    return {
+      id: 'haro380',
+      label: (key === 'E4') ? 'E4' : (key === 'MT4' ? 'MT4' : 'Haro380'),
+      urdf: BASE + 'urdf/wlkata_haro380_description.urdf',
+      meshBasePath: BASE,
+      tcpOffset: [0, 0, -0.041]
+    };
+  }
+  return {
+    id: 'mirobot',
+    label: 'Mirobot',
+    urdf: BASE + 'urdf/wlkata_mirobot_description.urdf',
+    meshBasePath: BASE,
+    tcpOffset: [0, 0, 0.02428]
+  };
+}
+
+window.getRobotModelForVarName = getRobotModelForVarName;
+window.resolveRobotViewerConfig = resolveRobotViewerConfig;
 
 window.setRobotColorForVar = function(varName, color) {
   _robotVarColorMap[varName] = color;

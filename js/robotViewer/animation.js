@@ -6,6 +6,14 @@
 (function() {
   var ANIM_CONSTS = { MOVE_DUR: 3000, INTERVAL: 1000, STAY_DUR: 3000 };
 
+  /**
+   * Animation / IK always starts at joint home (all joint angles 0°).
+   * That is NOT Cartesian XYZ (0,0,0) — at J=0 the TCP is still at the
+   * arm's mechanical rest pose (model-dependent, often ~200mm out).
+   * Relative writeCoordinate offsets are applied from that FK TCP.
+   */
+  var JOINT_HOME = [0, 0, 0, 0, 0, 0];
+
   var variableStates = {};
 
   function getVariableState(variableName) {
@@ -124,18 +132,39 @@
     st.animRafId = requestAnimationFrame(step);
   }
 
+  function isIncremental(move) {
+    return !!(move && (move.incremental === true || move.incremental === 1 ||
+      move.inc === true || move.inc === 1));
+  }
+
+  /** Copy of joint-home pose (J1…J6 = 0°). Not Cartesian XYZ origin. */
+  function jointHome() {
+    return JOINT_HOME.slice();
+  }
+
   /**
-   * Compute the target 6-joint array from a parsed move object.
-   * Handles both absolute and incremental modes.
-   * For writeAngle: joints are taken from Axis1-Axis6.
-   * For writeCoordinate: uses IK (moveTo / moveBy).
+   * Compute the target 6-joint array from a single move.
+   *
+   * Proven path (same as 28f47caa): writeCoordinate uses viewer.moveBy /
+   * moveTo so relative offsets are applied from the FK TCP at the *current
+   * joint pose* (after joint home or previous move), never from XYZ (0,0,0).
+   *
+   * Temporarily applies IK then restores the viewer so callers can chain
+   * with setJoints(result) between moves (see computeMoveTargets).
+   *
+   * @param {object} move
+   * @param {number[]} [fromJoints] if set, seed the viewer before this move
    */
-  function targetJointsFromMove(move) {
+  function targetJointsFromMove(move, fromJoints) {
     var viewer = window._robotViewer;
-    var type = move.type;
+    var type = move && move.type;
 
     if (type === 'homing') {
-      return [0, 0, 0, 0, 0, 0];
+      return jointHome();
+    }
+
+    if (fromJoints && fromJoints.length >= 6 && viewer) {
+      viewer.setJoints(fromJoints.slice(0, 6));
     }
 
     if (type === 'writeAngle') {
@@ -147,18 +176,17 @@
         move.Axis5 || 0,
         move.Axis6 || 0
       ];
-      if (move.incremental && viewer) {
-        // Incremental: add deltas to current joints
+      if (isIncremental(move) && viewer) {
         var cur = viewer.getJoints();
         for (var i = 0; i < 6; i++) angles[i] += cur[i];
       }
       return angles;
     }
 
-    // writeCoordinate — use IK if viewer is available
+    // writeCoordinate — IK via moveBy (relative) / moveTo (absolute)
     if (type === 'writeCoordinate' && viewer) {
       var saved = viewer.getJoints();
-      if (move.incremental) {
+      if (isIncremental(move)) {
         viewer.moveBy(move.Axis1 || 0, move.Axis2 || 0, move.Axis3 || 0);
       } else {
         viewer.moveTo(move.Axis1 || 0, move.Axis2 || 0, move.Axis3 || 0);
@@ -168,15 +196,59 @@
       return result;
     }
 
-    // Fallback: treat as absolute joint angles
+    // No viewer or unknown type: do not treat XYZ mm as joint degrees
+    if (type === 'writeCoordinate') {
+      console.warn('[RobotAnimation] No IK viewer for writeCoordinate; holding pose');
+      return viewer ? viewer.getJoints() : jointHome();
+    }
+
     return [
-      move.Axis1 || 0,
-      move.Axis2 || 0,
-      move.Axis3 || 0,
-      move.Axis4 || 0,
-      move.Axis5 || 0,
-      move.Axis6 || 0
+      (move && move.Axis1) || 0,
+      (move && move.Axis2) || 0,
+      (move && move.Axis3) || 0,
+      (move && move.Axis4) || 0,
+      (move && move.Axis5) || 0,
+      (move && move.Axis6) || 0
     ];
+  }
+
+  /**
+   * Compute joint targets for a full move list with correct relative chaining.
+   *
+   * Starts at joint home (J1…J6 = 0°) unless startJoints is provided, then
+   * for each move: targetJointsFromMove → setJoints(target) so the next
+   * relative moveBy sees the real TCP at that pose.
+   *
+   * @param {object[]} moves
+   * @param {number[]} [startJoints]
+   * @returns {number[][]} one 6-joint target per move
+   */
+  function computeMoveTargets(moves, startJoints) {
+    var viewer = window._robotViewer;
+    if (!moves || moves.length === 0) return [];
+
+    var seed = (startJoints && startJoints.length >= 6)
+      ? startJoints.slice(0, 6)
+      : jointHome();
+
+    if (!viewer) {
+      console.warn('[RobotAnimation] computeMoveTargets: no _robotViewer (IK unavailable)');
+      return moves.map(function() { return seed.slice(); });
+    }
+
+    var saved = viewer.getJoints();
+    viewer.setJoints(seed.slice());
+
+    var targets = [];
+    for (var i = 0; i < moves.length; i++) {
+      var target = targetJointsFromMove(moves[i]);
+      targets.push(target.slice());
+      // Chain: next relative moveBy reads FK from this pose
+      viewer.setJoints(target);
+    }
+
+    viewer.setJoints(saved);
+    return targets;
   }
 
   // ── Core animation — fully self-contained per variable ──────
@@ -196,6 +268,17 @@
       return;
     }
 
+    // Precompute the full IK chain once so relative Cartesian moves accumulate
+    // from the running TCP at joint home (J=0), not Cartesian XYZ (0,0,0).
+    var seedJoints = (resumeFrom && resumeFrom.seedJoints)
+      ? resumeFrom.seedJoints
+      : jointHome();
+    if (!resumeFrom) {
+      viewer.setJoints(seedJoints.slice());
+    }
+    var precomputedTargets = computeMoveTargets(moves, seedJoints);
+    st.precomputedTargets = precomputedTargets;
+
     function runSequence() {
       if (st.moveIndex >= moves.length) {
         if (!st.loopEnabled) {
@@ -212,19 +295,21 @@
         // Loop mode: stay, then reset to home and loop
         startPhase(varName, 'stay', ANIM_CONSTS.STAY_DUR);
         st.animationTimer = setTimeout(function() {
-          viewer.setJoints([0, 0, 0, 0, 0, 0]);
+          viewer.setJoints(jointHome());
           st.moveIndex = 0;
+          // Recompute from joint home (J1…J6 = 0°)
+          precomputedTargets = computeMoveTargets(moves, jointHome());
+          st.precomputedTargets = precomputedTargets;
           st.animationTimer = setTimeout(runSequence, 100);
         }, ANIM_CONSTS.STAY_DUR);
         return;
       }
 
-      var move = moves[st.moveIndex];
       var label = (st.moveIndex + 1) + '/' + moves.length;
       startPhase(varName, 'move', ANIM_CONSTS.MOVE_DUR, label);
 
       var startJoints = viewer.getJoints();
-      var targetJoints = targetJointsFromMove(move);
+      var targetJoints = precomputedTargets[st.moveIndex] || startJoints.slice();
       st.moveStartTime = Date.now();
       st.currentTargetJoints = targetJoints;
       st.currentStartJoints = startJoints;
@@ -233,6 +318,8 @@
       st.moveIndex++;
 
       st.animationTimer = setTimeout(function() {
+        // Snap to exact target so the next move's start is correct
+        viewer.setJoints(targetJoints);
         startPhase(varName, 'interval', ANIM_CONSTS.INTERVAL);
         st.animationTimer = setTimeout(runSequence, ANIM_CONSTS.INTERVAL);
       }, ANIM_CONSTS.MOVE_DUR);
@@ -243,10 +330,10 @@
       if (resumeFrom.elapsedInMove < ANIM_CONSTS.MOVE_DUR
           && resumeFrom.moveIndex < moves.length) {
         // Paused mid-move — finish the interrupted move from current position
-        var resumeMove = moves[resumeFrom.moveIndex];
         var remaining = ANIM_CONSTS.MOVE_DUR - resumeFrom.elapsedInMove;
 
-        var targetJoints = targetJointsFromMove(resumeMove);
+        var targetJoints = precomputedTargets[resumeFrom.moveIndex]
+          || viewer.getJoints();
         var currentJoints = viewer.getJoints();
 
         st.moveStartTime = Date.now() - resumeFrom.elapsedInMove;
@@ -265,6 +352,7 @@
         st.rafId = requestAnimationFrame(function() { tickProgress(varName); });
 
         st.animationTimer = setTimeout(function() {
+          viewer.setJoints(targetJoints);
           startPhase(varName, 'interval', ANIM_CONSTS.INTERVAL);
           st.animationTimer = setTimeout(runSequence, ANIM_CONSTS.INTERVAL);
         }, remaining);
@@ -336,9 +424,9 @@
 
     var viewer = window._robotViewer;
     if (viewer) {
-      viewer.setJoints([0, 0, 0, 0, 0, 0]);
+      viewer.setJoints(jointHome());
     }
-    st.savedJoints = [0, 0, 0, 0, 0, 0];
+    st.savedJoints = jointHome();
   }
 
   /**
@@ -352,20 +440,24 @@
     // Restart animation from the beginning
     var viewer = window._robotViewer;
     if (viewer) {
-      viewer.setJoints([0, 0, 0, 0, 0, 0]);
+      viewer.setJoints(jointHome());
     }
     st.moveIndex = 0;
     st.pausedState = null;
-    st.savedJoints = [0, 0, 0, 0, 0, 0];
+    st.savedJoints = jointHome();
     startVarAnimation(varName, null);
   }
 
   // Expose globally
   window.RobotAnimation = {
     ANIM_CONSTS: ANIM_CONSTS,
+    JOINT_HOME: JOINT_HOME,
+    jointHome: jointHome,
     getVariableState: getVariableState,
     getMovesSignature: getMovesSignature,
     targetJointsFromMove: targetJointsFromMove,
+    computeMoveTargets: computeMoveTargets,
+    isIncremental: isIncremental,
     startVarAnimation: startVarAnimation,
     pauseVarAnimation: pauseVarAnimation,
     resumeVarAnimation: resumeVarAnimation,

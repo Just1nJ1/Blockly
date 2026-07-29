@@ -531,21 +531,95 @@
   // ── Public API ──
 
   /**
-   * Ensure a robot for the given variable name is loaded into the world scene.
-   * Returns a promise that resolves when the robot is ready.
+   * Resolve 3D viewer config for a robot variable (Mirobot vs MT4/E4/Haro380).
    */
-  function addRobot(varName) {
-    if (robots[varName]) return Promise.resolve();
+  function configForVar(varName, modelHint) {
+    var model = modelHint || null;
+    if (!model && typeof getRobotModelForVarName === 'function') {
+      model = getRobotModelForVarName(varName);
+    }
+    if (typeof resolveRobotViewerConfig === 'function') {
+      return resolveRobotViewerConfig(model);
+    }
+    // Fallback if helper not loaded yet
+    return {
+      id: 'mirobot',
+      label: model || 'Mirobot',
+      urdf: './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
+      meshBasePath: './resources/wlkata_arm_virtual-reality/',
+      tcpOffset: [0, 0, 0.02428]
+    };
+  }
+
+  /**
+   * Remove a robot from the world scene (mesh, name tag, selection).
+   */
+  function removeRobot(varName) {
+    var r = robots[varName];
+    if (!r) return;
+
+    if (selectedRobot === varName) {
+      selectRobot(null);
+    }
+    if (scene) {
+      if (r.group) scene.remove(r.group);
+      if (r.nameTag) scene.remove(r.nameTag);
+    }
+    delete robots[varName];
+    var idx = robotOrder.indexOf(varName);
+    if (idx !== -1) robotOrder.splice(idx, 1);
+    repositionAllRobots();
+    console.log('[WorldViewer] Robot removed:', varName);
+  }
+
+  /**
+   * Ensure a robot for the given variable name is loaded into the world scene.
+   * Reloads the mesh if the model type changed (e.g. Mirobot → MT4).
+   * @param {string} varName
+   * @param {string} [modelHint] optional model name ('Mirobot'|'MT4'|'E4')
+   * @returns {Promise<void>}
+   */
+  function addRobot(varName, modelHint) {
+    var cfg = configForVar(varName, modelHint);
+
+    // Already present with the correct mesh family — nothing to do
+    if (robots[varName] && robots[varName].modelId === cfg.id) {
+      // Refresh name tag label if model display name changed (MT4 vs E4)
+      var existing = robots[varName];
+      if (existing.modelLabel !== cfg.label && existing.nameTag && scene) {
+        scene.remove(existing.nameTag);
+        existing.nameTag = makeNameTag(varName + ' (' + cfg.label + ')');
+        existing.modelLabel = cfg.label;
+        scene.add(existing.nameTag);
+        existing.nameTag.visible = existing.visible;
+      }
+      return Promise.resolve();
+    }
+
+    // Model switched — drop the old mesh first, preserve pose if possible
+    var savedPose = null;
+    var savedVisible = true;
+    var savedAngles = null;
+    var savedUserMoved = false;
+    if (robots[varName]) {
+      savedPose = {
+        x: robots[varName].pose.x,
+        y: robots[varName].pose.y,
+        z: robots[varName].pose.z,
+        rotZ: robots[varName].pose.rotZ
+      };
+      savedVisible = robots[varName].visible;
+      savedAngles = robots[varName].currentAngles.slice();
+      savedUserMoved = !!robots[varName]._userMoved;
+      removeRobot(varName);
+    }
 
     return ensureThree().then(function() {
       var containerEl = document.getElementById('world-canvas');
       if (!containerEl) return Promise.reject(new Error('#world-canvas not found'));
       initScene(containerEl);
 
-      return loadURDF(
-        './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
-        './resources/wlkata_arm_virtual-reality/'
-      );
+      return loadURDF(cfg.urdf, cfg.meshBasePath);
     }).then(function(result) {
       // Default position: space along X axis
       var index = robotOrder.length;
@@ -555,29 +629,63 @@
 
       // Create floating name tag (added to scene, not robot group,
       // so it doesn't inflate the BoxHelper bounding box or catch raycasts)
-      var model = 'Mirobot';
-      if (typeof getRobotModelForVarName === 'function') {
-        model = getRobotModelForVarName(varName) || model;
-      }
-      var nameTag = makeNameTag(varName + ' (' + model + ')');
+      var nameTag = makeNameTag(varName + ' (' + cfg.label + ')');
       scene.add(nameTag);
 
-      var pose = { x: offsetX, y: 0, z: 0, rotZ: 0 };
+      var pose = savedPose || { x: offsetX, y: 0, z: 0, rotZ: 0 };
       robots[varName] = {
         group: result.group,
         joints: result.joints,
-        currentAngles: [0, 0, 0, 0, 0, 0],
+        currentAngles: savedAngles || [0, 0, 0, 0, 0, 0],
         pose: pose,
-        visible: true,
-        nameTag: nameTag
+        visible: savedVisible,
+        nameTag: nameTag,
+        modelId: cfg.id,
+        modelLabel: cfg.label,
+        _userMoved: savedUserMoved
       };
       robotOrder.push(varName);
+
+      result.group.visible = savedVisible;
+      nameTag.visible = savedVisible;
+      if (savedAngles) {
+        applyJoints(result.joints, savedAngles);
+      }
 
       // Apply initial pose and re-center
       repositionAllRobots();
 
-      console.log('[WorldViewer] Robot added for:', varName, 'at pose:', pose);
+      console.log('[WorldViewer] Robot added for:', varName,
+        'model:', cfg.id, 'at pose:', pose);
     });
+  }
+
+  /**
+   * Sync the world scene with the current set of robot variables.
+   * Adds missing robots, reloads when model type changes, removes orphans.
+   * @param {string[]} varNames
+   * @returns {Promise<void>}
+   */
+  function syncRobots(varNames) {
+    varNames = varNames || [];
+    var wanted = {};
+    for (var i = 0; i < varNames.length; i++) {
+      wanted[varNames[i]] = true;
+    }
+
+    // Remove robots no longer present in code / checklist
+    var existing = robotOrder.slice();
+    for (var j = 0; j < existing.length; j++) {
+      if (!wanted[existing[j]]) {
+        removeRobot(existing[j]);
+      }
+    }
+
+    var loadPromises = [];
+    for (var k = 0; k < varNames.length; k++) {
+      loadPromises.push(addRobot(varNames[k]));
+    }
+    return Promise.all(loadPromises).then(function() { /* void */ });
   }
 
   /**
@@ -662,10 +770,11 @@
 
   /**
    * Check if a robot is currently visible in the world.
+   * Unknown / not-yet-loaded robots default to visible (selected in the list).
    */
   function isRobotVisible(varName) {
     var r = robots[varName];
-    return r ? r.visible : false;
+    return r ? !!r.visible : true;
   }
 
   /**
@@ -725,6 +834,8 @@
 
   window.WorldViewer = {
     addRobot: addRobot,
+    removeRobot: removeRobot,
+    syncRobots: syncRobots,
     setJoints: setJoints,
     getJoints: getJoints,
     getRobotNames: getRobotNames,

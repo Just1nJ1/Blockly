@@ -73,13 +73,33 @@ async function ensureBlocklyReady() {
     initBlockly();
     loadWorkspaceBlocks();
     initSavedFunctions();
+    // Load workflow templates then populate toolbox + refresh blocks
+    if (window.WorkflowRegistry && typeof window.WorkflowRegistry.loadCore === 'function') {
+      window.WorkflowRegistry.loadCore().then(function() {
+        if (typeof refreshWorkflowsToolbox === 'function') {
+          refreshWorkflowsToolbox();
+        }
+        if (typeof refreshWorkflowBlocks === 'function' && typeof getWorkspace === 'function') {
+          refreshWorkflowBlocks(getWorkspace());
+        }
+      });
+    }
     _blocklyInitialized = true;
   }
 
-  // Blockly needs a resize after becoming visible
+  // Blockly needs a resize after becoming visible; keep prior scroll/zoom if any
   if (typeof getWorkspace === 'function' && typeof Blockly !== 'undefined') {
     setTimeout(function() {
-      Blockly.svgResize(getWorkspace());
+      var ws = getWorkspace();
+      if (!ws) return;
+      var sx = ws.scrollX;
+      var sy = ws.scrollY;
+      var sc = ws.scale;
+      Blockly.svgResize(ws);
+      try {
+        if (typeof ws.setScale === 'function') ws.setScale(sc);
+        if (typeof ws.scroll === 'function') ws.scroll(sx, sy);
+      } catch (e) { /* ignore */ }
       // Apply theme overrides to Blockly's inline styles
       if (typeof applyBlocklyThemeOverrides === 'function') {
         applyBlocklyThemeOverrides();

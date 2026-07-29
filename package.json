@@ -45,6 +45,7 @@
     "files": [
       "css/**/*",
       "js/**/*",
+      "workflows/**/*",
       "node_modules/**/*",
       "resources/wlkata_arm_virtual-reality/**/*",
       "resources/icons/**/*",

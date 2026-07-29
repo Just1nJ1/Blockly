@@ -19,9 +19,9 @@
         { label: 'X', statusKey: 'X', sdkParam: 'x' },
         { label: 'Y', statusKey: 'Y', sdkParam: 'y' },
         { label: 'Z', statusKey: 'Z', sdkParam: 'z' },
-        { label: 'A', statusKey: 'Rx', sdkParam: 'a' },
-        { label: 'B', statusKey: 'Ry', sdkParam: 'b' },
-        { label: 'C', statusKey: 'Rz', sdkParam: 'c' }
+        { label: 'RX', statusKey: 'Rx', sdkParam: 'a' },
+        { label: 'RY', statusKey: 'Ry', sdkParam: 'b' },
+        { label: 'RZ', statusKey: 'Rz', sdkParam: 'c' }
       ]
     },
     'MT4': {
@@ -35,7 +35,7 @@
         { label: 'X', statusKey: 'X', sdkParam: 'x' },
         { label: 'Y', statusKey: 'Y', sdkParam: 'y' },
         { label: 'Z', statusKey: 'Z', sdkParam: 'z' },
-        { label: 'A', statusKey: 'Rx', sdkParam: 'a' }
+        { label: 'RX', statusKey: 'Rx', sdkParam: 'a' }
       ]
     }
   };
@@ -48,6 +48,21 @@
   var _actionList = [];
   var _selectedIdx = -1;
   var _playing = false;
+
+  // Teaching "document" (like Blockly workspace, but a single .json file)
+  var _filePath = null;           // absolute path, or null when Untitled
+  var _fileDisplayName = 'Untitled';
+  var _fileDirty = false;
+  var _fs = null;
+  var _path = null;
+  var _ipc = null;
+  try {
+    _fs = require('fs');
+    _path = require('path');
+    _ipc = require('electron').ipcRenderer;
+  } catch (e) {
+    console.warn('[TeachingPanel] Node/Electron APIs unavailable:', e);
+  }
   var _stopRequested = false;
   var _statusTimer = null;
 
@@ -128,10 +143,11 @@
         plusBtn.textContent = '+';
         plusBtn.addEventListener('click', function() { jog(axis.sdkParam, _stepSize); });
 
+        // Layout: name | − | + | value  (four equal columns, each centered)
         row.appendChild(label);
         row.appendChild(minusBtn);
-        row.appendChild(valueInput);
         row.appendChild(plusBtn);
+        row.appendChild(valueInput);
         container.appendChild(row);
       })(axes[i]);
     }
@@ -359,6 +375,7 @@
             effectorLabel: def.label
           });
           _selectedIdx = _actionList.length - 1;
+          setDirty(true);
           renderTable();
           var wrap = document.querySelector('.teach-table-wrap');
           if (wrap) wrap.scrollTop = wrap.scrollHeight;
@@ -450,6 +467,7 @@
           delayInput.value = action.delaySeconds;
           delayInput.addEventListener('change', function() {
             _actionList[idx].delaySeconds = parseFloat(delayInput.value) || 1;
+            setDirty(true);
           });
           var secSpan = document.createElement('span');
           secSpan.textContent = ' seconds';
@@ -493,6 +511,7 @@
           }
           modeSelect.addEventListener('change', function() {
             _actionList[idx].mode = modeSelect.value;
+            setDirty(true);
             var motionSel = tr.querySelector('.teach-motion-select');
             if (motionSel) motionSel.disabled = (modeSelect.value === 'joint');
           });
@@ -514,6 +533,7 @@
           motionSelect.disabled = (action.mode === 'joint');
           motionSelect.addEventListener('change', function() {
             _actionList[idx].motionMode = motionSelect.value;
+            setDirty(true);
           });
           tdMotion.appendChild(motionSelect);
           tr.appendChild(tdMotion);
@@ -533,6 +553,7 @@
               }
               inp.addEventListener('change', function() {
                 _actionList[idx].values[key] = parseFloat(inp.value) || 0;
+                setDirty(true);
               });
               td.appendChild(inp);
               tr.appendChild(td);
@@ -570,12 +591,14 @@
     _actionList[idx] = _actionList[newIdx];
     _actionList[newIdx] = temp;
     _selectedIdx = newIdx;
+    setDirty(true);
     renderTable();
   }
 
   function deleteRow(idx) {
     _actionList.splice(idx, 1);
     if (_selectedIdx >= _actionList.length) _selectedIdx = _actionList.length - 1;
+    setDirty(true);
     renderTable();
   }
 
@@ -613,6 +636,7 @@
       });
 
       _selectedIdx = _actionList.length - 1;
+      setDirty(true);
       renderTable();
 
       // Scroll to bottom
@@ -759,21 +783,241 @@
     rows.forEach(function(r) { r.classList.remove('teach-row-active'); });
   }
 
-  // ── Export / Import ──
+  // ── File document (Untitled / Save / Open) ──
 
+  function updateFileLabel() {
+    var label = document.getElementById('teach-file-label');
+    if (!label) return;
+    label.textContent = _fileDisplayName + (_fileDirty ? ' *' : '');
+  }
+
+  function setDirty(dirty) {
+    _fileDirty = !!dirty;
+    updateFileLabel();
+  }
+
+  function setCurrentFile(filePath) {
+    _filePath = filePath || null;
+    if (_filePath && _path) {
+      _fileDisplayName = _path.basename(_filePath);
+    } else {
+      _fileDisplayName = 'Untitled';
+    }
+    _fileDirty = false;
+    updateFileLabel();
+  }
+
+  function serializeDocument() {
+    return JSON.stringify({
+      version: 1,
+      actions: _actionList
+    }, null, 2);
+  }
+
+  /**
+   * Apply actions from a loaded teaching document.
+   * options.filePath — open as that file (replace current list)
+   * options.append   — append imported actions to the current list (keep path, mark dirty)
+   * Default is replace without changing the file path (browser open / legacy).
+   */
+  function applyLoadedActions(data, options) {
+    options = options || {};
+    var actions = Array.isArray(data) ? data
+      : (data && Array.isArray(data.actions) ? data.actions : null);
+    if (!actions) {
+      alert('Invalid teaching file format');
+      return;
+    }
+
+    // Shallow-clone so port remapping does not mutate the original parse tree
+    // in a way that would affect re-imports; each action is still a plain object.
+    actions = actions.map(function(a) { return Object.assign({}, a); });
+
+    // Collect unique port+model pairs (skip delay actions)
+    var portMap = {};
+    for (var i = 0; i < actions.length; i++) {
+      var item = actions[i];
+      if (item.type === 'delay' || !item.port) continue;
+      if (!portMap[item.port]) {
+        portMap[item.port] = item.model || 'Mirobot';
+      }
+    }
+
+    var portKeys = Object.keys(portMap);
+    function finish(list) {
+      if (options.append) {
+        _actionList = _actionList.concat(list);
+        // Keep selection; just mark dirty so save writes the combined list
+        setDirty(true);
+      } else {
+        _actionList = list;
+        _selectedIdx = -1;
+        if (options.filePath) setCurrentFile(options.filePath);
+        else setDirty(true);
+      }
+      renderTable();
+    }
+
+    if (portKeys.length === 0) {
+      finish(actions);
+      return;
+    }
+
+    showPortMappingDialog(portKeys, portMap, function(mapping) {
+      for (var j = 0; j < actions.length; j++) {
+        if (actions[j].type === 'delay' || !actions[j].port) continue;
+        var mapped = mapping[actions[j].port];
+        if (mapped) {
+          actions[j].port = mapped.port;
+          actions[j].model = mapped.model;
+        }
+      }
+      finish(actions);
+    });
+  }
+
+  function writeToPath(filePath) {
+    if (!_fs) {
+      alert('Saving is only available in the desktop app.');
+      return false;
+    }
+    try {
+      // Ensure .json extension
+      if (_path && _path.extname(filePath).toLowerCase() !== '.json') {
+        filePath = filePath + '.json';
+      }
+      _fs.writeFileSync(filePath, serializeDocument(), 'utf8');
+      setCurrentFile(filePath);
+      return true;
+    } catch (err) {
+      alert('Failed to save: ' + err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Save current teaching document.
+   * First save (or Save As): native save dialog.
+   * Later saves: overwrite the same path.
+   */
+  async function saveFile(forceDialog) {
+    if (!_ipc) {
+      // Browser fallback: download
+      exportList();
+      return;
+    }
+    try {
+      var target = _filePath;
+      if (forceDialog || !target) {
+        var picked = await _ipc.invoke('dialog:saveFile', {
+          title: 'Save Teaching File',
+          defaultPath: target || (_fileDisplayName === 'Untitled'
+            ? 'Untitled.json'
+            : _fileDisplayName),
+          filters: [
+            { name: 'Teaching JSON', extensions: ['json'] },
+            { name: 'All Files', extensions: ['*'] }
+          ]
+        });
+        if (!picked) return;
+        target = picked;
+      }
+      writeToPath(target);
+    } catch (err) {
+      alert('Save failed: ' + err.message);
+    }
+  }
+
+  /**
+   * Open a teaching file via native dialog (also used by filename chevron).
+   * Replaces the current action list and adopts the file path (like opening a document).
+   */
+  async function openFile() {
+    if (_fileDirty) {
+      var ok = confirm('Current teaching file has unsaved changes. Discard and open another file?');
+      if (!ok) return;
+    }
+    if (!_ipc || !_fs) {
+      // Browser fallback: pick file and replace (not append — this is Open, not Import)
+      var fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.json';
+      fileInput.addEventListener('change', function() {
+        if (!fileInput.files.length) return;
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            var data = JSON.parse(e.target.result);
+            applyLoadedActions(data, {});
+          } catch (err) {
+            alert('Invalid file format');
+          }
+        };
+        reader.readAsText(fileInput.files[0]);
+      });
+      fileInput.click();
+      return;
+    }
+    try {
+      var picked = await _ipc.invoke('dialog:openFile', {
+        title: 'Open Teaching File',
+        filters: [
+          { name: 'Teaching JSON', extensions: ['json'] },
+          { name: 'All Files', extensions: ['*'] }
+        ]
+      });
+      if (!picked) return;
+      var raw = _fs.readFileSync(picked, 'utf8');
+      var data = JSON.parse(raw);
+      applyLoadedActions(data, { filePath: picked });
+    } catch (err) {
+      alert('Failed to open: ' + err.message);
+    }
+  }
+
+  /** Export / Save As (always shows dialog). */
   function exportList() {
-    if (_actionList.length === 0) return;
-    var json = JSON.stringify(_actionList, null, 2);
+    if (_ipc) {
+      saveFile(true);
+      return;
+    }
+    // Browser download fallback
+    var json = serializeDocument();
     var blob = new Blob([json], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'teaching-positions.json';
+    a.download = (_fileDisplayName || 'teaching') +
+      (_fileDisplayName && _fileDisplayName.indexOf('.json') !== -1 ? '' : '.json');
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  function importList() {
+  /**
+   * Import actions from a teaching JSON file and append them to the current list.
+   * Does not change the current file path; marks the document dirty.
+   * Unlike openFile, never discards existing actions.
+   */
+  async function importList() {
+    if (_ipc && _fs) {
+      try {
+        var picked = await _ipc.invoke('dialog:openFile', {
+          title: 'Import Teaching Actions',
+          filters: [
+            { name: 'Teaching JSON', extensions: ['json'] },
+            { name: 'All Files', extensions: ['*'] }
+          ]
+        });
+        if (!picked) return;
+        var raw = _fs.readFileSync(picked, 'utf8');
+        var data = JSON.parse(raw);
+        applyLoadedActions(data, { append: true });
+      } catch (err) {
+        alert('Failed to import: ' + err.message);
+      }
+      return;
+    }
+    // Browser fallback: file input + append
     var fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.accept = '.json';
@@ -783,43 +1027,7 @@
       reader.onload = function(e) {
         try {
           var data = JSON.parse(e.target.result);
-          if (!Array.isArray(data)) { alert('Invalid file format'); return; }
-
-          // Collect unique port+model pairs from the imported data (skip delay actions)
-          var portMap = {};
-          for (var i = 0; i < data.length; i++) {
-            var item = data[i];
-            if (item.type === 'delay' || !item.port) continue;
-            var key = item.port;
-            if (!portMap[key]) {
-              portMap[key] = item.model || 'Mirobot';
-            }
-          }
-
-          var portKeys = Object.keys(portMap);
-          if (portKeys.length === 0) {
-            // No port-dependent actions (e.g. all delays), just import
-            _actionList = data;
-            _selectedIdx = -1;
-            renderTable();
-            return;
-          }
-
-          // Show port mapping dialog
-          showPortMappingDialog(portKeys, portMap, function(mapping) {
-            // Apply mapping to all actions
-            for (var j = 0; j < data.length; j++) {
-              if (data[j].type === 'delay' || !data[j].port) continue;
-              var mapped = mapping[data[j].port];
-              if (mapped) {
-                data[j].port = mapped.port;
-                data[j].model = mapped.model;
-              }
-            }
-            _actionList = data;
-            _selectedIdx = -1;
-            renderTable();
-          });
+          applyLoadedActions(data, { append: true });
         } catch (err) {
           alert('Invalid file format');
         }
@@ -1186,13 +1394,19 @@
     });
     if (stopBtn) stopBtn.addEventListener('click', stopPlayback);
     if (upBtn) upBtn.addEventListener('click', function() {
-      if (_selectedIdx > 0) moveRow(_selectedIdx, -1);
+      if (_selectedIdx > 0) { moveRow(_selectedIdx, -1); setDirty(true); }
     });
     if (downBtn) downBtn.addEventListener('click', function() {
-      if (_selectedIdx >= 0 && _selectedIdx < _actionList.length - 1) moveRow(_selectedIdx, 1);
+      if (_selectedIdx >= 0 && _selectedIdx < _actionList.length - 1) {
+        moveRow(_selectedIdx, 1);
+        setDirty(true);
+      }
     });
     if (delBtn) delBtn.addEventListener('click', function() {
-      if (_selectedIdx >= 0 && _selectedIdx < _actionList.length) deleteRow(_selectedIdx);
+      if (_selectedIdx >= 0 && _selectedIdx < _actionList.length) {
+        deleteRow(_selectedIdx);
+        setDirty(true);
+      }
     });
     var addDelayBtn = document.getElementById('teach-add-delay-btn');
     if (addDelayBtn) addDelayBtn.addEventListener('click', function() {
@@ -1201,21 +1415,28 @@
         delaySeconds: 1
       });
       _selectedIdx = _actionList.length - 1;
+      setDirty(true);
       renderTable();
       var wrap = document.querySelector('.teach-table-wrap');
       if (wrap) wrap.scrollTop = wrap.scrollHeight;
     });
     if (clearBtn) clearBtn.addEventListener('click', function() {
       if (_actionList.length === 0) return;
+      if (!confirm('Clear all steps in this file?')) return;
       _actionList = [];
       _selectedIdx = -1;
+      setDirty(true);
       renderTable();
     });
+    var saveBtn = document.getElementById('teach-save-btn');
+    if (saveBtn) saveBtn.addEventListener('click', function() { saveFile(false); });
     if (exportBtn) exportBtn.addEventListener('click', exportList);
     if (importBtn) importBtn.addEventListener('click', importList);
 
     var toBlocklyBtn = document.getElementById('teach-to-blockly-btn');
     if (toBlocklyBtn) toBlocklyBtn.addEventListener('click', exportToBlockly);
+
+    updateFileLabel();
   }
 
   // ── Init ──
@@ -1251,7 +1472,7 @@
     init();
   }
 
-  // Expose for device detector
+  // Expose for device detector + toolbar (filename switcher)
   window.teachingPanelOnConnected = function(port, model) {
     if (!_currentPort) {
       _currentPort = port;
@@ -1265,5 +1486,11 @@
     _currentPort = null;
     _currentModel = null;
     stopStatusPolling();
+  };
+
+  window.TeachingPanel = {
+    openFile: openFile,
+    saveFile: function() { return saveFile(false); },
+    saveFileAs: function() { return saveFile(true); }
   };
 })();

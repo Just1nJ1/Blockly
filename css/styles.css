@@ -282,6 +282,10 @@ body {
   background: var(--cmd-bar-bg);
   border-bottom: 1px solid var(--cmd-border);
   gap: 8px;
+  box-sizing: border-box;
+  /* Match Blockly / Teaching primary toolbar height */
+  min-height: 64px;
+  flex-shrink: 0;
 }
 #command-port-select {
   background: var(--cmd-select-bg);
@@ -319,26 +323,128 @@ body {
 #command-port-remove.visible {
   display: inline-block;
 }
-#command-clear-btn {
-  padding: 4px 10px;
-  background: var(--cmd-select-bg);
-  color: var(--cmd-text);
-  border: 1px solid var(--cmd-select-border);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  margin-left: auto;
-}
-#command-clear-btn:hover {
-  background: var(--cmd-select-border);
-}
-#toolbar {
+/* Clear / emergency stop use shared .toolbar-btn (icon over label) */
+/* Shared primary toolbar height (Blockly + Teaching) */
+#toolbar,
+.teach-toolbar {
   background: var(--bg-tertiary);
-  padding: 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border-primary);
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  /* 6+52+6 padding/buttons — keep both toolbars the same height */
+  min-height: 64px;
 }
+
+#toolbar {
+  /* inherits shared rules above */
+}
+
+/* Workspace / teaching file name + chevron (click to switch)
+   Fixed width ~15 characters at 14px bold + chevron + padding */
+.workspace-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 168px;
+  min-width: 168px;
+  max-width: 168px;
+  margin: 0 4px 0 0;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-right: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.workspace-switcher:hover {
+  background: var(--tab-hover, rgba(0, 0, 0, 0.06));
+  border-color: var(--border-primary);
+}
+.workspace-name-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.workspace-switcher-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.workspace-switcher:hover .workspace-switcher-chevron {
+  opacity: 1;
+}
+
+/* Uniform icon-over-label toolbar buttons (Blockly + Teaching) */
+.toolbar-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 56px;
+  height: 52px;
+  padding: 4px 2px;
+  gap: 3px;
+  margin: 0;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.1;
+  flex-shrink: 0;
+}
+.toolbar-btn:hover {
+  background: var(--tab-hover, rgba(0, 0, 0, 0.06));
+  border-color: var(--border-primary);
+}
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  background: transparent;
+  border-color: transparent;
+  cursor: not-allowed;
+}
+.toolbar-btn-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: block;
+}
+.toolbar-btn-label {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+/* Danger actions: same chrome, red icon/text only */
+.toolbar-btn-danger {
+  color: #e53935;
+}
+.toolbar-btn-danger:hover {
+  background: rgba(229, 57, 53, 0.08);
+  border-color: rgba(229, 57, 53, 0.35);
+  color: #c62828;
+}
+
+/* Default button style (outside toolbar) */
 button {
   padding: 8px 16px;
   cursor: pointer;
@@ -359,16 +465,39 @@ button:disabled {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
+}
+
+/* Left: Blockly/World tabs + content; Right: Control/Code panel (full height) */
+#left-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#content-stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 #blocklyDiv {
   flex: 1;
+  min-height: 0;
 }
 #output-panel {
-  width: 350px;
+  /* Match teaching tab control panel width (.teach-ctrl-panel) */
+  width: 260px;
+  min-width: 260px;
+  flex-shrink: 0;
   border-left: 1px solid var(--border-primary);
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
+  min-height: 0;
+  overflow: hidden;
 }
 #output-header {
   padding: 10px;
@@ -418,24 +547,47 @@ button:disabled {
   border-radius: 4px;
 }
 
-/* View tabs (top-level: Blockly | Model) */
-#view-tabs {
+/* Secondary tab bars: Blockly/World (left) and Code/Functions/Control (right)
+   share the same gray bar height and button metrics. */
+#view-tabs,
+#output-tabs {
   display: flex;
+  flex-shrink: 0;
+  align-items: stretch;
   background: var(--bg-header);
   border-bottom: 1px solid var(--border-primary);
+  min-height: 40px;
+  box-sizing: border-box;
 }
-.view-tab-btn {
-  flex: 1;
-  padding: 12px 24px;
+.view-tab-btn,
+.panel-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 20px;
   border: none;
+  border-radius: 0; /* override global button radius — square tabs, no gray peek */
   background: transparent;
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
+  line-height: 1.2;
   color: var(--text-secondary);
   border-bottom: 3px solid transparent;
+  white-space: nowrap;
 }
-.view-tab-btn:hover {
+.view-tab-btn {
+  flex: 0 1 auto;
+  min-width: 140px;
+}
+.panel-tab-btn {
+  flex: 1;
+  min-width: 0;
+}
+.view-tab-btn:hover,
+.panel-tab-btn:hover {
   background: var(--tab-hover);
 }
 .view-tab-btn.active {
@@ -443,21 +595,30 @@ button:disabled {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+.panel-tab-btn.active {
+  background: var(--bg-secondary);
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
-/* Workspace mode (Blockly + output panel) */
+/* Workspace mode (Blockly editor fills left content stage) */
 #workspace-area {
   display: flex;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 #workspace-area.hidden {
   display: none;
 }
 
-/* Model mode (3D viewer + side panel) */
+/* Model mode (3D viewer + viewer controls within left column) */
 #model-area {
   display: flex;
   flex: 0;
+  min-width: 0;
+  min-height: 0;
   background: var(--bg-model);
   overflow: hidden;
   visibility: hidden;
@@ -762,25 +923,13 @@ button:disabled {
   fill: var(--debug-bg-tint) !important;
 }
 
-/* Debug toolbar buttons */
-.debug-btn {
-  background: #607D8B;
+/* Debug toolbar buttons — same size/style as other toolbar buttons */
+#toolbar .debug-btn.toolbar-btn {
   display: none;
 }
-.debug-btn:hover {
-  background: #455A64;
+#toolbar .debug-btn.toolbar-btn.visible {
+  display: inline-flex;
 }
-.debug-btn.visible {
-  display: inline-block;
-}
-#stepBtn { background: #FF9800; }
-#stepBtn:hover { background: #F57C00; }
-#continueBtn { background: #4CAF50; }
-#continueBtn:hover { background: #388E3C; }
-#runSelectedBtn { background: #8BC34A; color: #333; }
-#runSelectedBtn:hover { background: #7CB342; }
-#stopDebugBtn { background: #f44336; }
-#stopDebugBtn:hover { background: #d32f2f; }
 
 /* Debug variables panel */
 #debug-panel {
@@ -854,31 +1003,7 @@ button:disabled {
   font-weight: bold;
 }
 
-/* Output panel tabs (Code/Output only) */
-#output-tabs {
-  display: flex;
-  background: var(--bg-header);
-  border-bottom: 1px solid var(--border-primary);
-}
-.panel-tab-btn {
-  flex: 1;
-  padding: 10px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  border-bottom: 2px solid transparent;
-}
-.panel-tab-btn:hover {
-  background: var(--tab-hover);
-}
-.panel-tab-btn.active {
-  background: var(--bg-secondary);
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
+/* panel-tab / view-tab shared styles live above with #view-tabs / #output-tabs */
 .panel-tab-content {
   display: none;
   flex-direction: column;
@@ -1164,7 +1289,87 @@ button:disabled {
   border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
+
+/* Axis jog rows: 4 equal columns — name | − | + | value — each cell centered */
+#ctrl-axis-rows,
+#teach-axis-rows {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 4px;
+}
+#ctrl-axis-rows .ctrl-joint-row,
+#teach-axis-rows .ctrl-joint-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  column-gap: 4px;
+  align-items: center;
+  justify-items: center;
+  width: 100%;
+  margin: 0 0 6px;
+  box-sizing: border-box;
+}
+#ctrl-axis-rows .ctrl-joint-label,
+#teach-axis-rows .ctrl-joint-label {
+  grid-column: 1;
+  width: 100%;
+  max-width: none;
+  text-align: center;
+  box-sizing: border-box;
+}
+#ctrl-axis-rows .ctrl-btn-minus,
+#teach-axis-rows .ctrl-btn-minus {
+  grid-column: 2;
+}
+#ctrl-axis-rows .ctrl-btn-plus,
+#teach-axis-rows .ctrl-btn-plus {
+  grid-column: 3;
+}
+#ctrl-axis-rows .ctrl-joint-value,
+#teach-axis-rows .ctrl-joint-value {
+  grid-column: 4;
+  width: 64px;
+  max-width: 100%;
+}
+
+/* Axis − / + : larger rectangles, square corners (not small rounded squares) */
+#ctrl-axis-rows .ctrl-btn,
+#teach-axis-rows .ctrl-btn {
+  width: 100%;
+  max-width: 56px;
+  min-width: 36px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 30px;
+  text-align: center;
+  border-radius: 0;
+  background: var(--bg-header);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  cursor: pointer;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+#ctrl-axis-rows .ctrl-btn:hover,
+#teach-axis-rows .ctrl-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+#ctrl-axis-rows .ctrl-btn-plus,
+#teach-axis-rows .ctrl-btn-plus {
+  color: #4CAF50;
+}
+#ctrl-axis-rows .ctrl-btn-minus,
+#teach-axis-rows .ctrl-btn-minus {
+  color: #f44336;
+}
+
+/* Fallback for any other .ctrl-btn usage */
 .ctrl-btn {
   width: 28px;
   height: 28px;
@@ -1173,11 +1378,13 @@ button:disabled {
   font-weight: 600;
   line-height: 28px;
   text-align: center;
-  border-radius: 4px;
+  border-radius: 0;
   background: var(--bg-header);
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 .ctrl-btn:hover {
   background: var(--accent);
@@ -2385,6 +2592,81 @@ button:disabled {
   stroke-dasharray: none !important;
 }
 
+/* Floating toolbar when multi-select includes robot blocks */
+.blockly-selection-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.blockly-selection-toolbar-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #333);
+}
+.blockly-selection-toolbar-select {
+  min-width: 100px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 4px;
+  background: var(--bg-secondary, #fafafa);
+  color: var(--text-primary, #333);
+  cursor: pointer;
+}
+.blockly-selection-toolbar-hint {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+/* Right-click menu for multi-selection bulk variable change */
+.blockly-selection-ctx-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 180px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px 0;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-primary, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+.blockly-selection-ctx-title {
+  padding: 6px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.blockly-selection-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #333);
+  font-size: 13px;
+  cursor: pointer;
+}
+.blockly-selection-ctx-item:hover {
+  background: var(--accent, #2196F3);
+  color: #fff;
+}
+
 /* Theme toggle button */
 #theme-toggle {
   width: 40px;
@@ -2545,10 +2827,12 @@ button:disabled {
 }
 
 /* ═══ Teaching View ═══ */
+/* Same shell as Blockly: full-width toolbar, then content row */
 
 .teach-container {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -2556,6 +2840,8 @@ button:disabled {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border-right: 1px solid var(--border-primary);
 }
@@ -2566,6 +2852,7 @@ button:disabled {
   overflow-y: auto;
   background: var(--bg-secondary);
   padding: 8px;
+  flex-shrink: 0;
 }
 
 .teach-ctrl-panel .ctrl-port-row {
@@ -2588,52 +2875,28 @@ button:disabled {
   border-color: var(--accent);
 }
 
+/* .teach-toolbar metrics shared with #toolbar above */
 .teach-toolbar {
-  display: flex;
-  gap: 4px;
-  padding: 6px 8px;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-primary);
-  align-items: center;
-  flex-wrap: wrap;
+  width: 100%;
+  flex-wrap: nowrap;
+  overflow-x: auto;
 }
 
-.teach-tb-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.teach-tb-btn:hover { background: var(--bg-tertiary); }
-.teach-tb-btn:disabled { opacity: 0.5; cursor: default; }
-
-.teach-tb-play { background: #4CAF50; color: #fff; border-color: #388E3C; }
-.teach-tb-play:hover { background: #43A047; }
-.teach-tb-play:disabled { background: #81C784; }
-
-.teach-tb-run-step { background: #2196F3; color: #fff; border-color: #1976D2; }
-.teach-tb-run-step:hover { background: #1E88E5; }
-.teach-tb-run-step:disabled { background: #90CAF9; color: #fff; }
-
-.teach-tb-stop { background: #f44336; color: #fff; border-color: #d32f2f; }
-.teach-tb-stop:hover { background: #e53935; }
-.teach-tb-stop:disabled { background: #ef9a9a; }
-
-.teach-tb-blockly { background: #FF9800; color: #fff; border-color: #F57C00; }
-.teach-tb-blockly:hover { background: #FB8C00; }
-.teach-tb-del { color: #e53935; }
-.teach-tb-del:hover { background: #ffebee; }
-
+/* Teaching toolbar uses shared .toolbar-btn; separators only */
 .teach-tb-sep {
   width: 1px;
-  height: 20px;
+  height: 36px;
   background: var(--border-primary);
-  margin: 0 2px;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+/* Invisible spacers keep Blockly toolbar sections aligned with Teaching */
+.toolbar-btn-spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
+.teach-tb-sep-spacer {
+  visibility: hidden;
 }
 
 .teach-table-wrap {
@@ -2655,14 +2918,19 @@ button:disabled {
 }
 
 .teach-table th {
-  background: var(--bg-tertiary);
+  background: var(--bg-header);
   border: 1px solid var(--border-primary);
-  padding: 6px 8px;
+  /* Match Blockly/World / Code/Functions/Control tab bar height */
+  height: 40px;
+  min-height: 40px;
+  padding: 0 8px;
+  box-sizing: border-box;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 14px;
   white-space: nowrap;
   text-align: center;
   color: var(--text-primary);
+  vertical-align: middle;
 }
 
 .teach-table td {

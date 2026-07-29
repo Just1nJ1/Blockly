@@ -7,24 +7,25 @@
   <script src="js/ui/theme.js"></script>
 </head>
 <body>
+  <script src="js/ui/icons.js"></script>
   <div id="app">
     <!-- Left sidebar for top-level tab switching -->
     <div id="sidebar">
       <div class="sidebar-tab active" data-tab="command" title="Command">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-command"></use></svg>
         <span>Command</span>
       </div>
       <div class="sidebar-tab" data-tab="blockly" title="Blockly">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-blockly"></use></svg>
         <span>Blockly</span>
       </div>
       <div class="sidebar-tab" data-tab="teaching" title="Teaching">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-teaching"></use></svg>
         <span>Teaching</span>
       </div>
       <!-- Drawing tab is now provided by the drawing extension -->
       <button id="settings-btn" class="sidebar-bottom-btn" title="Settings" onclick="if(typeof openSettings==='function')openSettings();">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-settings"></use></svg>
       </button>
       <button id="theme-toggle" title="Toggle theme"></button>
     </div>
@@ -40,7 +41,15 @@
             <option value="__manual__">Connect manually...</option>
           </select>
           <button id="command-port-remove" title="Remove manual port">✕</button>
-          <button id="command-clear-btn" title="Clear screen">Clear</button>
+          <span style="flex:1;"></span>
+          <button type="button" class="toolbar-btn" id="command-clear-btn" title="Clear screen">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clear"></use></svg>
+            <span class="toolbar-btn-label">Clear</span>
+          </button>
+          <button type="button" class="toolbar-btn toolbar-btn-danger" id="command-stop-all-btn" onclick="stopAllRobots()" title="Emergency stop all robots">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-estop"></use></svg>
+            <span class="toolbar-btn-label">Stop</span>
+          </button>
         </div>
         <div id="command-output"></div>
         <div id="command-input-bar">
@@ -50,26 +59,74 @@
 
       <!-- ═══ Teaching View ═══ -->
       <div id="teaching-view" class="app-view">
+        <!-- Full-width toolbar (aligned with Blockly: file · play · teach · file ops · e-stop) -->
+        <div class="teach-toolbar">
+          <button type="button" id="teach-file-indicator" class="workspace-switcher" title="Open teaching file" onclick="if(window.TeachingPanel)TeachingPanel.openFile()">
+            <span id="teach-file-label" class="workspace-name-label">Untitled</span>
+            <svg class="workspace-switcher-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-save-btn" title="Save teaching file">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-save"></use></svg>
+            <span class="toolbar-btn-label">Save</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <button type="button" class="toolbar-btn" id="teach-play-btn" title="Run all steps">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-run"></use></svg>
+            <span class="toolbar-btn-label">Run</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-run-step-btn" title="Run selected step" disabled>
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-step"></use></svg>
+            <span class="toolbar-btn-label">Step</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-stop-btn" title="Stop playback" disabled>
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-stop"></use></svg>
+            <span class="toolbar-btn-label">Stop</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <button type="button" class="toolbar-btn" id="teach-move-up-btn" title="Move selected row up" disabled>
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-up"></use></svg>
+            <span class="toolbar-btn-label">Up</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-move-down-btn" title="Move selected row down" disabled>
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-down"></use></svg>
+            <span class="toolbar-btn-label">Down</span>
+          </button>
+          <button type="button" class="toolbar-btn toolbar-btn-danger" id="teach-delete-btn" title="Delete selected row" disabled>
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clear"></use></svg>
+            <span class="toolbar-btn-label">Del</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <button type="button" class="toolbar-btn" id="teach-add-delay-btn" title="Add delay action">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-delay"></use></svg>
+            <span class="toolbar-btn-label">Delay</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-to-blockly-btn" title="Export actions as Blockly blocks">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-blocks"></use></svg>
+            <span class="toolbar-btn-label">Blocks</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <button type="button" class="toolbar-btn" id="teach-clear-btn" title="Clear list">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clear"></use></svg>
+            <span class="toolbar-btn-label">Clear</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-export-btn" title="Export list (Save As)">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-export"></use></svg>
+            <span class="toolbar-btn-label">Export</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="teach-import-btn" title="Import and append actions">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-import"></use></svg>
+            <span class="toolbar-btn-label">Import</span>
+          </button>
+          <span style="flex:1;"></span>
+          <button type="button" class="toolbar-btn toolbar-btn-danger" id="teach-stop-all-btn" onclick="stopAllRobots()" title="Emergency stop all robots">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-estop"></use></svg>
+            <span class="toolbar-btn-label">Stop</span>
+          </button>
+        </div>
+
         <div class="teach-container">
           <!-- Left: Action list -->
           <div class="teach-list-area">
-            <div class="teach-toolbar">
-              <button id="teach-play-btn" class="teach-tb-btn teach-tb-play" title="Play All">&#9654; Play All</button>
-              <button id="teach-run-step-btn" class="teach-tb-btn teach-tb-run-step" title="Run selected step" disabled>&#9654; Run Step</button>
-              <button id="teach-stop-btn" class="teach-tb-btn teach-tb-stop" title="Stop" disabled>&#9632; Stop</button>
-              <span class="teach-tb-sep"></span>
-              <button id="teach-move-up-btn" class="teach-tb-btn" title="Move selected row up" disabled>&#9650; Up</button>
-              <button id="teach-move-down-btn" class="teach-tb-btn" title="Move selected row down" disabled>&#9660; Down</button>
-              <button id="teach-delete-btn" class="teach-tb-btn teach-tb-del" title="Delete selected row" disabled>&#10005; Delete</button>
-              <span class="teach-tb-sep"></span>
-              <button id="teach-add-delay-btn" class="teach-tb-btn" title="Add delay action">+ Delay</button>
-              <span style="flex:1;"></span>
-              <button id="teach-to-blockly-btn" class="teach-tb-btn teach-tb-blockly" title="Export actions as Blockly blocks">To Blockly</button>
-              <span class="teach-tb-sep"></span>
-              <button id="teach-clear-btn" class="teach-tb-btn" title="Clear list">Clear</button>
-              <button id="teach-export-btn" class="teach-tb-btn" title="Export list">Export</button>
-              <button id="teach-import-btn" class="teach-tb-btn" title="Import list">Import</button>
-            </div>
             <div class="teach-table-wrap">
               <table class="teach-table" id="teach-table">
                 <thead>
@@ -81,9 +138,9 @@
                     <th class="teach-col-axis">X/J1</th>
                     <th class="teach-col-axis">Y/J2</th>
                     <th class="teach-col-axis">Z/J3</th>
-                    <th class="teach-col-axis">A/J4</th>
-                    <th class="teach-col-axis">B/J5</th>
-                    <th class="teach-col-axis">C/J6</th>
+                    <th class="teach-col-axis">RX/J4</th>
+                    <th class="teach-col-axis">RY/J5</th>
+                    <th class="teach-col-axis">RZ/J6</th>
                     <th class="teach-col-actions"></th>
                   </tr>
                 </thead>
@@ -145,175 +202,247 @@
       <!-- ═══ Blockly View ═══ -->
       <div id="blockly-view" class="app-view">
         <div id="toolbar">
-          <span id="workspace-name-indicator" title="Current workspace" style="font-weight:600;font-size:14px;color:var(--text-primary);padding:0 8px;cursor:pointer;border-right:1px solid var(--border-primary);margin-right:4px;" onclick="switchWorkspace()"></span>
-          <button id="saveBtn" onclick="saveWorkspaceBlocks()" title="Save workspace (Ctrl+S)">💾 Save</button>
-          <button id="runBtn" onclick="runCode()">▶ Run</button>
-          <button id="debugBtn" onclick="debugStart()">⏯ Step Run</button>
-          <button id="stepBtn" class="debug-btn" onclick="debugStep()">⏭ Step</button>
-          <button id="continueBtn" class="debug-btn" onclick="debugContinue()">▶ Continue</button>
-          <button id="stopDebugBtn" class="debug-btn" onclick="debugStop()">⏹ Stop</button>
-          <button id="runSelectedBtn" onclick="runSelectedBlocks()" title="Run selected blocks (Cmd+Shift+Enter)">▶ Run Selected</button>
-          <button id="clearBtn" onclick="clearWorkspace()">Clear Workspace</button>
-          <button id="exportBtn" onclick="exportBlocks()">Export Blocks</button>
-          <button id="importBtn" onclick="importBlocks()">Import Blocks</button>
+          <!-- File section (aligned with Teaching) -->
+          <button type="button" id="workspace-name-indicator" class="workspace-switcher" title="Switch workspace" onclick="switchWorkspace()">
+            <span id="workspace-name-label" class="workspace-name-label"></span>
+            <svg class="workspace-switcher-chevron" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+          </button>
+          <button type="button" class="toolbar-btn" id="saveBtn" onclick="saveWorkspaceBlocks()" title="Save workspace (Ctrl+S)">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-save"></use></svg>
+            <span class="toolbar-btn-label">Save</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <!-- Playback section -->
+          <button type="button" class="toolbar-btn" id="runBtn" onclick="runCode()" title="Run">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-run"></use></svg>
+            <span class="toolbar-btn-label">Run</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="debugBtn" onclick="debugStart()" title="Step through code">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-step"></use></svg>
+            <span class="toolbar-btn-label">Step</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="runSelectedBtn" onclick="runSelectedBlocks()" title="Run selected blocks (Cmd+Shift+Enter)">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sel"></use></svg>
+            <span class="toolbar-btn-label">Sel</span>
+          </button>
+          <!-- Debug-only (visible while stepping; occupy Stop slot area) -->
+          <button type="button" class="toolbar-btn debug-btn" id="stepBtn" onclick="debugStep()" title="Step one line">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-step"></use></svg>
+            <span class="toolbar-btn-label">Next</span>
+          </button>
+          <button type="button" class="toolbar-btn debug-btn" id="continueBtn" onclick="debugContinue()" title="Continue">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-continue"></use></svg>
+            <span class="toolbar-btn-label">Cont</span>
+          </button>
+          <button type="button" class="toolbar-btn debug-btn" id="stopDebugBtn" onclick="debugStop()" title="Stop debug">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-stop"></use></svg>
+            <span class="toolbar-btn-label">Stop</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <!-- Teaching-only slots: invisible spacers keep sections aligned -->
+          <button type="button" class="toolbar-btn toolbar-btn-spacer" tabindex="-1" aria-hidden="true" disabled>
+            <span class="toolbar-btn-icon"></span><span class="toolbar-btn-label">Up</span>
+          </button>
+          <button type="button" class="toolbar-btn toolbar-btn-spacer" tabindex="-1" aria-hidden="true" disabled>
+            <span class="toolbar-btn-icon"></span><span class="toolbar-btn-label">Down</span>
+          </button>
+          <button type="button" class="toolbar-btn toolbar-btn-spacer" tabindex="-1" aria-hidden="true" disabled>
+            <span class="toolbar-btn-icon"></span><span class="toolbar-btn-label">Del</span>
+          </button>
+          <span class="teach-tb-sep teach-tb-sep-spacer" aria-hidden="true"></span>
+          <button type="button" class="toolbar-btn toolbar-btn-spacer" tabindex="-1" aria-hidden="true" disabled>
+            <span class="toolbar-btn-icon"></span><span class="toolbar-btn-label">Delay</span>
+          </button>
+          <button type="button" class="toolbar-btn toolbar-btn-spacer" tabindex="-1" aria-hidden="true" disabled>
+            <span class="toolbar-btn-icon"></span><span class="toolbar-btn-label">Blocks</span>
+          </button>
+          <span class="teach-tb-sep"></span>
+          <!-- File ops -->
+          <button type="button" class="toolbar-btn" id="clearBtn" onclick="clearWorkspace()" title="Clear workspace">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clear"></use></svg>
+            <span class="toolbar-btn-label">Clear</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="exportBtn" onclick="exportBlocks()" title="Export blocks">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-export"></use></svg>
+            <span class="toolbar-btn-label">Export</span>
+          </button>
+          <button type="button" class="toolbar-btn" id="importBtn" onclick="importBlocks()" title="Import and append blocks (.xml or legacy .blockly)">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-import"></use></svg>
+            <span class="toolbar-btn-label">Import</span>
+          </button>
           <span style="flex:1;"></span>
-          <button id="stopAllBtn" onclick="stopAllRobots()" style="background:#f44336;font-weight:700;">STOP</button>
+          <button type="button" class="toolbar-btn toolbar-btn-danger" id="stopAllBtn" onclick="stopAllRobots()" title="Emergency stop all robots">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-estop"></use></svg>
+            <span class="toolbar-btn-label">Stop</span>
+          </button>
         </div>
 
-        <!-- Top-level view tabs: Blockly + dynamic robot variable tabs -->
-        <div id="view-tabs">
-          <button class="view-tab-btn active" data-view="workspace">Blockly</button>
-          <!-- Robot variable tabs are added dynamically based on code -->
-        </div>
-
+        <!--
+          Layout:
+            toolbar …………… full width (Save / Run / Stop)
+            main-container … row: left column | right panel
+              left-column … view tabs + Blockly / World content
+              output-panel … Code / Functions / Control (full height)
+        -->
         <div id="main-container">
-          <!-- Workspace mode: Blockly editor + output panel -->
-          <div id="workspace-area">
-            <div id="blocklyDiv"></div>
-            <div id="output-panel">
-              <!-- Tabs for right panel -->
-              <div id="output-tabs">
-                <button class="panel-tab-btn active" data-panel="code-output">Code & Output</button>
-                <button class="panel-tab-btn" data-panel="saved-functions">Saved Functions</button>
-                <button class="panel-tab-btn" data-panel="control-panel">Control</button>
+          <div id="left-column">
+            <!-- Blockly / World tabs sit only above the left content -->
+            <div id="view-tabs">
+              <button class="view-tab-btn active" data-view="workspace">Blockly</button>
+              <!-- World tab is added dynamically -->
+            </div>
+
+            <div id="content-stage">
+              <!-- Workspace mode: Blockly editor only -->
+              <div id="workspace-area">
+                <div id="blocklyDiv"></div>
               </div>
 
-              <!-- Tab 1: Code & Output (default) -->
-              <div id="panel-content-code-output" class="panel-tab-content active">
-                <div id="output-header">Generated Python Code</div>
-                <div id="code-preview"></div>
-                <div id="output-header">Output</div>
-                <div id="output-content"></div>
-                <!-- Debug panel: variables + call stack (shown during debug sessions) -->
-                <div id="debug-panel">
-                  <div id="debug-panel-header">
-                    <span>Variables</span>
-                    <span class="debug-line-info" id="debug-line-info"></span>
-                  </div>
-                  <div id="debug-variables"></div>
-                  <div id="debug-callstack"></div>
+              <!-- Model mode: 3D viewer + viewer controls (still left of Control panel) -->
+              <div id="model-area">
+                <div id="viewer-canvas" style="position:relative;">
+                  <!-- Three.js canvas and progress bars are injected here -->
                 </div>
-              </div>
-
-              <!-- Tab 2: Saved Functions -->
-              <div id="panel-content-saved-functions" class="panel-tab-content">
-                <div id="saved-functions-list"></div>
-              </div>
-
-              <!-- Tab 3: Control Panel -->
-              <div id="panel-content-control-panel" class="panel-tab-content">
-                <div class="ctrl-panel">
-                  <!-- Port selector -->
-                  <div class="ctrl-port-row">
-                    <span class="ctrl-joint-label">Port</span>
-                    <select id="ctrl-port-select">
-                      <option value="" disabled selected>No Connection</option>
-                    </select>
-                  </div>
-
-                  <!-- Settings button -->
-                  <div class="ctrl-settings-row">
-                    <button class="ctrl-action-btn ctrl-btn-settings" id="ctrl-settings-btn" title="Robot Settings">&#9881; Settings</button>
-                  </div>
-
-                  <!-- Home / Zero buttons -->
-                  <div class="ctrl-action-row">
-                    <button class="ctrl-action-btn ctrl-btn-home" id="ctrl-home-btn">Home</button>
-                    <button class="ctrl-action-btn ctrl-btn-zero" id="ctrl-zero-btn">Zero Pos</button>
-                  </div>
-
-                  <!-- Mode toggle: Joint / Coordinate -->
-                  <div class="ctrl-mode-toggle">
-                    <span class="ctrl-mode-label ctrl-mode-active" data-mode="joint">Joint</span>
-                    <div class="ctrl-toggle-track" id="ctrl-mode-switch">
-                      <div class="ctrl-toggle-thumb"></div>
+                <div id="world-canvas" style="position:relative; display:none;">
+                  <!-- World view: multiple robots in one scene -->
+                </div>
+                <div id="viewer-panel">
+                  <div id="viewer-panel-header">Viewer Controls</div>
+                  <div id="viewer-panel-content">
+                    <!-- Animation section -->
+                    <div class="viewer-section">
+                      <div class="viewer-section-title">Animation</div>
+                      <div class="viewer-playback-controls">
+                        <button id="anim-play-btn" class="viewer-playback-btn" title="Play">▶</button>
+                        <button id="anim-pause-btn" class="viewer-playback-btn" title="Pause" disabled>⏸</button>
+                        <button id="anim-stop-btn" class="viewer-playback-btn" title="Stop" disabled>⏹</button>
+                      </div>
+                      <div class="viewer-control-row">
+                        <label for="loop-toggle">Loop playback</label>
+                        <button id="loop-toggle-btn" class="viewer-toggle active" title="Toggle loop playback">ON</button>
+                      </div>
                     </div>
-                    <span class="ctrl-mode-label" data-mode="coord">Coordinate</span>
+                    <!-- Robots section (visible only in world mode) -->
+                    <div class="viewer-section" id="world-robots-section" style="display:none;">
+                      <div class="viewer-section-title">Robots</div>
+                      <div id="world-robot-list">
+                        <!-- Populated dynamically by viewTabs.js -->
+                      </div>
+                    </div>
+                    <!-- Properties section (visible when a robot is selected in world mode) -->
+                    <div class="viewer-section" id="robot-properties-section" style="display:none;">
+                      <div class="viewer-section-title">Properties — <span id="props-robot-name"></span></div>
+                      <div class="viewer-props-grid">
+                        <label class="viewer-prop-label" data-target="prop-x">X (m)</label>
+                        <input type="number" id="prop-x" step="0.01" class="viewer-prop-input">
+                        <label class="viewer-prop-label" data-target="prop-y">Y (m)</label>
+                        <input type="number" id="prop-y" step="0.01" class="viewer-prop-input">
+                        <label class="viewer-prop-label" data-target="prop-z">Z (m)</label>
+                        <input type="number" id="prop-z" step="0.01" class="viewer-prop-input">
+                        <label class="viewer-prop-label" data-target="prop-rot-z">Rotation Z (°)</label>
+                        <input type="number" id="prop-rot-z" step="1" class="viewer-prop-input">
+                      </div>
+                    </div>
                   </div>
-
-                  <!-- Dynamic axis rows (populated by JS) -->
-                  <div id="ctrl-axis-rows"></div>
-
-                  <!-- Capture position button -->
-                  <div class="ctrl-action-row">
-                    <button class="ctrl-action-btn" id="ctrl-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">Capture Position</button>
-                  </div>
-
-                  <!-- Step size -->
-                  <div class="ctrl-step-row">
-                    <span class="ctrl-joint-label">Step</span>
-                    <button class="ctrl-step-btn ctrl-step-preset" data-step="1">1</button>
-                    <button class="ctrl-step-btn ctrl-step-preset" data-step="5">5</button>
-                    <button class="ctrl-step-btn ctrl-step-preset active" data-step="10">10</button>
-                    <button class="ctrl-step-btn ctrl-step-preset" data-step="15">15</button>
-                    <input type="number" class="ctrl-step-input" value="10" min="1" step="1">
-                  </div>
-
-                  <!-- End effector divider -->
-                  <div class="ctrl-divider">
-                    <span>END EFFECTOR CONTROL</span>
-                  </div>
-
-                  <!-- End effector selector + dynamic buttons -->
-                  <div class="ctrl-effector-row">
-                    <select id="ctrl-effector-select">
-                      <option value="none">None</option>
-                      <option value="suction">Suction Cup</option>
-                      <option value="gripper">Gripper</option>
-                      <option value="soft">Soft Gripper</option>
-                    </select>
-                  </div>
-                  <div id="ctrl-effector-buttons"></div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Model mode: 3D viewer + side control panel -->
-          <div id="model-area">
-            <div id="viewer-canvas" style="position:relative;">
-              <!-- Three.js canvas and progress bars are injected here -->
+          <!-- Right panel: full height under toolbar (beside Blockly/World) -->
+          <div id="output-panel">
+            <div id="output-tabs">
+              <button class="panel-tab-btn active" data-panel="code-output">Code</button>
+              <button class="panel-tab-btn" data-panel="saved-functions">Functions</button>
+              <button class="panel-tab-btn" data-panel="control-panel">Control</button>
             </div>
-            <div id="world-canvas" style="position:relative; display:none;">
-              <!-- World view: multiple robots in one scene -->
+
+            <!-- Tab 1: Code & Output (default) -->
+            <div id="panel-content-code-output" class="panel-tab-content active">
+              <div id="output-header">Generated Python Code</div>
+              <div id="code-preview"></div>
+              <div id="output-header">Output</div>
+              <div id="output-content"></div>
+              <!-- Debug panel: variables + call stack (shown during debug sessions) -->
+              <div id="debug-panel">
+                <div id="debug-panel-header">
+                  <span>Variables</span>
+                  <span class="debug-line-info" id="debug-line-info"></span>
+                </div>
+                <div id="debug-variables"></div>
+                <div id="debug-callstack"></div>
+              </div>
             </div>
-            <div id="viewer-panel">
-              <div id="viewer-panel-header">Viewer Controls</div>
-              <div id="viewer-panel-content">
-                <!-- Animation section -->
-                <div class="viewer-section">
-                  <div class="viewer-section-title">Animation</div>
-                  <div class="viewer-playback-controls">
-                    <button id="anim-play-btn" class="viewer-playback-btn" title="Play">▶</button>
-                    <button id="anim-pause-btn" class="viewer-playback-btn" title="Pause" disabled>⏸</button>
-                    <button id="anim-stop-btn" class="viewer-playback-btn" title="Stop" disabled>⏹</button>
-                  </div>
-                  <div class="viewer-control-row">
-                    <label for="loop-toggle">Loop playback</label>
-                    <button id="loop-toggle-btn" class="viewer-toggle active" title="Toggle loop playback">ON</button>
-                  </div>
+
+            <!-- Tab 2: Functions (saved function library) -->
+            <div id="panel-content-saved-functions" class="panel-tab-content">
+              <div id="saved-functions-list"></div>
+            </div>
+
+            <!-- Tab 3: Control Panel -->
+            <div id="panel-content-control-panel" class="panel-tab-content">
+              <div class="ctrl-panel">
+                <!-- Port selector -->
+                <div class="ctrl-port-row">
+                  <span class="ctrl-joint-label">Port</span>
+                  <select id="ctrl-port-select">
+                    <option value="" disabled selected>No Connection</option>
+                  </select>
                 </div>
-                <!-- Robots section (visible only in world mode) -->
-                <div class="viewer-section" id="world-robots-section" style="display:none;">
-                  <div class="viewer-section-title">Robots</div>
-                  <div id="world-robot-list">
-                    <!-- Populated dynamically by viewTabs.js -->
-                  </div>
+
+                <!-- Settings button -->
+                <div class="ctrl-settings-row">
+                  <button class="ctrl-action-btn ctrl-btn-settings" id="ctrl-settings-btn" title="Robot Settings">&#9881; Settings</button>
                 </div>
-                <!-- Properties section (visible when a robot is selected in world mode) -->
-                <div class="viewer-section" id="robot-properties-section" style="display:none;">
-                  <div class="viewer-section-title">Properties — <span id="props-robot-name"></span></div>
-                  <div class="viewer-props-grid">
-                    <label class="viewer-prop-label" data-target="prop-x">X (m)</label>
-                    <input type="number" id="prop-x" step="0.01" class="viewer-prop-input">
-                    <label class="viewer-prop-label" data-target="prop-y">Y (m)</label>
-                    <input type="number" id="prop-y" step="0.01" class="viewer-prop-input">
-                    <label class="viewer-prop-label" data-target="prop-z">Z (m)</label>
-                    <input type="number" id="prop-z" step="0.01" class="viewer-prop-input">
-                    <label class="viewer-prop-label" data-target="prop-rot-z">Rotation Z (°)</label>
-                    <input type="number" id="prop-rot-z" step="1" class="viewer-prop-input">
-                  </div>
+
+                <!-- Home / Zero buttons -->
+                <div class="ctrl-action-row">
+                  <button class="ctrl-action-btn ctrl-btn-home" id="ctrl-home-btn">Home</button>
+                  <button class="ctrl-action-btn ctrl-btn-zero" id="ctrl-zero-btn">Zero Pos</button>
                 </div>
+
+                <!-- Mode toggle: Joint / Coordinate -->
+                <div class="ctrl-mode-toggle">
+                  <span class="ctrl-mode-label ctrl-mode-active" data-mode="joint">Joint</span>
+                  <div class="ctrl-toggle-track" id="ctrl-mode-switch">
+                    <div class="ctrl-toggle-thumb"></div>
+                  </div>
+                  <span class="ctrl-mode-label" data-mode="coord">Coordinate</span>
+                </div>
+
+                <!-- Dynamic axis rows (populated by JS) -->
+                <div id="ctrl-axis-rows"></div>
+
+                <!-- Capture position button -->
+                <div class="ctrl-action-row">
+                  <button class="ctrl-action-btn" id="ctrl-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">Capture Position</button>
+                </div>
+
+                <!-- Step size -->
+                <div class="ctrl-step-row">
+                  <span class="ctrl-joint-label">Step</span>
+                  <button class="ctrl-step-btn ctrl-step-preset" data-step="1">1</button>
+                  <button class="ctrl-step-btn ctrl-step-preset" data-step="5">5</button>
+                  <button class="ctrl-step-btn ctrl-step-preset active" data-step="10">10</button>
+                  <button class="ctrl-step-btn ctrl-step-preset" data-step="15">15</button>
+                  <input type="number" class="ctrl-step-input" value="10" min="1" step="1">
+                </div>
+
+                <!-- End effector divider -->
+                <div class="ctrl-divider">
+                  <span>END EFFECTOR CONTROL</span>
+                </div>
+
+                <!-- End effector selector + dynamic buttons -->
+                <div class="ctrl-effector-row">
+                  <select id="ctrl-effector-select">
+                    <option value="none">None</option>
+                    <option value="suction">Suction Cup</option>
+                    <option value="gripper">Gripper</option>
+                    <option value="soft">Soft Gripper</option>
+                  </select>
+                </div>
+                <div id="ctrl-effector-buttons"></div>
               </div>
             </div>
           </div>
@@ -356,6 +485,11 @@
   <script src="js/blocks/functionParam.js"></script>
   <script src="js/blocks/setupRobot.js"></script>
   <script src="js/blocks/moveRobot.js"></script>
+  <!-- Workflow templates (registry + blocks) -->
+  <script src="js/workflows/schema.js"></script>
+  <script src="js/workflows/registry.js"></script>
+  <script src="js/workflows/slots.js"></script>
+  <script src="js/workflows/blocks.js"></script>
   <script src="js/blocks/index.js"></script>
 
   <!-- Code Generators -->

@@ -30,11 +30,17 @@ class _SimLimitExceeded(Exception):
 
 
 class RecordingRobot:
-    """Drop-in stand-in for wlkatapython.*_UART that only records moves."""
+    """Drop-in stand-in for wlkatapython.*_UART that only records moves.
+
+    Appends events to a shared timeline used by ``build_move_schedule`` so
+    world animation can honor real waitIdle semantics (per-robot queues).
+    """
 
     # Class-level counters shared across all instances in one simulation
     total_moves = 0
     all_instances: List["RecordingRobot"] = []
+    # Global event order: {"type":"move"|"waitIdle", "instance_id": int, ...}
+    timeline: List[dict] = []
 
     def __init__(self) -> None:
         self.moves: List[dict] = []
@@ -46,6 +52,17 @@ class RecordingRobot:
         return None
 
     def waitIdle(self, count=3):
+        """Record a program-level wait for *this* robot (not a pose keyframe).
+
+        Real firmware: blocks the Python program until this robot's motion queue
+        is empty. Other robots keep running. If this robot is already idle the
+        call returns immediately (no-op for scheduling).
+        """
+        RecordingRobot.timeline.append({
+            "type": "waitIdle",
+            "instance_id": id(self),
+            "count": count,
+        })
         return None
 
     def speed(self, num=0):
@@ -90,6 +107,12 @@ class RecordingRobot:
                 f"Simulation exceeded max moves ({_MAX_MOVES_TOTAL})"
             )
         self.moves.append(move)
+        RecordingRobot.timeline.append({
+            "type": "move",
+            "instance_id": id(self),
+            "move_index": len(self.moves) - 1,
+            "move": move,
+        })
 
     # ── motion APIs (match wlkatapython signatures) ─────────────
 
@@ -230,6 +253,85 @@ def _build_mock_wlkatapython() -> types.ModuleType:
     return mod
 
 
+def build_move_schedule(
+    timeline: List[dict],
+    id_to_name: Dict[int, str],
+) -> List[dict]:
+    """Schedule moves with real waitIdle semantics (unit time slots).
+
+    Real firmware: motion commands are non-blocking (queued on the robot);
+    only waitIdle(R) blocks the program until R finishes its queue.
+    waitIdle on an already-idle robot returns immediately and does not
+    stall other robots.
+
+    Model
+    -----
+    - code_time advances only on waitIdle(R) → max(code_time, free_at[R])
+    - each move on R starts at max(free_at[R], code_time) and lasts 1 unit
+    - free_at[R] is when R's queue will be empty
+
+    Example: A.1, A.2, waitIdle(B), A.3, B.1
+      → A: [0,1], [1,2], [2,3];  B: [0,1]  (B starts with A; wait B is no-op)
+
+    Example: A.1,B.1,C.1,B.2,A.2, wait A,B,C, then C.2,A.3,…
+      → first batch free_at A=B=2, C=1; waits set code_time=2;
+      → later moves start at t≥2 together.
+    """
+    code_time = 0
+    free_at: Dict[str, int] = {}
+    schedule: List[dict] = []
+
+    for ev in timeline:
+        et = ev.get("type")
+        iid = ev.get("instance_id")
+        name = id_to_name.get(iid) or f"__inst_{iid}"
+
+        if et == "move":
+            move = ev.get("move")
+            if move is None:
+                continue
+            start = max(free_at.get(name, 0), code_time)
+            end = start + 1
+            free_at[name] = end
+            schedule.append({
+                "var": name,
+                "start": start,
+                "end": end,
+                "move": move,
+            })
+        elif et == "waitIdle":
+            # Block program time until this robot is idle (no-op if already free)
+            code_time = max(code_time, free_at.get(name, 0))
+
+    return schedule
+
+
+def build_animation_segments(
+    timeline: List[dict],
+    id_to_name: Dict[int, str],
+) -> List[Dict[str, List[dict]]]:
+    """Legacy helper: group schedule slots into coarse lists per time-span.
+
+    Prefer ``build_move_schedule`` + client concurrent playback. Kept so older
+    clients that only read ``segments`` still get a reasonable split when
+    waitIdles actually advance code_time for everyone who was waited on.
+    """
+    schedule = build_move_schedule(timeline, id_to_name)
+    if not schedule:
+        return []
+
+    # Build per-var ordered moves (same as flat moves list order of issue)
+    by_var: Dict[str, List[dict]] = {}
+    for item in schedule:
+        by_var.setdefault(item["var"], []).append(item["move"])
+
+    # Single segment if no wait actually delayed anyone's later moves
+    max_end = max(item["end"] for item in schedule)
+    # Detect if any move starts after 0 with a gap caused by wait — still return
+    # one segment of full lists for backward compat; client uses schedule.
+    return [by_var]
+
+
 def _build_mock_serial() -> types.ModuleType:
     # Start from a shallow shell so `import serial` works in user code
     mod = types.ModuleType("serial")
@@ -361,6 +463,7 @@ class MoveSimulator:
         # Reset class state for this run
         RecordingRobot.total_moves = 0
         RecordingRobot.all_instances = []
+        RecordingRobot.timeline = []
 
         mock_wlkata = _build_mock_wlkatapython()
         mock_serial = _build_mock_serial()
@@ -439,12 +542,14 @@ class MoveSimulator:
 
         # Map global names -> RecordingRobot instances
         moves_by_var: Dict[str, List[dict]] = {}
+        id_to_name: Dict[int, str] = {}
         seen_ids = set()
         for name, val in safe_globals.items():
             if name.startswith("__"):
                 continue
             if isinstance(val, RecordingRobot):
                 moves_by_var[name] = list(val.moves)
+                id_to_name[id(val)] = name
                 seen_ids.add(id(val))
 
         # Instances that never got a lasting global name (still return under
@@ -453,11 +558,28 @@ class MoveSimulator:
         for inst in RecordingRobot.all_instances:
             if id(inst) in seen_ids:
                 continue
-            if not inst.moves:
+            if not inst.moves and not any(
+                e.get("instance_id") == id(inst) and e.get("type") == "waitIdle"
+                for e in RecordingRobot.timeline
+            ):
                 continue
             key = f"__orphan_{orphan_idx}"
             orphan_idx += 1
             moves_by_var[key] = list(inst.moves)
+            id_to_name[id(inst)] = key
+
+        # Concurrent schedule with true waitIdle semantics (unit time slots)
+        schedule = build_move_schedule(RecordingRobot.timeline, id_to_name)
+        segments = build_animation_segments(RecordingRobot.timeline, id_to_name)
+        if not segments and moves_by_var:
+            segments = [{k: list(v) for k, v in moves_by_var.items() if v}]
+
+        # Annotate timeline with resolved var names for the client
+        named_timeline = []
+        for ev in RecordingRobot.timeline:
+            e = dict(ev)
+            e["var"] = id_to_name.get(ev.get("instance_id"), e.get("var"))
+            named_timeline.append(e)
 
         success = error is None
         # Partial success when we hit a limit but still recorded moves
@@ -467,6 +589,9 @@ class MoveSimulator:
         result = {
             "success": success,
             "moves": moves_by_var,
+            "schedule": schedule,
+            "segments": segments,
+            "timeline": named_timeline,
             "stdout": stdout_buf.getvalue(),
             "stderr": stderr_buf.getvalue(),
             "timed_out": timed_out,

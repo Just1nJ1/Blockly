@@ -32,26 +32,22 @@ function initSetupRobotBlock() {
 
     /**
      * Dynamic dropdown generator for COM ports.
-     * Returns detected ports if available, otherwise a default list.
+     * Returns detected ports if available, otherwise built-in virtual devices
+     * (VirtualMirobot / VirtualMT4) so Blockly works offline.
      */
     getPortOptions: function() {
       // If device detector has populated available ports, use those.
       // detectedPorts is an array of [label, value] pairs,
-      // e.g. [['COM3 (Mirobot)', 'COM3'], ['COM5', 'COM5']]
+      // e.g. [['VirtualMirobot (Mirobot)', 'VirtualMirobot'], ['COM3 (Mirobot)', 'COM3']]
       if (window.detectedPorts && window.detectedPorts.length > 0) {
         return window.detectedPorts;
       }
 
-      // Default fallback list (before first poll completes)
-      var ports = [];
-      for (var i = 1; i <= 10; i++) {
-        ports.push(['COM' + i, 'COM' + i]);
-      }
-      for (var j = 0; j <= 3; j++) {
-        ports.push(['/dev/ttyUSB' + j, '/dev/ttyUSB' + j]);
-        ports.push(['/dev/ttyACM' + j, '/dev/ttyACM' + j]);
-      }
-      return ports;
+      // Offline defaults — same virtual ports the server always advertises
+      return [
+        ['VirtualMirobot (Mirobot)', 'VirtualMirobot'],
+        ['VirtualMT4 (MT4)', 'VirtualMT4']
+      ];
     }
   };
 }
