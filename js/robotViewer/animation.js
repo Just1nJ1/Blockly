@@ -24,7 +24,7 @@
         moveStartTime: null,
         pausedState: null,
         savedJoints: [0, 0, 0, 0, 0, 0],
-        loopEnabled: true,
+        loopEnabled: false,
         animationDone: false,  // true when play-once finishes
         progressEl: null,
         progressLabel: null,

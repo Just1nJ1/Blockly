@@ -736,7 +736,8 @@
     console.log('[RobotTabs] Detected variables:', uniqueVars,
       '| direct:', analysis.directVars,
       '| funcReturn:', analysis.funcReturnVars,
-      '| robotFuncs:', Object.keys(analysis.robotFunctions));
+      '| robotFuncs:', Object.keys(analysis.robotFunctions),
+      '| varModels:', analysis.varModels);
   }
 
   function attachViewTabHandlers() {

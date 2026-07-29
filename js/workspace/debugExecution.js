@@ -10,13 +10,17 @@ var _debugLineToBlock = {};  // line number -> block id
 var _debugActive = false;
 var _debugHighlightedBlock = null;  // currently highlighted block id
 
-// ── Position tracking for live block updates ─────────────────────
-// When the user jogs during debug, we capture the position at first jog click
-// ("before jog"), then on the next step we capture again ("after jog") and
-// update the previous move block's values with the difference.
-var _debugLastMoveBlockId = null;    // block id of the last writeAngle/writeCoordinate
-var _debugBeforeJogPosition = null;  // captured on first jog click after a move block
-var _debugJoggedSinceStep = false;   // true if user jogged between steps
+// ── Teach-after-step (live block updates from Control panel) ─────
+// After a writeAngle/writeCoordinate *executes*, that block is the teach
+// target (orange outline) until the *next* step runs. Control panel jog /
+// absolute edits update its axis values. Stepping again clears teach so
+// only the most recently executed move block is ever editable — never a
+// move two steps above.
+var _debugLastMoveBlockId = null;    // teach target: last executed move block
+var _debugBeforeJogPosition = null;  // pose after move settled (baseline for deltas)
+var _debugJoggedSinceStep = false;   // true if user jogged/edited since that move
+var _debugTeachApplyTimer = null;    // debounce status-driven teach apply
+var _debugTeachBaselineBlockValues = null; // axis values at teach-start (for incremental)
 
 /**
  * Start a debug session.
@@ -80,43 +84,18 @@ async function debugStep() {
   if (stepBtn) stepBtn.disabled = true;
 
   try {
-    // ── Before stepping: update previous move block if user jogged ──
+    // ── Before stepping: flush any pending teach edits onto the move block ──
     console.log('[Debug] Step check: jogged:', _debugJoggedSinceStep,
       'lastMoveBlock:', _debugLastMoveBlockId,
       'beforeJogPos:', !!_debugBeforeJogPosition);
     if (_debugJoggedSinceStep && _debugLastMoveBlockId) {
-      // If before-jog position wasn't captured (fetch failed), try now
-      if (!_debugBeforeJogPosition) {
-        console.log('[Debug] Before-jog position missing, attempting late capture');
-        try {
-          var statusResp = await fetch(serverUrl + '/cmd/get-status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ silent: true })
-          });
-          var statusData = await statusResp.json();
-          if (statusData.success) {
-            // Use current position as before-jog (best we can do)
-            _debugBeforeJogPosition = {
-              angles: statusData.angles,
-              coordinates: statusData.coordinates
-            };
-            console.log('[Debug] Late-captured before-jog position');
-          }
-        } catch (e) {
-          console.warn('[Debug] Late capture failed:', e);
-        }
-      }
-
-      if (_debugBeforeJogPosition) {
-        try {
-          await _updateMoveBlockFromJog();
-        } catch (updateErr) {
-          console.warn('[Debug] Failed to update move block from jog:', updateErr);
-        }
+      try {
+        await _updateMoveBlockFromJog({ keepTracking: true, force: true });
+      } catch (updateErr) {
+        console.warn('[Debug] Failed to update move block from jog:', updateErr);
       }
     }
-    _debugJoggedSinceStep = false;
+    // Teach target is cleared/replaced after the step in _trackMoveBlock
 
     var response = await fetch(serverUrl + '/debug/step', {
       method: 'POST',
@@ -227,7 +206,8 @@ function _applyDebugState(state) {
     if (blockId) {
       _debugHighlightedBlock = blockId;
       _applyDebugActive(workspace, blockId);
-      workspace.centerOnBlock(blockId);
+      // Do not centerOnBlock / scroll the workspace — keep the user's view stable
+      // while stepping through code.
     }
   }
 
@@ -329,9 +309,11 @@ function _setDebugMode(active) {
     }
   }
 
-  // Disable Run/Debug buttons during debug, enable when done
+  // Disable Run/Debug/Sel buttons during debug, enable when done
   if (runBtn) runBtn.disabled = active;
   if (debugBtn) debugBtn.disabled = active;
+  var runSelectedBtn = document.getElementById('runSelectedBtn');
+  if (runSelectedBtn) runSelectedBtn.disabled = active;
 }
 
 /**
@@ -352,14 +334,17 @@ function _endDebugSession(message) {
   _debugSessionId = null;
   _debugActive = false;
   _debugLineToBlock = {};
-  _debugLastMoveBlockId = null;
-  _debugBeforeJogPosition = null;
-  _debugJoggedSinceStep = false;
+  _clearTeachTarget(/* skipWorkspaceClear */ true);
+  if (_debugTeachApplyTimer) {
+    clearTimeout(_debugTeachApplyTimer);
+    _debugTeachApplyTimer = null;
+  }
 
   // Clear block highlight
   var workspace = getWorkspace ? getWorkspace() : null;
   if (workspace) {
     _clearDebugActive(workspace);
+    _clearDebugTeach(workspace);
   }
   _debugHighlightedBlock = null;
 
@@ -435,6 +420,51 @@ function _clearDebugActive(workspace) {
 }
 
 /**
+ * Teach highlight: last executed move block stays visible while the PC
+ * (debug-active) may already be on the next statement.
+ */
+function _applyDebugTeach(workspace, blockId) {
+  _clearDebugTeach(workspace);
+  if (!blockId) return;
+  var block = workspace.getBlockById(blockId);
+  if (!block) return;
+  var svg = block.getSvgRoot();
+  if (svg) svg.classList.add('debug-teach');
+  var inputs = block.inputList || [];
+  for (var i = 0; i < inputs.length; i++) {
+    var input = inputs[i];
+    if (input.connection && input.type !== 3) {
+      var child = input.connection.targetBlock();
+      if (child) _markTeachTree(child);
+    }
+  }
+}
+
+function _markTeachTree(block) {
+  if (!block) return;
+  var svg = block.getSvgRoot();
+  if (svg) svg.classList.add('debug-teach');
+  var inputs = block.inputList || [];
+  for (var i = 0; i < inputs.length; i++) {
+    var input = inputs[i];
+    if (input.connection && input.type !== 3) {
+      var child = input.connection.targetBlock();
+      if (child) _markTeachTree(child);
+    }
+  }
+}
+
+function _clearDebugTeach(workspace) {
+  if (!workspace) return;
+  var svgEl = workspace.getParentSvg();
+  if (!svgEl) return;
+  var els = svgEl.querySelectorAll('.debug-teach');
+  for (var i = 0; i < els.length; i++) {
+    els[i].classList.remove('debug-teach');
+  }
+}
+
+/**
  * Block keyboard events on the workspace during debug mode.
  */
 function _blockKeysDuringDebug(e) {
@@ -448,38 +478,190 @@ function _blockKeysDuringDebug(e) {
 // ── Position tracking for live block updates ─────────────────────
 
 /**
- * After a step executes, check if the executed line was a writeAngle/writeCoordinate
- * block. If so, capture the robot's current position for later comparison.
+ * Clear the teach target (state + orange outline).
+ * @param {boolean} [skipSvg] if true, only clear state vars (caller clears SVG)
+ */
+function _clearTeachTarget(skipSvg) {
+  _debugLastMoveBlockId = null;
+  _debugBeforeJogPosition = null;
+  _debugJoggedSinceStep = false;
+  _debugTeachBaselineBlockValues = null;
+  if (_debugTeachApplyTimer) {
+    clearTimeout(_debugTeachApplyTimer);
+    _debugTeachApplyTimer = null;
+  }
+  if (!skipSvg) {
+    var workspace = getWorkspace ? getWorkspace() : null;
+    if (workspace) _clearDebugTeach(workspace);
+  }
+}
+
+/**
+ * After a step executes:
+ *  - move block → that block becomes the sole teach target
+ *  - any other block → clear teach (cannot edit a move two steps above)
  */
 function _trackMoveBlock(executedBlockId) {
   var workspace = getWorkspace ? getWorkspace() : null;
-  if (!workspace || !executedBlockId) {
-    _debugLastMoveBlockId = null;
-    return;
-  }
+  if (!workspace || !executedBlockId) return;
 
   var block = workspace.getBlockById(executedBlockId);
   if (!block) return;
 
   if (block.type === 'write_coordinate' || block.type === 'write_angle') {
     _debugLastMoveBlockId = executedBlockId;
-    _debugBeforeJogPosition = null;  // will be captured on first jog
-    _debugJoggedSinceStep = false;
-    console.log('[Debug] Tracking move block:', executedBlockId, block.type);
-  } else {
-    _debugLastMoveBlockId = null;
     _debugBeforeJogPosition = null;
+    _debugJoggedSinceStep = false;
+    _debugTeachBaselineBlockValues = _snapshotAxisValues(block);
+    _applyDebugTeach(workspace, executedBlockId);
+    console.log('[Debug] Teaching move block:', executedBlockId, block.type);
+    // Capture pose after motion settles as the baseline for jog deltas
+    _captureTeachBaselineSoon();
+  } else {
+    // Stepped past the previous move — it is no longer editable
+    console.log('[Debug] Non-move executed; clearing teach target');
+    _clearTeachTarget();
   }
 }
 
+/** Snapshot numeric axis values on a move block (for incremental teach). */
+function _snapshotAxisValues(block) {
+  var axisKeys = ['X', 'Y', 'Z', 'A', 'B', 'C'];
+  var snap = {};
+  for (var i = 0; i < axisKeys.length; i++) {
+    if (!block.getInput('AXIS_' + axisKeys[i])) continue;
+    snap[axisKeys[i]] = _getAxisBlockValue(block, axisKeys[i]);
+  }
+  return snap;
+}
+
 /**
- * Called before the next step executes. If the user jogged the robot since
- * the last move block, capture the current position and update the block's values.
+ * Capture robot pose shortly after a move block executed (settling delay).
+ * Used as "before jog" baseline for teach deltas.
  */
-async function _updateMoveBlockFromJog() {
+function _captureTeachBaselineSoon() {
+  if (!_debugLastMoveBlockId) return;
+  var blockId = _debugLastMoveBlockId;
+  // Prefer last-status (no serial traffic) then fall back to get-status
+  setTimeout(function() {
+    _fetchRobotPose().then(function(pose) {
+      if (!pose) return;
+      if (!_debugActive || _debugLastMoveBlockId !== blockId) return;
+      if (_debugBeforeJogPosition) return; // already set by first jog or prior capture
+      _debugBeforeJogPosition = pose;
+      console.log('[Debug] Teach baseline (after move):', _debugBeforeJogPosition);
+    });
+  }, 500);
+}
+
+/**
+ * Fetch current robot pose. Prefers /cmd/last-status (cached auto-report),
+ * falls back to /cmd/get-status (? query).
+ */
+async function _fetchRobotPose() {
+  var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
+  // Port from control panel when available
+  var port = null;
+  var sel = document.getElementById('ctrl-port-select');
+  if (sel && sel.value) port = sel.value;
+
+  async function tryEndpoint(path, extra) {
+    var body = Object.assign({}, extra || {});
+    if (port) body.port = port;
+    var resp = await fetch(serverUrl + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = await resp.json();
+    if (!data || !data.success) return null;
+    if (!data.angles && !data.coordinates) return null;
+    return {
+      angles: data.angles || {},
+      coordinates: data.coordinates || {}
+    };
+  }
+
+  try {
+    var pose = await tryEndpoint('/cmd/last-status', {});
+    if (pose) return pose;
+  } catch (e) { /* fall through */ }
+
+  try {
+    return await tryEndpoint('/cmd/get-status', { silent: true });
+  } catch (e2) {
+    return null;
+  }
+}
+
+function _poseDiffers(a, b, eps) {
+  if (!a || !b) return true;
+  eps = eps == null ? 0.01 : eps;
+  function check(srcA, srcB, keys) {
+    srcA = srcA || {};
+    srcB = srcB || {};
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      var va = parseFloat(srcA[k]);
+      var vb = parseFloat(srcB[k]);
+      if (isNaN(va)) va = 0;
+      if (isNaN(vb)) vb = 0;
+      if (Math.abs(va - vb) >= eps) return true;
+    }
+    return false;
+  }
+  if (check(a.angles, b.angles, ['X', 'Y', 'Z', 'A', 'B', 'C'])) return true;
+  if (check(a.coordinates, b.coordinates, ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz'])) return true;
+  return false;
+}
+
+/**
+ * Called by control panel when a fresh robot status arrives (after jog settles).
+ * Applies teach using the reported pose — more reliable than a fixed debounce
+ * that can fire before motion finishes.
+ */
+function debugOnRobotStatus(status) {
+  if (!_debugActive || !_debugLastMoveBlockId || !_debugJoggedSinceStep) return;
+  if (!status || (!status.angles && !status.coordinates)) return;
+
+  var pose = {
+    angles: status.angles || {},
+    coordinates: status.coordinates || {}
+  };
+
+  // Ignore status that hasn't moved since baseline (motion not finished yet)
+  if (_debugBeforeJogPosition && !_poseDiffers(_debugBeforeJogPosition, pose)) {
+    return;
+  }
+
+  // Debounce multi-axis jogs: apply once after status quiets
+  if (_debugTeachApplyTimer) clearTimeout(_debugTeachApplyTimer);
+  _debugTeachApplyTimer = setTimeout(function() {
+    _debugTeachApplyTimer = null;
+    if (!_debugActive || !_debugJoggedSinceStep || !_debugLastMoveBlockId) return;
+    _updateMoveBlockFromJog({ keepTracking: true, pose: pose }).catch(function(e) {
+      console.warn('[Debug] Status-driven teach apply failed:', e);
+    });
+  }, 200);
+}
+
+/**
+ * Write current (or provided) robot pose onto the teach move block.
+ * Absolute mode: set axes to robot pose.
+ * Incremental mode: add (pose - baseline) to the values at teach-start.
+ *
+ * keepTracking: leave teach target active for more jogs.
+ * force: apply even if pose matches baseline (final flush before Step).
+ * pose: optional pre-fetched pose (from control panel status).
+ */
+async function _updateMoveBlockFromJog(opts) {
+  opts = opts || {};
+  var keepTracking = !!opts.keepTracking;
+  var force = !!opts.force;
+
   var workspace = getWorkspace ? getWorkspace() : null;
-  if (!workspace || !_debugBeforeJogPosition) {
-    console.log('[Debug] _updateMoveBlockFromJog: no workspace or no beforeJogPosition');
+  if (!workspace || !_debugLastMoveBlockId) {
+    console.log('[Debug] _updateMoveBlockFromJog: no teach target');
     return;
   }
 
@@ -492,105 +674,117 @@ async function _updateMoveBlockFromJog() {
   var isCoord = (block.type === 'write_coordinate');
   var isAngle = (block.type === 'write_angle');
   if (!isCoord && !isAngle) {
-    console.log('[Debug] _updateMoveBlockFromJog: block is not a move block:', block.type);
+    console.log('[Debug] _updateMoveBlockFromJog: not a move block:', block.type);
     return;
   }
 
-  console.log('[Debug] _updateMoveBlockFromJog: updating block', _debugLastMoveBlockId, block.type);
+  // Ensure baseline pose
+  if (!_debugBeforeJogPosition) {
+    _debugBeforeJogPosition = await _fetchRobotPose();
+  }
+  if (!_debugBeforeJogPosition) {
+    console.log('[Debug] _updateMoveBlockFromJog: no baseline pose');
+    return;
+  }
 
-  // Get the block's position mode (0=absolute, 1=incremental)
+  var afterJogPos = opts.pose || null;
+  if (!afterJogPos) {
+    afterJogPos = await _fetchRobotPose();
+  }
+  if (!afterJogPos) {
+    console.log('[Debug] _updateMoveBlockFromJog: failed to read after pose');
+    return;
+  }
+
+  // Skip no-op applies (early status / motion not finished) unless forced
+  if (!force && !_poseDiffers(_debugBeforeJogPosition, afterJogPos)) {
+    console.log('[Debug] _updateMoveBlockFromJog: pose unchanged, skip');
+    return;
+  }
+
   var positionMode = block.getFieldValue('POSITION');
   var isIncremental = (positionMode === '1');
-
-  // Capture current position from robot (after user finished jogging)
-  var serverUrl = getServerUrl ? getServerUrl() : 'http://127.0.0.1:5080';
-  var afterJogPos;
-  try {
-    var resp = await fetch(serverUrl + '/cmd/get-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ silent: true })
-    });
-    var data = await resp.json();
-    if (!data.success) return;
-    afterJogPos = {
-      angles: data.angles,
-      coordinates: data.coordinates
-    };
-  } catch (e) {
-    return;
-  }
-
-  console.log('[Debug] Before-jog position:', _debugBeforeJogPosition);
-  console.log('[Debug] After-jog position:', afterJogPos);
-  console.log('[Debug] Mode:', isIncremental ? 'incremental' : 'absolute');
+  console.log('[Debug] Teach apply', _debugLastMoveBlockId, block.type,
+    isIncremental ? 'incremental' : 'absolute');
 
   var axisKeys = ['X', 'Y', 'Z', 'A', 'B', 'C'];
   var updatedCount = 0;
 
+  // Group field changes for a single undo step
+  try { Blockly.Events.setGroup(true); } catch (eG) { /* ignore */ }
+
   if (isCoord) {
     var coordStatusKeys = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz'];
-    var beforeCoord = _debugBeforeJogPosition.coordinates;
-    var afterCoord = afterJogPos.coordinates;
+    var beforeCoord = _debugBeforeJogPosition.coordinates || {};
+    var afterCoord = afterJogPos.coordinates || {};
 
     for (var i = 0; i < axisKeys.length; i++) {
-      var input = block.getInput('AXIS_' + axisKeys[i]);
-      if (!input) continue;
+      if (!block.getInput('AXIS_' + axisKeys[i])) continue;
       var sk = coordStatusKeys[i];
       if (!sk) continue;
 
-      var beforeVal = beforeCoord[sk] || 0;
-      var afterVal = afterCoord[sk] || 0;
+      var beforeVal = parseFloat(beforeCoord[sk]); if (isNaN(beforeVal)) beforeVal = 0;
+      var afterVal = parseFloat(afterCoord[sk]); if (isNaN(afterVal)) afterVal = 0;
       var diff = afterVal - beforeVal;
+      if (Math.abs(diff) < 0.01) continue;
 
-      if (Math.abs(diff) < 0.01) continue;  // no significant change
+      // Absolute: robot pose. Incremental: add this jog delta to block value.
+      var newVal = isIncremental
+        ? (_getAxisBlockValue(block, axisKeys[i]) + diff)
+        : afterVal;
 
-      var newVal;
-      if (isIncremental) {
-        newVal = _getAxisBlockValue(block, axisKeys[i]) + diff;
-      } else {
-        newVal = afterVal;
+      console.log('[Debug] Coord', axisKeys[i], beforeVal, '->', afterVal,
+        'diff', diff, 'newVal', newVal);
+      if (_setAxisBlockValue(block, axisKeys[i], Math.round(newVal * 100) / 100)) {
+        updatedCount++;
       }
-      console.log('[Debug] Coord axis', axisKeys[i], ':', beforeVal, '->', afterVal, 'diff:', diff, 'newVal:', newVal);
-      _setAxisBlockValue(block, axisKeys[i], Math.round(newVal * 100) / 100);
-      updatedCount++;
     }
   } else {
-    var beforeAngles = _debugBeforeJogPosition.angles;
-    var afterAngles = afterJogPos.angles;
+    var beforeAngles = _debugBeforeJogPosition.angles || {};
+    var afterAngles = afterJogPos.angles || {};
 
     for (var j = 0; j < axisKeys.length; j++) {
-      var inputA = block.getInput('AXIS_' + axisKeys[j]);
-      if (!inputA) continue;
+      if (!block.getInput('AXIS_' + axisKeys[j])) continue;
 
-      var beforeValA = beforeAngles[axisKeys[j]] || 0;
-      var afterValA = afterAngles[axisKeys[j]] || 0;
+      var beforeValA = parseFloat(beforeAngles[axisKeys[j]]); if (isNaN(beforeValA)) beforeValA = 0;
+      var afterValA = parseFloat(afterAngles[axisKeys[j]]); if (isNaN(afterValA)) afterValA = 0;
       var diffA = afterValA - beforeValA;
-
       if (Math.abs(diffA) < 0.01) continue;
 
-      var newValA;
-      if (isIncremental) {
-        newValA = _getAxisBlockValue(block, axisKeys[j]) + diffA;
-      } else {
-        newValA = afterValA;
+      var newValA = isIncremental
+        ? (_getAxisBlockValue(block, axisKeys[j]) + diffA)
+        : afterValA;
+
+      console.log('[Debug] Angle', axisKeys[j], beforeValA, '->', afterValA,
+        'diff', diffA, 'newVal', newValA);
+      if (_setAxisBlockValue(block, axisKeys[j], Math.round(newValA * 100) / 100)) {
+        updatedCount++;
       }
-      console.log('[Debug] Angle axis', axisKeys[j], ':', beforeValA, '->', afterValA, 'diff:', diffA, 'newVal:', newValA);
-      _setAxisBlockValue(block, axisKeys[j], Math.round(newValA * 100) / 100);
-      updatedCount++;
     }
   }
 
-  console.log('[Debug] Updated move block', _debugLastMoveBlockId, 'axes updated:', updatedCount);
+  try { Blockly.Events.setGroup(false); } catch (eG2) { /* ignore */ }
 
-  // Clear tracking
-  _debugLastMoveBlockId = null;
-  _debugBeforeJogPosition = null;
+  console.log('[Debug] Updated move block', _debugLastMoveBlockId,
+    'axes updated:', updatedCount);
+
+  if (keepTracking) {
+    if (updatedCount > 0) {
+      // Next jogs measure from this new pose; block values already include them
+      _debugBeforeJogPosition = afterJogPos;
+      _debugTeachBaselineBlockValues = _snapshotAxisValues(block);
+      _debugJoggedSinceStep = false;
+    }
+    // If updatedCount === 0, keep _debugJoggedSinceStep so a later status can retry
+    _applyDebugTeach(workspace, _debugLastMoveBlockId);
+  } else {
+    _clearTeachTarget();
+  }
 }
 
 /**
  * Get the numeric value from a move block's axis input.
- * Reads from the connected math_number block if present.
+ * Reads from the connected math_number (or shadow) if present.
  */
 function _getAxisBlockValue(block, axisKey) {
   var input = block.getInput('AXIS_' + axisKey);
@@ -598,32 +792,68 @@ function _getAxisBlockValue(block, axisKey) {
   var target = input.connection.targetBlock();
   if (!target) return 0;
   if (target.type === 'math_number') {
-    return parseFloat(target.getFieldValue('NUM')) || 0;
+    var n = parseFloat(target.getFieldValue('NUM'));
+    return isNaN(n) ? 0 : n;
   }
   return 0;
 }
 
 /**
  * Set the numeric value on a move block's axis input.
- * If a math_number is connected, updates its NUM field.
- * If nothing is connected, creates a new math_number block.
+ * Shadows are updated via setNumberShadow (Blockly 9+ state) so the value
+ * actually sticks; real math_number blocks use setFieldValue.
+ * Skips non-number expressions. Returns true if a value was written.
  */
 function _setAxisBlockValue(block, axisKey, value) {
   var input = block.getInput('AXIS_' + axisKey);
-  if (!input || !input.connection) return;
+  if (!input || !input.connection) return false;
+
+  var num = (typeof value === 'number') ? value : parseFloat(value);
+  if (isNaN(num)) num = 0;
+  // Keep two decimal places without trailing noise
+  num = Math.round(num * 100) / 100;
+  var numStr = String(num);
 
   var target = input.connection.targetBlock();
+
+  // Empty input or shadow number → write via shadow state (reliable in Blockly 9+)
+  if (!target || (target.type === 'math_number' && target.isShadow && target.isShadow())) {
+    if (typeof setNumberShadow === 'function') {
+      setNumberShadow(input.connection, num);
+      try {
+        if (typeof block.render === 'function') block.render(false);
+      } catch (eR0) { /* ignore */ }
+      return true;
+    }
+  }
+
   if (target && target.type === 'math_number') {
-    target.setFieldValue(String(value), 'NUM');
-  } else if (!target) {
-    // Create a new math_number block
+    var field = target.getField('NUM');
+    if (field && typeof field.setValue === 'function') {
+      field.setValue(numStr);
+    } else {
+      target.setFieldValue(numStr, 'NUM');
+    }
+    try {
+      if (typeof target.render === 'function') target.render(false);
+      if (typeof block.render === 'function') block.render(false);
+    } catch (eR) { /* ignore */ }
+    return true;
+  }
+
+  if (!target) {
     var ws = block.workspace;
     var numBlock = ws.newBlock('math_number');
-    numBlock.setFieldValue(String(value), 'NUM');
+    numBlock.setFieldValue(numStr, 'NUM');
     numBlock.initSvg();
     numBlock.render();
     input.connection.connect(numBlock.outputConnection);
+    return true;
   }
+
+  // Connected expression (variable, math op, etc.) — don't overwrite
+  console.log('[Debug] Skip axis', axisKey, '— non-number input:', target.type);
+  return false;
 }
 
 /**
@@ -678,9 +908,10 @@ function _selectControlPanelForBlock(blockId) {
 }
 
 /**
- * Called by the control panel BEFORE a jog command is sent.
- * On the first jog after a move block, captures the robot's current position
- * (which is the position the move block moved to, after the robot has settled).
+ * Called by the control panel BEFORE a jog / absolute move is sent.
+ * Captures baseline pose (once) and marks that a teach update is pending.
+ * Actual block write happens when status arrives (debugOnRobotStatus) or
+ * as a fallback debounce / next Step flush.
  */
 async function debugNotifyJog() {
   console.log('[Debug] debugNotifyJog called. active:', _debugActive,
@@ -690,41 +921,42 @@ async function debugNotifyJog() {
 
   if (!_debugActive || !_debugLastMoveBlockId) return;
 
-  // Already jogged and captured — nothing to do
-  if (_debugJoggedSinceStep && _debugBeforeJogPosition) return;
-
-  // Capture position on first jog (or retry if previous capture failed)
+  // Ensure baseline pose before this jog (after-move settle, or first capture)
   if (!_debugBeforeJogPosition) {
-    var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
-    // Small delay to let the robot settle from the previous move command
-    await new Promise(function(r) { setTimeout(r, 300); });
-    try {
-      var resp = await fetch(serverUrl + '/cmd/get-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ silent: true })
-      });
-      var data = await resp.json();
-      if (data.success) {
-        _debugBeforeJogPosition = {
-          angles: data.angles,
-          coordinates: data.coordinates
-        };
-        _debugJoggedSinceStep = true;
-        console.log('[Debug] Captured before-jog position:', _debugBeforeJogPosition);
-      } else {
-        console.warn('[Debug] Failed to capture before-jog position:', data.error);
-      }
-    } catch (e) {
-      console.warn('[Debug] Error capturing before-jog position:', e);
+    // Brief settle so post-move auto-status is available
+    await new Promise(function(r) { setTimeout(r, 150); });
+    var pose = await _fetchRobotPose();
+    if (pose) {
+      _debugBeforeJogPosition = pose;
+      console.log('[Debug] Captured before-jog position:', _debugBeforeJogPosition);
+    } else {
+      console.warn('[Debug] Failed to capture before-jog position');
     }
-  } else {
-    _debugJoggedSinceStep = true;
   }
+
+  if (!_debugTeachBaselineBlockValues) {
+    var workspace = getWorkspace ? getWorkspace() : null;
+    var block = workspace && _debugLastMoveBlockId
+      ? workspace.getBlockById(_debugLastMoveBlockId) : null;
+    if (block) _debugTeachBaselineBlockValues = _snapshotAxisValues(block);
+  }
+
+  _debugJoggedSinceStep = true;
+
+  // Fallback: if status-driven apply never fires (no poll / dry-run), try later
+  if (_debugTeachApplyTimer) clearTimeout(_debugTeachApplyTimer);
+  _debugTeachApplyTimer = setTimeout(function() {
+    _debugTeachApplyTimer = null;
+    if (!_debugActive || !_debugJoggedSinceStep || !_debugLastMoveBlockId) return;
+    _updateMoveBlockFromJog({ keepTracking: true }).catch(function(e) {
+      console.warn('[Debug] Fallback teach apply failed:', e);
+    });
+  }, 900);
 }
 
 // Expose globally for control panel to call
 window.debugNotifyJog = debugNotifyJog;
+window.debugOnRobotStatus = debugOnRobotStatus;
 
 function _escapeHtml(str) {
   var div = document.createElement('div');

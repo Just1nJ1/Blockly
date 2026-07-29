@@ -18,9 +18,11 @@ function clearWorkspace() {
       updateCodePreview();
     }
 
-    const outputContent = document.getElementById('output-content');
-    if (outputContent) {
-      outputContent.innerHTML = '';
+    if (typeof clearConsole === 'function') {
+      clearConsole();
+    } else {
+      const outputContent = document.getElementById('output-content');
+      if (outputContent) outputContent.innerHTML = '';
     }
 
     // Reset toolbox to initial state

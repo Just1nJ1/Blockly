@@ -1,5 +1,5 @@
 {
   "templates": [
-    "scan_and_act.json"
+    "process_and_combine.json"
   ]
 }

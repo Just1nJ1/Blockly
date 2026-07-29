@@ -1,44 +1,57 @@
 """
-In-memory virtual serial ports for offline Blockly / teaching use.
+Virtual ports for offline StudioX use (VirtualMirobot / VirtualMT4).
 
-Provides VirtualMirobot and VirtualMT4 that speak enough of the robot
-protocol (ok, $V, ?, status lines, simple G-code) for the SDK and UI
-to work without hardware.
+Backed by ``wlkatapython.simulator`` (not a separate protocol stub).
+Named ports stay app-facing; connect opens the SDK sim + MockSerial.
 """
 
 from __future__ import annotations
 
-import collections
-import re
+import os
+import sys
 import threading
-import time
+from typing import Any, Dict, Optional, Tuple
 
+# Bundled SDK on path (same as serial_manager)
+_SDK_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "resources",
+    "python",
+    "lib",
+    "python3.12",
+    "site-packages",
+)
+_SDK_PATH = os.path.abspath(_SDK_PATH)
+if _SDK_PATH not in sys.path:
+    sys.path.insert(0, _SDK_PATH)
 
 # Port name → model name (matches robots.json "name")
 VIRTUAL_DEVICES = (
     {
-        'port': 'VirtualMirobot',
-        'model': 'Mirobot',
-        'description': 'Virtual Mirobot (no hardware)',
+        "port": "VirtualMirobot",
+        "model": "Mirobot",
+        "description": "Virtual Mirobot (SDK simulator)",
     },
     {
-        'port': 'VirtualMT4',
-        'model': 'MT4',
-        'description': 'Virtual MT4 (no hardware)',
+        "port": "VirtualMT4",
+        "model": "MT4",
+        "description": "Virtual MT4 (SDK simulator)",
     },
 )
 
-_VIRTUAL_PORT_SET = {d['port'] for d in VIRTUAL_DEVICES}
+_VIRTUAL_PORT_SET = {d["port"] for d in VIRTUAL_DEVICES}
 
-# Firmware lines must match wlkatapython's _VERSION_PREFIX checks:
-#   Mirobot_UART → startswith "Mirobot"
-#   MT4_UART / E4_UART → startswith "E4"
-# Version UI shows the part after the first comma via _extract_version.
-_FW_LINES = {
-    'Mirobot': 'Mirobot fw,virtual',
-    'MT4': 'E4 fw,virtual',   # MT4_UART._VERSION_PREFIX == "E4"
-    'E4': 'E4 fw,virtual',
+# StudioX model name → create_simulator() key
+_MODEL_TO_SIM = {
+    "Mirobot": "mirobot",
+    "MT4": "mt4",
+    "E4": "e4",
 }
+
+# Keep one running sim per logical port so reconnect reuses cleanly
+_sessions: Dict[str, Tuple[Any, Any]] = {}  # port -> (sim, mock)
+_sessions_lock = threading.Lock()
 
 
 def is_virtual_port(port: str) -> bool:
@@ -50,202 +63,153 @@ def virtual_device_entries():
     return [dict(d) for d in VIRTUAL_DEVICES]
 
 
-_AXIS_GCODE = re.compile(
-    r'([XYZABCRIJKF])\s*([+-]?(?:\d+\.?\d*|\.\d+))',
-    re.IGNORECASE,
-)
+def _stop_session(port: str) -> None:
+    with _sessions_lock:
+        pair = _sessions.pop(port, None)
+    if not pair:
+        return
+    sim, mock = pair
+    try:
+        if mock is not None:
+            mock.close()
+    except Exception:
+        pass
+    try:
+        if sim is not None:
+            sim.stop()
+    except Exception:
+        pass
+
+
+def _start_session(port: str, model: str, baudrate: int, timeout: float):
+    """Start SDK simulator + MockSerial for this logical port."""
+    from wlkatapython.simulator import create_simulator, MockSerial
+
+    sim_key = _MODEL_TO_SIM.get(model or "Mirobot", "mirobot")
+    sim = create_simulator(sim_key, address=-1)
+
+    # StudioX enables auto-report with $40=1 on connect; library sim needs a
+    # handler + set_auto_report (not in default command tables).
+    def _handle_auto_report(cmd, match, state):
+        sim.set_auto_report(True)
+        return "ok"
+
+    sim.add_command_response(r"^\$40(=.*)?$", "", _handle_auto_report)
+
+    # Friendly version strings for StudioX FW UI (substring after first comma)
+    if hasattr(sim, "set_firmware_version"):
+        if sim_key == "mirobot":
+            sim.set_firmware_version("Mirobot fw,virtual", "EXbox,virtual")
+        elif sim_key in ("mt4", "e4"):
+            sim.set_firmware_version("E4 fw,virtual", "EXbox,virtual")
+
+    port_path = sim.start()
+    mock = MockSerial(
+        port_path,
+        baudrate=baudrate,
+        timeout=timeout if timeout is not None else 0.1,
+        virtual_port=getattr(sim, "_virtual_port", None),
+    )
+    with _sessions_lock:
+        old = _sessions.pop(port, None)
+        _sessions[port] = (sim, mock)
+    if old:
+        try:
+            old[1].close()
+        except Exception:
+            pass
+        try:
+            old[0].stop()
+        except Exception:
+            pass
+    return sim, mock
 
 
 class VirtualSerial:
-    """serial.Serial-compatible fake port with simple robot responses."""
+    """
+    pyserial-compatible facade over ``wlkatapython.simulator``.
 
-    def __init__(self, port, model='Mirobot', baudrate=115200, timeout=0.1):
+    ``port`` remains the logical name (VirtualMirobot / VirtualMT4) for the UI;
+    I/O goes to the simulator's MockSerial / PTY.
+    """
+
+    def __init__(self, port, model="Mirobot", baudrate=115200, timeout=0.1):
         self.port = port
-        self.model = model or 'Mirobot'
+        self.model = model or "Mirobot"
         self.baudrate = baudrate
-        self.timeout = timeout
-        self.is_open = True
-
-        self._rx = collections.deque()
-        self._lock = threading.Lock()
-        self._event = threading.Event()
-
-        # Joint-ish and Cartesian state (degrees / mm)
-        self._angles = {
-            'A': 0.0, 'B': 0.0, 'C': 0.0, 'D': 0.0,
-            'X': 0.0, 'Y': 0.0, 'Z': 0.0,
-        }
-        self._coords = {
-            'X': 200.0, 'Y': 0.0, 'Z': 150.0,
-            'Rx': 0.0, 'Ry': 0.0, 'Rz': 0.0,
-        }
-        self._pump = 0.0
-        self._valve = 0.0
-        self._mode = 0.0
-        self._auto_status = False
-        self._state = 'Idle'
-
-    # ── serial.Serial surface ──────────────────────────────────
+        self._timeout = timeout if timeout is not None else 0.1
+        self._sim = None
+        self._mock = None
+        self.is_open = False
+        self.open()
 
     def open(self):
+        if self.is_open and self._mock is not None:
+            return
+        self._sim, self._mock = _start_session(
+            self.port, self.model, self.baudrate, self._timeout
+        )
         self.is_open = True
 
     def close(self):
         self.is_open = False
-        with self._lock:
-            self._rx.clear()
-            self._event.set()
+        _stop_session(self.port)
+        self._sim = None
+        self._mock = None
+
+    def _require_open(self):
+        if not self.is_open or self._mock is None:
+            raise OSError(f"Virtual serial port {self.port!r} is closed")
 
     def write(self, data):
-        if not self.is_open:
-            raise OSError('Virtual serial port is closed')
-        if isinstance(data, str):
-            text = data
-            n = len(data.encode('utf-8'))
-        else:
-            text = data.decode('utf-8', errors='ignore')
-            n = len(data)
-        for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n'):
-            cmd = line.strip()
-            if cmd:
-                self._handle_command(cmd)
-        return n
+        self._require_open()
+        return self._mock.write(data)
 
     def readline(self):
-        deadline = time.time() + (self.timeout if self.timeout and self.timeout > 0 else 0.1)
-        while True:
-            with self._lock:
-                if self._rx:
-                    return (self._rx.popleft() + '\n').encode('utf-8')
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                return b''
-            self._event.clear()
-            self._event.wait(timeout=min(remaining, 0.05))
+        self._require_open()
+        return self._mock.readline()
+
+    def read(self, size: int = 1):
+        self._require_open()
+        return self._mock.read(size)
 
     @property
-    def in_waiting(self):
-        with self._lock:
-            return len(self._rx)
+    def in_waiting(self) -> int:
+        if not self.is_open or self._mock is None:
+            return 0
+        return int(self._mock.in_waiting)
 
     def flushInput(self):
-        with self._lock:
-            self._rx.clear()
-            self._event.clear()
+        if self._mock is not None:
+            self._mock.flushInput()
 
     def flushOutput(self):
-        pass
+        if self._mock is not None:
+            self._mock.flushOutput()
 
     def reset_input_buffer(self):
         self.flushInput()
 
     def reset_output_buffer(self):
-        pass
+        self.flushOutput()
 
-    # ── command handling ───────────────────────────────────────
+    @property
+    def timeout(self):
+        if self._mock is not None:
+            return self._mock.timeout
+        return self._timeout
 
-    def _push(self, line: str):
-        with self._lock:
-            self._rx.append(line.rstrip('\n'))
-            self._event.set()
+    @timeout.setter
+    def timeout(self, value):
+        self._timeout = value
+        if self._mock is not None:
+            self._mock.timeout = value
 
-    def _status_line(self) -> str:
-        a = self._angles
-        c = self._coords
-        return (
-            f'<{self._state},Angle(ABCDXYZ):'
-            f'{a["A"]:.3f},{a["B"]:.3f},{a["C"]:.3f},{a["D"]:.3f},'
-            f'{a["X"]:.3f},{a["Y"]:.3f},{a["Z"]:.3f},'
-            f'Cartesian coordinate(XYZ RxRyRz):'
-            f'{c["X"]:.3f},{c["Y"]:.3f},{c["Z"]:.3f},'
-            f'{c["Rx"]:.3f},{c["Ry"]:.3f},{c["Rz"]:.3f},'
-            f'Pump PWM:{self._pump:.0f},Valve PWM:{self._valve:.0f},'
-            f'Motion_MODE:{self._mode:.0f}>'
-        )
-
-    def _handle_command(self, cmd: str):
-        upper = cmd.upper()
-
-        # Firmware version — SDK may read robot line and/or EXbox line
-        if upper.startswith('$V') or upper == 'V':
-            fw = _FW_LINES.get(self.model, _FW_LINES['Mirobot'])
-            # Optional extender line first (real stacks often send EXbox then robot)
-            self._push('EXbox,virtual')
-            self._push(fw)
-            self._push('ok')
-            return
-
-        # Enable auto-report after motion
-        if upper.startswith('$40'):
-            self._auto_status = True
-            self._push('ok')
-            return
-
-        # Status query
-        if cmd.strip() == '?':
-            self._push(self._status_line())
-            return
-
-        # Homing
-        if upper.startswith('$H') or upper.startswith('G28'):
-            for k in self._angles:
-                self._angles[k] = 0.0
-            self._coords.update({'X': 200.0, 'Y': 0.0, 'Z': 150.0, 'Rx': 0.0, 'Ry': 0.0, 'Rz': 0.0})
-            self._push('ok')
-            if self._auto_status:
-                self._push(self._status_line())
-            return
-
-        # Zero / go home-ish
-        if upper.startswith('M21') or 'ZERO' in upper:
-            for k in self._angles:
-                self._angles[k] = 0.0
-            self._push('ok')
-            if self._auto_status:
-                self._push(self._status_line())
-            return
-
-        # Pump / gripper style M-codes (best-effort)
-        if upper.startswith('M3') or upper.startswith('M03'):
-            self._pump = 500.0
-            self._push('ok')
-            return
-        if upper.startswith('M5') or upper.startswith('M05'):
-            self._pump = 0.0
-            self._push('ok')
-            return
-
-        # Motion G-codes — update state from axis words when present
-        if upper.startswith('G0') or upper.startswith('G1') or upper.startswith('G5'):
-            self._apply_axis_words(cmd)
-            self._push('ok')
-            if self._auto_status:
-                self._push(self._status_line())
-            return
-
-        # Default acknowledge so the SDK does not hang
-        self._push('ok')
-
-    def _apply_axis_words(self, cmd: str):
-        """Update joint/cartesian state from axis letters in the command."""
-        for letter, value_s in _AXIS_GCODE.findall(cmd):
-            L = letter.upper()
-            try:
-                val = float(value_s)
-            except ValueError:
-                continue
-            if L in ('X', 'Y', 'Z'):
-                # Prefer cartesian for XYZ when in G0/G1 style moves
-                self._coords[L] = val
-                self._angles[L] = val
-            elif L == 'A':
-                self._coords['Rx'] = val
-                self._angles['A'] = val
-            elif L == 'B':
-                self._coords['Ry'] = val
-                self._angles['B'] = val
-            elif L == 'C':
-                self._coords['Rz'] = val
-                self._angles['C'] = val
-            elif L == 'D':
-                self._angles['D'] = val
+    def __getattr__(self, name: str):
+        # Forward rare pyserial attrs to MockSerial when present
+        if name.startswith("_"):
+            raise AttributeError(name)
+        mock = object.__getattribute__(self, "_mock")
+        if mock is not None and hasattr(mock, name):
+            return getattr(mock, name)
+        raise AttributeError(f"VirtualSerial has no attribute {name!r}")

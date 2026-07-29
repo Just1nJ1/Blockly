@@ -341,6 +341,10 @@
   var pointerVec = null;
   var onSelectionChange = null;  // callback(varName|null)
 
+  // Poses loaded from workspace world.json, applied when robots are (re)added.
+  // varName → { x, y, z, rotZ }  (metres / degrees)
+  var pendingPoses = {};
+
   function initScene(containerEl) {
     if (initialized) return;
     container = containerEl;
@@ -551,6 +555,9 @@
     };
   }
 
+  // Bumped on clearAll / full resync so late async addRobot results are dropped
+  var loadGeneration = 0;
+
   /**
    * Remove a robot from the world scene (mesh, name tag, selection).
    */
@@ -573,6 +580,20 @@
   }
 
   /**
+   * Remove every robot from the world scene (e.g. workspace switch).
+   * Invalidates in-flight addRobot loads so stale meshes cannot reappear.
+   */
+  function clearAllRobots() {
+    loadGeneration++;
+    var names = robotOrder.slice();
+    for (var i = 0; i < names.length; i++) {
+      removeRobot(names[i]);
+    }
+    selectRobot(null);
+    console.log('[WorldViewer] Cleared all robots (workspace reset)');
+  }
+
+  /**
    * Ensure a robot for the given variable name is loaded into the world scene.
    * Reloads the mesh if the model type changed (e.g. Mirobot → MT4).
    * @param {string} varName
@@ -580,6 +601,7 @@
    * @returns {Promise<void>}
    */
   function addRobot(varName, modelHint) {
+    var gen = loadGeneration;
     var cfg = configForVar(varName, modelHint);
 
     // Already present with the correct mesh family — nothing to do
@@ -615,12 +637,21 @@
     }
 
     return ensureThree().then(function() {
+      if (gen !== loadGeneration) return null;
       var containerEl = document.getElementById('world-canvas');
       if (!containerEl) return Promise.reject(new Error('#world-canvas not found'));
       initScene(containerEl);
 
       return loadURDF(cfg.urdf, cfg.meshBasePath);
     }).then(function(result) {
+      // Stale load after workspace switch / clearAll
+      if (!result || gen !== loadGeneration) {
+        if (result && result.group && scene) {
+          try { scene.remove(result.group); } catch (e) { /* ignore */ }
+        }
+        return;
+      }
+
       // Default position: space along X axis
       var index = robotOrder.length;
       var offsetX = (index - (index) / 2) * ROBOT_SPACING;
@@ -632,7 +663,12 @@
       var nameTag = makeNameTag(varName + ' (' + cfg.label + ')');
       scene.add(nameTag);
 
-      var pose = savedPose || { x: offsetX, y: 0, z: 0, rotZ: 0 };
+      // Priority: in-memory pose (model switch) → workspace-saved pose → default spacing
+      var fromFile = pendingPoses[varName] || null;
+      var pose = savedPose || (fromFile
+        ? { x: fromFile.x || 0, y: fromFile.y || 0, z: fromFile.z || 0, rotZ: fromFile.rotZ || 0 }
+        : { x: offsetX, y: 0, z: 0, rotZ: 0 });
+      var userMoved = savedUserMoved || !!fromFile;
       robots[varName] = {
         group: result.group,
         joints: result.joints,
@@ -642,7 +678,7 @@
         nameTag: nameTag,
         modelId: cfg.id,
         modelLabel: cfg.label,
-        _userMoved: savedUserMoved
+        _userMoved: userMoved
       };
       robotOrder.push(varName);
 
@@ -668,6 +704,10 @@
    */
   function syncRobots(varNames) {
     varNames = varNames || [];
+    // New sync generation: drop any in-flight loads from a prior sync/workspace
+    loadGeneration++;
+    var gen = loadGeneration;
+
     var wanted = {};
     for (var i = 0; i < varNames.length; i++) {
       wanted[varNames[i]] = true;
@@ -683,9 +723,12 @@
 
     var loadPromises = [];
     for (var k = 0; k < varNames.length; k++) {
+      // Capture gen at call time via closure on loadGeneration for addRobot
       loadPromises.push(addRobot(varNames[k]));
     }
-    return Promise.all(loadPromises).then(function() { /* void */ });
+    return Promise.all(loadPromises).then(function() {
+      if (gen !== loadGeneration) return;
+    });
   }
 
   /**
@@ -736,6 +779,14 @@
     if (pose.rotZ !== undefined) r.pose.rotZ = pose.rotZ;
     r._userMoved = true;
     applyRobotPose(r);
+    // Keep pending map in sync so remove/re-add (sync, model switch path
+    // already uses savedPose) and workspace save stay consistent.
+    pendingPoses[varName] = {
+      x: r.pose.x,
+      y: r.pose.y,
+      z: r.pose.z,
+      rotZ: r.pose.rotZ
+    };
   }
 
   /**
@@ -751,6 +802,65 @@
       z: r.pose.z,
       rotZ: r.pose.rotZ
     };
+  }
+
+  /**
+   * Snapshot of every loaded robot's world pose (for workspace save).
+   * @returns {Object.<string, {x:number,y:number,z:number,rotZ:number}>}
+   */
+  function getAllRobotPoses() {
+    var out = {};
+    for (var i = 0; i < robotOrder.length; i++) {
+      var name = robotOrder[i];
+      var r = robots[name];
+      if (!r) continue;
+      out[name] = {
+        x: r.pose.x,
+        y: r.pose.y,
+        z: r.pose.z,
+        rotZ: r.pose.rotZ
+      };
+    }
+    return out;
+  }
+
+  /**
+   * Store poses from workspace world.json and apply to any already-loaded robots.
+   * Robots added later pick these up in addRobot.
+   * @param {Object.<string, {x?:number,y?:number,z?:number,rotZ?:number}>|null} posesMap
+   */
+  function applySavedPoses(posesMap) {
+    pendingPoses = {};
+    if (posesMap && typeof posesMap === 'object') {
+      var keys = Object.keys(posesMap);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var p = posesMap[k];
+        if (!p || typeof p !== 'object') continue;
+        pendingPoses[k] = {
+          x: typeof p.x === 'number' ? p.x : 0,
+          y: typeof p.y === 'number' ? p.y : 0,
+          z: typeof p.z === 'number' ? p.z : 0,
+          rotZ: typeof p.rotZ === 'number' ? p.rotZ : 0
+        };
+      }
+    }
+    // Apply immediately to robots already in the scene
+    var names = Object.keys(pendingPoses);
+    for (var j = 0; j < names.length; j++) {
+      var n = names[j];
+      if (robots[n]) {
+        setRobotPose(n, pendingPoses[n]);
+      }
+    }
+    console.log('[WorldViewer] Applied saved poses for', names.length, 'robot(s)');
+  }
+
+  /**
+   * Clear workspace-saved pose cache (e.g. switching to a workspace with no world.json).
+   */
+  function clearSavedPoses() {
+    pendingPoses = {};
   }
 
   /**
@@ -835,6 +945,7 @@
   window.WorldViewer = {
     addRobot: addRobot,
     removeRobot: removeRobot,
+    clearAllRobots: clearAllRobots,
     syncRobots: syncRobots,
     setJoints: setJoints,
     getJoints: getJoints,
@@ -848,6 +959,9 @@
     getSelectedRobot: getSelectedRobot,
     setOnSelectionChange: setOnSelectionChange,
     setRobotPose: setRobotPose,
-    getRobotPose: getRobotPose
+    getRobotPose: getRobotPose,
+    getAllRobotPoses: getAllRobotPoses,
+    applySavedPoses: applySavedPoses,
+    clearSavedPoses: clearSavedPoses
   };
 })();

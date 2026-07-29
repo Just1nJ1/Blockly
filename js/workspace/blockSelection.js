@@ -1,7 +1,9 @@
 /**
  * Block Area Selection Module
- * Hold Cmd/Ctrl + drag to select multiple blocks in a rectangular area.
- * Partially overlapping blocks are also selected.
+ * - Hold Cmd/Ctrl + drag to select multiple blocks in a rectangular area
+ *   (partially overlapping blocks are also selected).
+ * - Hold Cmd/Ctrl + click to toggle individual blocks into the multi-selection
+ *   (works for disconnected blocks).
  *
  * Uses an invisible overlay div on top of the Blockly SVG to intercept
  * mouse events before Blockly's gesture system can capture them.
@@ -65,6 +67,8 @@
       if (!_selecting) return;
       if (e) e.preventDefault();
 
+      var clientX = e ? e.clientX : 0;
+      var clientY = e ? e.clientY : 0;
       var point = e
         ? svgToWorkspaceCoords(svgEl, e, ws)
         : { x: _startX, y: _startY };
@@ -84,23 +88,42 @@
       _rectEl = null;
       _selecting = false;
 
-      // Disable overlay unless we re-enable for group drag
+      // Disable overlay unless we re-enable for group drag / still holding modifier
       if (_overlay) {
         _overlay.style.pointerEvents = 'none';
       }
 
-      // Skip tiny drags (workspace units; ~5px at 1x scale)
       var scale = (typeof ws.getScale === 'function') ? ws.getScale() : 1;
       var minSize = 5 / (scale || 1);
-      if ((selRect.right - selRect.left) < minSize &&
-          (selRect.bottom - selRect.top) < minSize) {
+      var isTiny = (selRect.right - selRect.left) < minSize &&
+                   (selRect.bottom - selRect.top) < minSize;
+
+      if (isTiny) {
+        // Cmd/Ctrl + click: toggle the block under the cursor into multi-selection
+        // so disconnected blocks can be added one by one.
+        var hit = findBlockAtClientPoint(ws, clientX, clientY);
+        if (hit) {
+          toggleBlockInSelection(hit);
+          console.log('[Selection] Toggle block', hit.type, '→', _selectedBlocks.length, 'selected');
+        }
+        _enableDragOverlay();
+        // Keep overlay active while modifier is still held for more clicks
+        if (e && (e.metaKey || e.ctrlKey) && _overlay) {
+          _overlay.style.pointerEvents = 'auto';
+          _overlay.style.cursor = 'crosshair';
+        }
         return;
       }
 
-      _selectedBlocks = [];
+      // Marquee drag: replace selection with blocks in the rectangle
+      clearSelection();
       findBlocksInRect(ws, selRect);
       console.log('[Selection] Selected', _selectedBlocks.length, 'blocks');
       _enableDragOverlay();
+      if (e && (e.metaKey || e.ctrlKey) && _overlay && _selectedBlocks.length < 2) {
+        _overlay.style.pointerEvents = 'auto';
+        _overlay.style.cursor = 'crosshair';
+      }
     }
 
     function onDocSelectMove(e) {
@@ -113,15 +136,16 @@
       finishAreaSelection(e);
     }
 
-    // Mouse down on overlay: start area selection (only with Cmd/Ctrl)
+    // Mouse down on overlay: start area selection / cmd-click (only with Cmd/Ctrl)
     _overlay.addEventListener('mousedown', function(e) {
       if (e.button !== 0) return;
       if (!(e.metaKey || e.ctrlKey)) return;  // area selection requires modifier
       e.preventDefault();
       e.stopPropagation();
 
-      _selecting = true;  // set BEFORE clearSelection so overlay stays active
-      clearSelection();
+      // Do NOT clear selection here — Cmd/Ctrl+click is additive.
+      // Marquee drag replaces on finish; click toggles on finish.
+      _selecting = true;
 
       var point = svgToWorkspaceCoords(svgEl, e, ws);
       _startX = point.x;
@@ -206,13 +230,19 @@
     var _dragThreshold = 3;
     var _dragOverlayActive = false;
 
-    // After selection, enable overlay so we intercept clicks on selected blocks
+    // After multi-selection, enable overlay so we intercept group-drag on selected blocks
     function _enableDragOverlay() {
-      if (_selectedBlocks.length > 0) {
+      if (_selectedBlocks.length >= 2) {
         _overlay.style.pointerEvents = 'auto';
         _overlay.style.cursor = 'grab';
         _dragOverlayActive = true;
+      } else {
+        _dragOverlayActive = false;
+      }
+      if (_selectedBlocks.length > 0) {
         showSelectionToolbar(ws);
+      } else {
+        hideSelectionToolbar();
       }
     }
 
@@ -429,6 +459,43 @@
           highlightBlock(block, true);
         }
       }
+    }
+  }
+
+  /**
+   * Hit-test the Blockly block under a client (screen) point.
+   * Temporarily disables the selection overlay so elementFromPoint sees blocks.
+   */
+  function findBlockAtClientPoint(ws, clientX, clientY) {
+    var prev = _overlay ? _overlay.style.pointerEvents : null;
+    if (_overlay) _overlay.style.pointerEvents = 'none';
+    var el = document.elementFromPoint(clientX, clientY);
+    if (_overlay && prev != null) _overlay.style.pointerEvents = prev;
+
+    while (el) {
+      if (el.getAttribute) {
+        var id = el.getAttribute('data-id');
+        if (id) {
+          var block = ws.getBlockById(id);
+          if (block && !block.isInsertionMarker()) return block;
+        }
+      }
+      el = el.parentElement || el.parentNode;
+      if (el && el.nodeType !== 1) break;
+    }
+    return null;
+  }
+
+  /** Add or remove a block from the multi-selection (Cmd/Ctrl+click). */
+  function toggleBlockInSelection(block) {
+    if (!block || block.isDisposed()) return;
+    var idx = _selectedBlocks.indexOf(block);
+    if (idx >= 0) {
+      highlightBlock(block, false);
+      _selectedBlocks.splice(idx, 1);
+    } else {
+      _selectedBlocks.push(block);
+      highlightBlock(block, true);
     }
   }
 
@@ -928,6 +995,10 @@
   }
 
   async function runSelectedBlocks() {
+    // Match toolbar: disabled during step/debug mode (and if button missing, allow)
+    var runSelectedBtn = document.getElementById('runSelectedBtn');
+    if (runSelectedBtn && runSelectedBtn.disabled) return;
+
     var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
     if (!ws) return;
 

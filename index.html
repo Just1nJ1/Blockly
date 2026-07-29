@@ -5,10 +5,32 @@
   <title>WLKATA StudioX</title>
   <link rel="stylesheet" href="css/styles.css">
   <script src="js/ui/theme.js"></script>
+  <script src="js/ui/appPreferences.js"></script>
 </head>
 <body>
   <script src="js/ui/icons.js"></script>
+  <script>
+    // Enable custom title bar layout next to traffic lights (macOS Electron).
+    try {
+      if (typeof process !== 'undefined' && process.platform === 'darwin') {
+        document.body.classList.add('platform-darwin');
+      }
+    } catch (e) { /* browser preview */ }
+  </script>
   <div id="app">
+    <!-- macOS custom title bar: logo sits to the right of traffic lights -->
+    <div id="titlebar" class="titlebar" role="banner">
+      <div class="titlebar-traffic-spacer" aria-hidden="true"></div>
+      <img
+        class="titlebar-logo"
+        src="resources/icons/app_light.png"
+        alt="StudioX"
+        draggable="false"
+      />
+      <div class="titlebar-drag-fill" aria-hidden="true"></div>
+    </div>
+
+    <div id="app-body">
     <!-- Left sidebar for top-level tab switching -->
     <div id="sidebar">
       <div class="sidebar-tab active" data-tab="command" title="Command">
@@ -40,6 +62,7 @@
             <option value="" disabled selected>No Connection</option>
             <option value="__manual__">Connect manually...</option>
           </select>
+          <button type="button" id="command-port-refresh" title="Hard refresh connection (disconnect + reconnect)">↻</button>
           <button id="command-port-remove" title="Remove manual port">✕</button>
           <span style="flex:1;"></span>
           <button type="button" class="toolbar-btn" id="command-clear-btn" title="Clear screen">
@@ -319,7 +342,7 @@
                       </div>
                       <div class="viewer-control-row">
                         <label for="loop-toggle">Loop playback</label>
-                        <button id="loop-toggle-btn" class="viewer-toggle active" title="Toggle loop playback">ON</button>
+                        <button id="loop-toggle-btn" class="viewer-toggle" title="Toggle loop playback">OFF</button>
                       </div>
                     </div>
                     <!-- Robots section (visible only in world mode) -->
@@ -361,8 +384,8 @@
             <div id="panel-content-code-output" class="panel-tab-content active">
               <div id="output-header">Generated Python Code</div>
               <div id="code-preview"></div>
-              <div id="output-header">Output</div>
-              <div id="output-content"></div>
+              <div id="output-header">Console</div>
+              <div id="output-content" class="console-root"></div>
               <!-- Debug panel: variables + call stack (shown during debug sessions) -->
               <div id="debug-panel">
                 <div id="debug-panel-header">
@@ -449,8 +472,9 @@
         </div>
       </div>
 
-    </div>
-  </div>
+    </div><!-- #app-content -->
+    </div><!-- #app-body -->
+  </div><!-- #app -->
 
   <!-- Three.js import map for RobotViewer (ES module) -->
   <script type="importmap">

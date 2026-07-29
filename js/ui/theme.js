@@ -37,6 +37,19 @@
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
+  var LOGO_LIGHT = 'resources/icons/app_light.png';
+  var LOGO_DARK = 'resources/icons/app_dark.png';
+
+  function applyTitlebarLogo(resolved) {
+    var logo = document.querySelector('.titlebar-logo');
+    if (!logo) return;
+    var src = resolved === 'dark' ? LOGO_DARK : LOGO_LIGHT;
+    // Avoid reloading if already correct (prevents flicker on system theme events)
+    if (logo.getAttribute('src') !== src) {
+      logo.setAttribute('src', src);
+    }
+  }
+
   function applyTheme(mode) {
     var resolved = mode === 'system' ? getSystemTheme() : mode;
 
@@ -52,6 +65,9 @@
       btn.innerHTML = ICONS[mode];
       btn.title = TITLES[mode];
     }
+
+    // macOS custom title bar logo (light / dark variants)
+    applyTitlebarLogo(resolved);
 
     // Override Blockly toolbox inline styles (Blockly's theme manager
     // sets background-color/color as inline styles which beat CSS)

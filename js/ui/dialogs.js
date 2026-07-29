@@ -147,6 +147,10 @@ function _settingsRenderPage(page) {
       title.textContent = 'Settings';
       _buildSettingsMainPage(body);
       break;
+    case 'appearance':
+      title.textContent = 'Appearance';
+      _buildSettingsAppearancePage(body);
+      break;
     case 'extensions':
       title.textContent = 'Extensions';
       _buildSettingsExtensionsPage(body);
@@ -170,8 +174,9 @@ function _settingsRenderPage(page) {
 
 function _buildSettingsMainPage(container) {
   var items = [
+    { id: 'appearance',   label: 'Appearance',   desc: 'Font size and Blockly block size' },
     { id: 'extensions',   label: 'Extensions',   desc: 'Manage installed extensions' },
-    { id: 'environments', label: 'Environments', desc: 'Create and manage Python environments' },
+    { id: 'environments', label: 'Environments', desc: 'Blockly packages + extension venvs' },
     { id: 'advanced',     label: 'Advanced',     desc: 'Developer mode, firmware settings' },
   ];
   for (var i = 0; i < items.length; i++) {
@@ -187,6 +192,90 @@ function _buildSettingsMainPage(container) {
       row.addEventListener('click', function() { _settingsNavigateTo(item.id); });
       container.appendChild(row);
     })(items[i]);
+  }
+}
+
+// ── Appearance Page ──
+
+function _buildSettingsAppearancePage(container) {
+  var prefs = window.AppPreferences;
+  if (!prefs) {
+    container.innerHTML = '<div class="app-settings-empty">Preferences module not loaded.</div>';
+    return;
+  }
+
+  // Font size
+  var fontField = document.createElement('div');
+  fontField.className = 'app-settings-field';
+  fontField.innerHTML =
+    '<label class="app-settings-field-label" for="app-font-size-range">UI font size</label>' +
+    '<div class="app-settings-range-row">' +
+      '<input type="range" id="app-font-size-range" min="' + prefs.FONT_MIN +
+        '" max="' + prefs.FONT_MAX + '" step="1" value="' + prefs.getFontSize() + '">' +
+      '<span class="app-settings-range-value" id="app-font-size-value">' +
+        prefs.getFontSize() + ' px</span>' +
+    '</div>' +
+    '<div class="app-settings-field-hint">' +
+      'Scales interface text (panels, toolbars, labels). Range ' +
+      prefs.FONT_MIN + '\u2013' + prefs.FONT_MAX + ' px.' +
+    '</div>';
+  container.appendChild(fontField);
+
+  // Block scale
+  var blockField = document.createElement('div');
+  blockField.className = 'app-settings-field';
+  var blockPct = Math.round(prefs.getBlockScale() * 100);
+  blockField.innerHTML =
+    '<label class="app-settings-field-label" for="app-block-scale-range">Block size</label>' +
+    '<div class="app-settings-range-row">' +
+      '<input type="range" id="app-block-scale-range" min="' + prefs.BLOCK_MIN +
+        '" max="' + prefs.BLOCK_MAX + '" step="0.05" value="' + prefs.getBlockScale() + '">' +
+      '<span class="app-settings-range-value" id="app-block-scale-value">' +
+        blockPct + '%</span>' +
+    '</div>' +
+    '<div class="app-settings-field-hint">' +
+      'Zoom level for Blockly blocks (workspace scale). You can still pinch/scroll-zoom; ' +
+      'this sets the preferred size and applies immediately when Blockly is open.' +
+    '</div>';
+  container.appendChild(blockField);
+
+  // Reset
+  var resetRow = document.createElement('div');
+  resetRow.style.cssText = 'margin-top:8px;';
+  var resetBtn = document.createElement('button');
+  resetBtn.className = 'app-settings-btn';
+  resetBtn.textContent = 'Reset to defaults';
+  resetBtn.addEventListener('click', function() {
+    prefs.setFontSize(prefs.FONT_DEFAULT);
+    prefs.setBlockScale(prefs.BLOCK_DEFAULT);
+    var fr = document.getElementById('app-font-size-range');
+    var fv = document.getElementById('app-font-size-value');
+    var br = document.getElementById('app-block-scale-range');
+    var bv = document.getElementById('app-block-scale-value');
+    if (fr) fr.value = String(prefs.FONT_DEFAULT);
+    if (fv) fv.textContent = prefs.FONT_DEFAULT + ' px';
+    if (br) br.value = String(prefs.BLOCK_DEFAULT);
+    if (bv) bv.textContent = Math.round(prefs.BLOCK_DEFAULT * 100) + '%';
+  });
+  resetRow.appendChild(resetBtn);
+  container.appendChild(resetRow);
+
+  // Live updates
+  var fontRange = document.getElementById('app-font-size-range');
+  var fontVal = document.getElementById('app-font-size-value');
+  if (fontRange) {
+    fontRange.addEventListener('input', function() {
+      var n = prefs.setFontSize(fontRange.value);
+      if (fontVal) fontVal.textContent = n + ' px';
+    });
+  }
+  var blockRange = document.getElementById('app-block-scale-range');
+  var blockVal = document.getElementById('app-block-scale-value');
+  if (blockRange) {
+    blockRange.addEventListener('input', function() {
+      var n = prefs.setBlockScale(blockRange.value);
+      if (blockVal) blockVal.textContent = Math.round(n * 100) + '%';
+    });
   }
 }
 
@@ -512,6 +601,17 @@ function _removeExtension(name, listEl) {
 // ── Environments Page ──
 
 function _buildSettingsEnvironmentsPage(container) {
+  var hint = document.createElement('div');
+  hint.className = 'app-settings-hint';
+  hint.style.cssText = 'margin:0 0 12px 0;padding:0;line-height:1.45;';
+  hint.innerHTML =
+    '<strong>Blockly</strong> uses the reserved environment named <code>blockly</code> ' +
+    'for <em>import</em> blocks and Run/Debug. Install libraries there ' +
+    '(e.g. <code>numpy</code>), then import them in Blockly.<br>' +
+    '<strong>Extensions</strong> each get their own venv (named after the extension) — ' +
+    'package versions do not conflict across extensions.';
+  container.appendChild(hint);
+
   var topBar = document.createElement('div');
   topBar.style.cssText = 'margin-bottom:12px;display:flex;gap:8px;align-items:center;';
 
@@ -532,7 +632,12 @@ function _buildSettingsEnvironmentsPage(container) {
 
 function _fetchEnvironments(listContainer) {
   var serverUrl = typeof getServerUrl === 'function' ? getServerUrl() : 'http://127.0.0.1:5080';
-  fetch(serverUrl + '/env/list')
+  // Ensure Blockly env exists, then list
+  fetch(serverUrl + '/env/ensure-blockly', { method: 'POST' })
+    .catch(function() { /* list still works */ })
+    .then(function() {
+      return fetch(serverUrl + '/env/list');
+    })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       listContainer.innerHTML = '';
@@ -545,16 +650,32 @@ function _fetchEnvironments(listContainer) {
         listContainer.innerHTML = '<div class="app-settings-empty-msg">No environments created yet.</div>';
         return;
       }
+      // Sort: Blockly first, then A–Z
+      envs.sort(function(a, b) {
+        if (a.is_blockly && !b.is_blockly) return -1;
+        if (!a.is_blockly && b.is_blockly) return 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
       for (var i = 0; i < envs.length; i++) {
         (function(env) {
           var item = document.createElement('div');
           item.className = 'app-settings-list-item';
+          var badges =
+            '<span class="app-settings-item-badge">' + (env.valid ? 'valid' : 'invalid') + '</span>';
+          if (env.is_blockly) {
+            badges += ' <span class="app-settings-item-badge app-settings-item-badge-blockly">Blockly Run</span>';
+          }
           item.innerHTML =
             '<div class="app-settings-item-header">' +
               '<span class="app-settings-item-name">' + _escHtml(env.name) + '</span>' +
-              '<span class="app-settings-item-badge">' + (env.valid ? 'valid' : 'invalid') + '</span>' +
+              badges +
             '</div>' +
-            '<div class="app-settings-item-meta">' + _escHtml(env.path) + '</div>';
+            '<div class="app-settings-item-meta">' + _escHtml(env.path) + '</div>' +
+            (env.is_blockly
+              ? '<div class="app-settings-item-meta" style="margin-top:4px;color:var(--text-secondary);">' +
+                'Packages here are available to Blockly <code>import</code> / Run / Debug.' +
+                '</div>'
+              : '');
 
           var actions = document.createElement('div');
           actions.className = 'app-settings-item-actions';
@@ -570,10 +691,13 @@ function _fetchEnvironments(listContainer) {
 
           var deleteBtn = document.createElement('button');
           deleteBtn.className = 'app-settings-btn app-settings-btn-sm app-settings-btn-danger';
-          deleteBtn.textContent = 'Delete';
+          deleteBtn.textContent = env.is_blockly ? 'Reset' : 'Delete';
           deleteBtn.addEventListener('click', function(e) {
             e.stopPropagation();
-            if (confirm('Delete environment "' + env.name + '"? This cannot be undone.')) {
+            var msg = env.is_blockly
+              ? 'Reset the Blockly environment? All installed packages will be removed and an empty env recreated.'
+              : 'Delete environment "' + env.name + '"? This cannot be undone.';
+            if (confirm(msg)) {
               _deleteEnvironment(env.name, listContainer);
             }
           });
@@ -989,13 +1113,89 @@ function _buildSettingsAdvancedPage(container) {
       '<input type="checkbox" id="app-dev-mode-cb">' +
       '<span>Developer Mode</span>' +
     '</label>' +
-    '<div class="app-settings-hint">Enables force firmware upload and other advanced options.</div>';
+    '<div class="app-settings-hint">Enables force firmware upload, auto-status lines in the Command log, and other advanced options.</div>';
   container.appendChild(devSection);
 
   document.getElementById('app-dev-mode-cb').checked = window.developerMode;
   document.getElementById('app-dev-mode-cb').addEventListener('change', function() {
     window.developerMode = this.checked;
     try { localStorage.setItem('developer-mode', window.developerMode ? 'true' : 'false'); } catch(e) {}
+  });
+
+  // Raw serial / WiFi communication log (always written by the server)
+  var commSection = document.createElement('div');
+  commSection.className = 'ctrl-settings-section';
+  commSection.innerHTML =
+    '<div class="ctrl-settings-section-title">Communication log</div>' +
+    '<div class="app-settings-hint" style="margin-bottom:8px;">' +
+      'All TX/RX on every port (including auto-status) is appended to a session file for debugging.' +
+    '</div>' +
+    '<div class="app-settings-field" style="margin-bottom:8px;">' +
+      '<div class="app-settings-field-label">Log file path</div>' +
+      '<code id="app-comm-log-path" style="display:block;font-size:11px;word-break:break-all;' +
+        'padding:8px;background:var(--bg-secondary);border-radius:4px;border:1px solid var(--border-primary);">' +
+        'Loading\u2026</code>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      '<button type="button" class="app-settings-btn" id="app-comm-log-copy">Copy path</button>' +
+      '<button type="button" class="app-settings-btn" id="app-comm-log-open">Open in Finder / Explorer</button>' +
+      '<button type="button" class="app-settings-btn" id="app-comm-log-refresh">Refresh path</button>' +
+    '</div>' +
+    '<div class="app-settings-hint" style="margin-top:8px;">' +
+      'Also: Command tab shows live history; with Developer Mode on, auto-status (&lt;...&gt;) lines are included.' +
+    '</div>';
+  container.appendChild(commSection);
+
+  function loadCommLogPath() {
+    var el = document.getElementById('app-comm-log-path');
+    if (!el) return;
+    var serverUrl = typeof getServerUrl === 'function' ? getServerUrl() : 'http://127.0.0.1:5080';
+    fetch(serverUrl + '/cmd/comm-log')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.success && data.path) {
+          el.textContent = data.path;
+          el.dataset.path = data.path;
+        } else {
+          el.textContent = data.error || 'Unavailable';
+          el.dataset.path = '';
+        }
+      })
+      .catch(function(err) {
+        el.textContent = 'Failed: ' + (err && err.message ? err.message : err);
+        el.dataset.path = '';
+      });
+  }
+  loadCommLogPath();
+
+  document.getElementById('app-comm-log-refresh').addEventListener('click', loadCommLogPath);
+  document.getElementById('app-comm-log-copy').addEventListener('click', function() {
+    var el = document.getElementById('app-comm-log-path');
+    var path = (el && el.dataset.path) || (el && el.textContent) || '';
+    if (!path || path === 'Loading…' || path.indexOf('Failed') === 0) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(path).then(function() {
+        if (typeof ExtensionAPI !== 'undefined' && ExtensionAPI.showNotification) {
+          ExtensionAPI.showNotification('Path copied', 'info');
+        }
+      }).catch(function() { /* ignore */ });
+    }
+  });
+  document.getElementById('app-comm-log-open').addEventListener('click', function() {
+    var el = document.getElementById('app-comm-log-path');
+    var path = (el && el.dataset.path) || '';
+    if (!path) return;
+    try {
+      var shell = require('electron').shell;
+      // Reveal file in folder (showItemInFolder) is better than openPath for logs
+      if (shell.showItemInFolder) {
+        shell.showItemInFolder(path);
+      } else {
+        shell.openPath(path);
+      }
+    } catch (e) {
+      alert('Open failed: ' + e.message + '\n\nPath:\n' + path);
+    }
   });
 
   // Ignored Firmware Versions

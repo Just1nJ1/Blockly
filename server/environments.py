@@ -2,9 +2,19 @@
 Environment manager for StudioX.
 
 Creates and manages Python virtual environments under
-~/.wlkata-studiox/environments/ for use by extensions.
-Each environment is a standard venv with base packages (flask, flask-cors)
-pre-installed so extension backends can run immediately.
+~/.wlkata-studiox/environments/ for:
+
+  * **Extensions** — one venv per extension name (isolated; no cross-extension
+    package version conflicts). Base packages flask/flask-cors for backends.
+  * **Blockly** — a single reserved env named ``blockly`` used when the user
+    runs Blockly-generated code (import blocks). Packages installed there are
+    visible to ``import`` during Run / Debug.
+
+Package conflicts:
+  * Extension A vs Extension B: none — separate venvs / subprocesses.
+  * Two packages in the *same* env (Blockly or one extension): pip resolves at
+    install time; the last successful install wins. Incompatible pins fail the
+    install with pip's error message.
 """
 
 import os
@@ -16,10 +26,15 @@ import subprocess
 import tempfile
 import urllib.request
 import urllib.parse
+import glob as _glob
 
 
 _ENVS_BASE = os.path.join(os.path.expanduser('~'), '.wlkata-studiox', 'environments')
 _BASE_PACKAGES = ['flask', 'flask-cors']
+
+# Reserved environment for Blockly Run / Debug / import blocks.
+# Not used by extension backends (those use envs named after the extension).
+BLOCKLY_ENV_NAME = 'blockly'
 
 # Packages that should never be auto-removed as orphan dependencies.
 # Includes base packages and their core transitive dependencies.
@@ -146,6 +161,68 @@ def _find_python(env_dir):
     return py if os.path.isfile(py) else None
 
 
+def get_site_packages(env_name_or_dir):
+    """
+    Return the site-packages directory for an environment name or path.
+    Works for Windows (Lib/site-packages) and Unix (lib/pythonX.Y/site-packages).
+    """
+    env_dir = env_name_or_dir
+    if not os.path.isdir(env_dir) or not os.path.isabs(env_dir):
+        env_dir = os.path.join(_ENVS_BASE, env_name_or_dir)
+    if not os.path.isdir(env_dir):
+        return None
+
+    if sys.platform == 'win32':
+        sp = os.path.join(env_dir, 'Lib', 'site-packages')
+        return sp if os.path.isdir(sp) else None
+
+    matches = sorted(_glob.glob(os.path.join(env_dir, 'lib', 'python*', 'site-packages')))
+    for sp in matches:
+        if os.path.isdir(sp):
+            return sp
+    return None
+
+
+def is_blockly_env(name):
+    return name == BLOCKLY_ENV_NAME
+
+
+def get_blockly_env_name():
+    return BLOCKLY_ENV_NAME
+
+
+def get_blockly_site_packages():
+    """site-packages for the Blockly env, or None if missing/invalid."""
+    return get_site_packages(BLOCKLY_ENV_NAME)
+
+
+def ensure_blockly_environment():
+    """
+    Ensure the reserved ``blockly`` venv exists (create if needed).
+    Does not install flask (not required for Blockly Run).
+    """
+    _ensure_base_dir()
+    env_dir = os.path.join(_ENVS_BASE, BLOCKLY_ENV_NAME)
+    if os.path.isdir(env_dir) and _find_pip(env_dir):
+        return {
+            'success': True,
+            'path': env_dir,
+            'created': False,
+            'name': BLOCKLY_ENV_NAME,
+            'site_packages': get_site_packages(env_dir),
+        }
+
+    result = create_environment(
+        BLOCKLY_ENV_NAME,
+        install_base_packages=False,
+    )
+    if result.get('success'):
+        result['created'] = True
+        result['name'] = BLOCKLY_ENV_NAME
+        result['site_packages'] = get_site_packages(BLOCKLY_ENV_NAME)
+    return result
+
+
 def get_envs_base():
     _ensure_base_dir()
     return _ENVS_BASE
@@ -153,20 +230,34 @@ def get_envs_base():
 
 def list_environments():
     _ensure_base_dir()
+    # Always try to present the Blockly env (create lazily so UI can show it)
+    try:
+        ensure_blockly_environment()
+    except Exception:
+        pass
+
     envs = []
     for name in sorted(os.listdir(_ENVS_BASE)):
         env_dir = os.path.join(_ENVS_BASE, name)
         if not os.path.isdir(env_dir):
             continue
+        role = 'blockly' if is_blockly_env(name) else 'custom'
+        # Extension envs are conventionally named after the extension
+        if role != 'blockly':
+            # Heuristic only for UI badge — still a normal env
+            role = 'environment'
         envs.append({
             'name': name,
             'path': env_dir,
             'valid': _find_pip(env_dir) is not None,
+            'role': role,
+            'is_blockly': is_blockly_env(name),
+            'site_packages': get_site_packages(env_dir),
         })
     return envs
 
 
-def create_environment(name, python_version=None):
+def create_environment(name, python_version=None, install_base_packages=True):
     _ensure_base_dir()
 
     if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$', name):
@@ -209,7 +300,7 @@ def create_environment(name, python_version=None):
 
     pip = _find_pip(env_dir)
     warning = None
-    if pip:
+    if pip and install_base_packages:
         try:
             subprocess.check_call(
                 [pip, 'install', '--quiet'] + _BASE_PACKAGES,
@@ -219,7 +310,12 @@ def create_environment(name, python_version=None):
         except Exception as e:
             warning = f'Created, but base packages failed to install: {e}'
 
-    result = {'success': True, 'path': env_dir}
+    result = {
+        'success': True,
+        'path': env_dir,
+        'is_blockly': is_blockly_env(name),
+        'site_packages': get_site_packages(env_dir),
+    }
     if warning:
         result['warning'] = warning
     return result
@@ -231,6 +327,14 @@ def delete_environment(name):
         return {'success': False, 'error': 'Environment not found'}
     try:
         shutil.rmtree(env_dir)
+        # Recreate empty Blockly env so Run still has a target
+        if is_blockly_env(name):
+            ensure_blockly_environment()
+            return {
+                'success': True,
+                'recreated_blockly': True,
+                'message': 'Blockly environment reset (recreated empty).',
+            }
         return {'success': True}
     except Exception as e:
         return {'success': False, 'error': str(e)}

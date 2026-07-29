@@ -4,6 +4,7 @@
  * Manages project workspaces stored on disk.
  * A workspace is any user-chosen folder. Inside it we store:
  *   <folder>/blocks.xml       - the Blockly workspace state
+ *   <folder>/world.json       - World viewer robot base poses (optional)
  *   <folder>/functions/       - saved function JSON files
  *
  * The user picks (or creates) the folder using the native OS file picker
@@ -31,6 +32,10 @@ function _ensureDir(dirPath) {
 
 function _getBlocksFile(wsPath) {
   return _path.join(wsPath, 'blocks.xml');
+}
+
+function _getWorldFile(wsPath) {
+  return _path.join(wsPath, 'world.json');
 }
 
 function _getFunctionsDir(wsPath) {
@@ -120,6 +125,76 @@ function setCurrentWorkspace(wsPath) {
 
 // ── Block save/load ─────────────────────────────────────────────
 
+/**
+ * Persist World viewer robot base poses into world.json.
+ * Skips writing if the World scene was never opened this session so we
+ * do not wipe poses when the user only edits blocks and hits Save.
+ */
+function saveWorldScene() {
+  if (!_currentWorkspacePath) return;
+
+  var WV = window.WorldViewer;
+  if (!WV || typeof WV.isInitialized !== 'function' || !WV.isInitialized()) {
+    return;
+  }
+  if (typeof WV.getAllRobotPoses !== 'function') return;
+
+  var robots = WV.getAllRobotPoses() || {};
+  var data = {
+    version: 1,
+    robots: robots
+  };
+
+  try {
+    _ensureDir(_currentWorkspacePath);
+    _fs.writeFileSync(
+      _getWorldFile(_currentWorkspacePath),
+      JSON.stringify(data, null, 2),
+      'utf8'
+    );
+    console.log('[WorkspaceManager] Saved world poses to:', _currentWorkspacePath,
+      '(' + Object.keys(robots).length + ' robot(s))');
+  } catch (e) {
+    console.error('[WorkspaceManager] Failed to save world.json:', e);
+  }
+}
+
+/**
+ * Load world.json poses into WorldViewer (pending until robots are added).
+ * Missing file → clear saved poses and use defaults.
+ */
+function loadWorldScene() {
+  var WV = window.WorldViewer;
+
+  if (!_currentWorkspacePath) {
+    if (WV && typeof WV.clearSavedPoses === 'function') WV.clearSavedPoses();
+    return;
+  }
+
+  var filePath = _getWorldFile(_currentWorkspacePath);
+  if (!_fs.existsSync(filePath)) {
+    if (WV && typeof WV.clearSavedPoses === 'function') WV.clearSavedPoses();
+    console.log('[WorkspaceManager] No world.json in:', _currentWorkspacePath);
+    return;
+  }
+
+  try {
+    var raw = _fs.readFileSync(filePath, 'utf8');
+    var data = JSON.parse(raw);
+    var robots = (data && data.robots && typeof data.robots === 'object')
+      ? data.robots
+      : {};
+    if (WV && typeof WV.applySavedPoses === 'function') {
+      WV.applySavedPoses(robots);
+    }
+    console.log('[WorkspaceManager] Loaded world poses from:', _currentWorkspacePath,
+      '(' + Object.keys(robots).length + ' robot(s))');
+  } catch (e) {
+    console.error('[WorkspaceManager] Failed to load world.json:', e);
+    if (WV && typeof WV.clearSavedPoses === 'function') WV.clearSavedPoses();
+  }
+}
+
 function saveWorkspaceBlocks() {
   var ws = getWorkspace ? getWorkspace() : null;
   if (!ws || !_currentWorkspacePath) return;
@@ -130,6 +205,9 @@ function saveWorkspaceBlocks() {
   _ensureDir(_currentWorkspacePath);
   _fs.writeFileSync(_getBlocksFile(_currentWorkspacePath), xmlText, 'utf8');
   console.log('[WorkspaceManager] Saved blocks to:', _currentWorkspacePath);
+
+  // Also snapshot World base poses when the scene has been used
+  saveWorldScene();
 }
 
 function loadWorkspaceBlocks() {
@@ -139,6 +217,8 @@ function loadWorkspaceBlocks() {
   var filePath = _getBlocksFile(_currentWorkspacePath);
   if (!_fs.existsSync(filePath)) {
     console.log('[WorkspaceManager] No blocks file in:', _currentWorkspacePath);
+    // Still try world.json / clear poses for this workspace
+    loadWorldScene();
     return;
   }
 
@@ -152,6 +232,9 @@ function loadWorkspaceBlocks() {
   } catch (e) {
     console.error('[WorkspaceManager] Failed to load blocks:', e);
   }
+
+  // Restore World poses (applied when robots are synced into the scene)
+  loadWorldScene();
 }
 
 // ── Saved functions (per-workspace, on disk) ────────────────────
@@ -250,32 +333,31 @@ function showWorkspaceDialog() {
   return new Promise(function(resolve) {
     var recents = _getRecentWorkspaces();
 
-    // Build modal overlay
+    // Build modal overlay (theme via CSS variables / dark mode)
     var overlay = document.createElement('div');
     overlay.id = 'workspace-dialog-overlay';
-    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);display:flex;justify-content:center;align-items:center;z-index:20000;';
 
     var dialog = document.createElement('div');
-    dialog.style.cssText = 'background:#fff;border-radius:12px;padding:30px;min-width:440px;max-width:540px;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
+    dialog.className = 'ws-dialog';
 
     // Title
     var title = document.createElement('h2');
+    title.className = 'ws-dialog-title';
     title.textContent = 'Open Workspace';
-    title.style.cssText = 'margin:0 0 6px 0;font-size:20px;color:#333;';
     dialog.appendChild(title);
 
     var subtitle = document.createElement('div');
+    subtitle.className = 'ws-dialog-subtitle';
     subtitle.textContent = 'Choose a folder for your project. All blocks and saved functions will be stored there.';
-    subtitle.style.cssText = 'font-size:13px;color:#888;margin-bottom:20px;line-height:1.4;';
     dialog.appendChild(subtitle);
 
     // Action buttons: Open Folder / New Folder
     var btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:10px;margin-bottom:20px;';
+    btnRow.className = 'ws-dialog-actions';
 
     var openBtn = document.createElement('button');
+    openBtn.className = 'ws-dialog-btn ws-dialog-btn-open';
     openBtn.textContent = '\uD83D\uDCC2 Open Existing Folder';
-    openBtn.style.cssText = 'flex:1;padding:12px 16px;background:#2196F3;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;';
     openBtn.onclick = async function() {
       var folderPath = await showNativeFolderPicker();
       if (folderPath) {
@@ -286,8 +368,8 @@ function showWorkspaceDialog() {
     btnRow.appendChild(openBtn);
 
     var newBtn = document.createElement('button');
+    newBtn.className = 'ws-dialog-btn ws-dialog-btn-new';
     newBtn.textContent = '\u2795 Create New Folder';
-    newBtn.style.cssText = 'flex:1;padding:12px 16px;background:#4CAF50;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;';
     newBtn.onclick = async function() {
       var folderPath = await _ipcRenderer.invoke('dialog:createFolder');
       if (folderPath) {
@@ -307,12 +389,12 @@ function showWorkspaceDialog() {
 
     if (validRecents.length > 0) {
       var recentLabel = document.createElement('div');
+      recentLabel.className = 'ws-dialog-recent-label';
       recentLabel.textContent = 'Recent workspaces:';
-      recentLabel.style.cssText = 'font-size:13px;color:#666;margin-bottom:8px;font-weight:500;';
       dialog.appendChild(recentLabel);
 
       var listDiv = document.createElement('div');
-      listDiv.style.cssText = 'max-height:220px;overflow-y:auto;border:1px solid #eee;border-radius:8px;';
+      listDiv.className = 'ws-dialog-recent-list';
 
       for (var i = 0; i < validRecents.length; i++) {
         (function(wsPath) {
@@ -320,18 +402,16 @@ function showWorkspaceDialog() {
           var wsDir = _path.dirname(wsPath);
 
           var item = document.createElement('div');
-          item.style.cssText = 'padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;flex-direction:column;gap:2px;';
-          item.onmouseenter = function() { item.style.background = '#e3f2fd'; };
-          item.onmouseleave = function() { item.style.background = ''; };
+          item.className = 'ws-dialog-recent-item';
 
           var nameSpan = document.createElement('span');
+          nameSpan.className = 'ws-dialog-recent-name';
           nameSpan.textContent = wsName;
-          nameSpan.style.cssText = 'font-weight:600;font-size:14px;color:#333;';
           item.appendChild(nameSpan);
 
           var pathSpan = document.createElement('span');
+          pathSpan.className = 'ws-dialog-recent-path';
           pathSpan.textContent = wsDir;
-          pathSpan.style.cssText = 'font-size:11px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
           item.appendChild(pathSpan);
 
           item.onclick = function() {
@@ -362,11 +442,40 @@ async function switchWorkspace() {
 
   setCurrentWorkspace(wsPath);
 
-  // Clear and reload
+  // Stop world animation and drop all 3D robots from the previous workspace
+  // (async URDF loads from the old set must not reappear after switch).
+  try {
+    if (window.WorldAnimation && typeof window.WorldAnimation.stop === 'function') {
+      window.WorldAnimation.stop();
+    }
+  } catch (eStop) { /* ignore */ }
+  try {
+    if (window.WorldViewer && typeof window.WorldViewer.clearAllRobots === 'function') {
+      window.WorldViewer.clearAllRobots();
+    }
+  } catch (eClear) { /* ignore */ }
+  try {
+    if (window.WorldViewer && typeof window.WorldViewer.clearSavedPoses === 'function') {
+      window.WorldViewer.clearSavedPoses();
+    }
+  } catch (ePoses) { /* ignore */ }
+
+  // Clear and reload (blocks + world.json poses)
   var ws = getWorkspace ? getWorkspace() : null;
   if (ws) {
     ws.clear();
     loadWorkspaceBlocks();
+  } else {
+    loadWorldScene();
+  }
+
+  // Rebuild robot tabs / world membership for the new workspace code
+  // (addRobot will pick up pending poses from world.json)
+  if (typeof updateCodePreview === 'function') {
+    updateCodePreview();
+  }
+  if (typeof window.updateRobotTabs === 'function') {
+    window.updateRobotTabs();
   }
 
   // Refresh saved functions panel

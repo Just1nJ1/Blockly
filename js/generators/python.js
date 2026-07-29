@@ -546,10 +546,19 @@ function initPythonGenerator() {
 
   /**
    * Generator for workflow_run block.
-   * Emits natural Python using template output/item names and selected functions:
-   *   items = collect()
-   *   for item in items:
-   *     act(arm, item)
+   *
+   * Emits a reusable pipeline function that takes **slot functions as
+   * callback parameters**, then invokes it with the user-selected procedures
+   * and context values. Example:
+   *
+   *   def process_and_combine(process, combine, a, b):
+   *     processed = process(a)
+   *     result = combine(processed, b)
+   *     print(result)
+   *
+   *   process_and_combine(my_process, my_combine, 1, 2)
+   *
+   * Fixed step.call targets (e.g. print) stay as direct names inside the body.
    */
   generatorTarget['workflow_run'] = function(block) {
     var templateId = block.templateId_ || '';
@@ -573,50 +582,127 @@ function initPythonGenerator() {
       }
     }
 
-    // Context values (e.g. robot variable name from the block dropdown)
-    var ctxVals = {};
+    function sanitizeIdent(preferred, fallback) {
+      var base = String(preferred || fallback || 'value').replace(/[^A-Za-z0-9_]/g, '_');
+      if (!base || !/^[A-Za-z_]/.test(base)) base = fallback || 'value';
+      return base;
+    }
+
+    // ── Outer call arguments (real user values / selected function names) ──
     var ctx = tpl.context || [];
+    var steps = tpl.steps || [];
+    var ctxOuter = {}; // context name → Python expression at call site
     for (var ci = 0; ci < ctx.length; ci++) {
       var cname = ctx[ci].name;
-      var field = block.getField('CTX_' + cname);
-      ctxVals[cname] = field ? (field.getValue() || cname) : cname;
-    }
-
-    // Logical name → Python identifier (context uses robot var as-is)
-    var bindings = {};
-    for (var ck in ctxVals) {
-      if (Object.prototype.hasOwnProperty.call(ctxVals, ck)) {
-        bindings[ck] = ctxVals[ck];
+      var cspec = ctx[ci];
+      var isValue = cspec.blockly === 'value' || cspec.blockly === 'number' ||
+        cspec.blockly === 'any';
+      if (isValue) {
+        var code = Blockly.Python.valueToCode(
+          block, 'CTX_' + cname, Blockly.Python.ORDER_ATOMIC);
+        ctxOuter[cname] = (code && code.length) ? code : '0';
+      } else {
+        var field = block.getField('CTX_' + cname);
+        ctxOuter[cname] = field ? (field.getValue() || cname) : cname;
       }
     }
 
-    // Track names already used so loop vars don't clash with robot / prior outputs
-    var usedNames = Object.create(null);
-    for (var uk in bindings) {
-      if (Object.prototype.hasOwnProperty.call(bindings, uk)) {
-        usedNames[bindings[uk]] = true;
-      }
+    function selectedSlotFn(step) {
+      if (!step.slot) return '';
+      var f = block.getField('SLOT_' + step.id);
+      return f ? (f.getValue() || '') : '';
     }
 
-    function uniquePyName(preferred) {
-      var base = String(preferred || 'value').replace(/[^A-Za-z0-9_]/g, '_');
-      if (!base || !/^[A-Za-z_]/.test(base)) base = 'value';
-      if (!usedNames[base]) {
-        usedNames[base] = true;
+    // Callback params first (one per slot step), then context params
+    var slotSteps = [];
+    var missingRequired = [];
+    for (var si0 = 0; si0 < steps.length; si0++) {
+      if (steps[si0].slot) {
+        slotSteps.push(steps[si0]);
+        var sel = selectedSlotFn(steps[si0]);
+        if (steps[si0].slot.required && !sel) {
+          missingRequired.push(steps[si0].label || steps[si0].id);
+        }
+      }
+    }
+    if (missingRequired.length) {
+      return 'raise RuntimeError(' +
+        JSON.stringify(
+          'Workflow "' + (tpl.name || tpl.id) + '" missing function(s): ' +
+          missingRequired.join(', ')
+        ) + ')\n';
+    }
+
+    // Build unique formal parameter names for the def
+    var usedFormals = Object.create(null);
+    function uniqueFormal(preferred) {
+      var base = sanitizeIdent(preferred, 'fn');
+      if (!usedFormals[base]) {
+        usedFormals[base] = true;
         return base;
       }
       var n = 2;
-      while (usedNames[base + '_' + n]) n++;
+      while (usedFormals[base + '_' + n]) n++;
       var out = base + '_' + n;
-      usedNames[out] = true;
+      usedFormals[out] = true;
+      return out;
+    }
+
+    // step.id → formal param name for the callback
+    var slotFormal = {};
+    // selected function name for the call site (same order as formals)
+    var slotCallArgs = [];
+    for (var ss = 0; ss < slotSteps.length; ss++) {
+      var st = slotSteps[ss];
+      var formal = uniqueFormal(st.id);
+      slotFormal[st.id] = formal;
+      slotCallArgs.push(selectedSlotFn(st) || 'None');
+    }
+
+    // context.name → formal param name
+    var ctxFormal = {};
+    var ctxCallArgs = [];
+    for (var cj = 0; cj < ctx.length; cj++) {
+      var cn = ctx[cj].name;
+      var cFormal = uniqueFormal(cn);
+      ctxFormal[cn] = cFormal;
+      ctxCallArgs.push(ctxOuter[cn] !== undefined ? ctxOuter[cn] : 'None');
+    }
+
+    // ── Function body: use formal names for callbacks + context ──
+    // Logical binding name → Python expression *inside* the def
+    var bindings = {};
+    for (var cname2 in ctxFormal) {
+      if (Object.prototype.hasOwnProperty.call(ctxFormal, cname2)) {
+        bindings[cname2] = ctxFormal[cname2];
+      }
+    }
+
+    var usedLocals = Object.create(null);
+    for (var lf in usedFormals) {
+      if (Object.prototype.hasOwnProperty.call(usedFormals, lf)) {
+        usedLocals[lf] = true;
+      }
+    }
+
+    function uniqueLocal(preferred) {
+      var base = sanitizeIdent(preferred, 'value');
+      if (!usedLocals[base]) {
+        usedLocals[base] = true;
+        return base;
+      }
+      var n = 2;
+      while (usedLocals[base + '_' + n]) n++;
+      var out = base + '_' + n;
+      usedLocals[out] = true;
       return out;
     }
 
     function resolveFrom(fromSpec, iterLocal) {
       if (!fromSpec) return 'None';
       if (fromSpec.indexOf('context.') === 0) {
-        var cn = fromSpec.substring(8);
-        return bindings[cn] || ctxVals[cn] || 'None';
+        var cnR = fromSpec.substring(8);
+        return bindings[cnR] || ctxFormal[cnR] || 'None';
       }
       if (fromSpec.indexOf('iter.') === 0) {
         var iname = fromSpec.substring(5);
@@ -627,20 +713,8 @@ function initPythonGenerator() {
       return fromSpec;
     }
 
-    function slotFn(step) {
-      if (!step.slot) return null;
-      var f = block.getField('SLOT_' + step.id);
-      var name = f ? f.getValue() : '';
-      return name || '';
-    }
-
-    /**
-     * Build call arguments in signature param order when possible,
-     * otherwise template inputs order.
-     */
     function callArgs(step, iterLocal) {
       var args = [];
-      // Prefer signature.params order (matches the + created function)
       if (step.slot && step.slot.signature && step.slot.signature.params &&
           step.slot.signature.params.length) {
         var params = step.slot.signature.params;
@@ -675,12 +749,16 @@ function initPythonGenerator() {
       return args;
     }
 
-    var lines = [];
-    var steps = tpl.steps || [];
+    /** Callee inside the def: callback formal, or fixed step.call */
+    function bodyCallee(step) {
+      if (step.slot) return slotFormal[step.id] || 'None';
+      return step.call || 'None';
+    }
+
+    var bodyLines = [];
     for (var si = 0; si < steps.length; si++) {
       var step = steps[si];
       var pattern = step.pattern || 'single';
-      var fn = slotFn(step);
 
       if (pattern === 'pass_through') {
         if (step.output && step.output.name) {
@@ -688,55 +766,73 @@ function initPythonGenerator() {
           if (step.inputs && step.inputs[0] && step.inputs[0].from) {
             src = resolveFrom(step.inputs[0].from, null);
           }
-          var outName = uniquePyName(step.output.name);
+          var outName = uniqueLocal(step.output.name);
           bindings[step.output.name] = outName;
-          lines.push(outName + ' = ' + src);
+          bodyLines.push(outName + ' = ' + src);
         }
-        continue;
-      }
-
-      if (step.slot && step.slot.required && !fn) {
-        lines.push('raise RuntimeError(' +
-          JSON.stringify('Workflow step "' + (step.label || step.id) +
-            '" has no function selected') + ')');
         continue;
       }
 
       if (pattern === 'single') {
-        var args = callArgs(step, null);
-        var call = (fn || 'None') + '(' + args.join(', ') + ')';
+        var argsS = callArgs(step, null);
+        var callS = bodyCallee(step) + '(' + argsS.join(', ') + ')';
         if (step.output && step.output.name) {
-          var dest = uniquePyName(step.output.name);
+          var dest = uniqueLocal(step.output.name);
           bindings[step.output.name] = dest;
-          lines.push(dest + ' = ' + call);
+          bodyLines.push(dest + ' = ' + callS);
         } else {
-          lines.push(call);
+          bodyLines.push(callS);
         }
       } else if (pattern === 'list_iter') {
         var listVar = bindings[step.iterOver] || step.iterOver;
-        var itemVar = uniquePyName(step.itemName || 'item');
+        var itemVar = uniqueLocal(step.itemName || 'item');
         var iterLocal = {};
         iterLocal[step.itemName || 'item'] = itemVar;
         iterLocal.item = itemVar;
         if (step.itemName) iterLocal[step.itemName] = itemVar;
 
         var bodyArgs = callArgs(step, iterLocal);
-        var bodyCall = (fn || 'None') + '(' + bodyArgs.join(', ') + ')';
-        lines.push('for ' + itemVar + ' in ' + listVar + ':');
-        lines.push(Blockly.Python.INDENT + bodyCall);
+        var bodyCall = bodyCallee(step) + '(' + bodyArgs.join(', ') + ')';
+        bodyLines.push('for ' + itemVar + ' in ' + listVar + ':');
+        bodyLines.push(Blockly.Python.INDENT + bodyCall);
       } else if (step.call) {
         var fixedArgs = callArgs(step, null);
         var fixedCall = step.call + '(' + fixedArgs.join(', ') + ')';
         if (step.output && step.output.name) {
-          var fdest = uniquePyName(step.output.name);
+          var fdest = uniqueLocal(step.output.name);
           bindings[step.output.name] = fdest;
-          lines.push(fdest + ' = ' + fixedCall);
+          bodyLines.push(fdest + ' = ' + fixedCall);
         } else {
-          lines.push(fixedCall);
+          bodyLines.push(fixedCall);
         }
       }
     }
 
-    return lines.length ? (lines.join('\n') + '\n') : '';
+    // Workflow runner name from template id
+    var runnerName = sanitizeIdent(tpl.id, 'run_workflow');
+    // Avoid clashing with user procedures of the same name
+    if (usedFormals[runnerName]) {
+      runnerName = uniqueFormal(runnerName + '_workflow');
+    }
+
+    var formals = [];
+    for (var ssi = 0; ssi < slotSteps.length; ssi++) {
+      formals.push(slotFormal[slotSteps[ssi].id]);
+    }
+    for (var cci = 0; cci < ctx.length; cci++) {
+      formals.push(ctxFormal[ctx[cci].name]);
+    }
+
+    var IND = Blockly.Python.INDENT || '  ';
+    var defBody = bodyLines.length
+      ? bodyLines.map(function(ln) { return IND + ln; }).join('\n') + '\n'
+      : IND + 'pass\n';
+    var defCode = 'def ' + runnerName + '(' + formals.join(', ') + '):\n' + defBody;
+
+    // Hoist one def per template id (same pipeline, different callback args)
+    Blockly.Python.definitions_['%workflow_' + tpl.id] = defCode;
+
+    var invokeArgs = slotCallArgs.concat(ctxCallArgs);
+    return runnerName + '(' + invokeArgs.join(', ') + ')\n';
   };
 }

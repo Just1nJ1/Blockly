@@ -373,10 +373,19 @@ function buildAppMenu() {
 }
 
 function createWindow() {
+  const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     icon: path.join(__dirname, 'resources', 'icons', 'icon.png'),
+    // macOS: hide native title text so the renderer can draw logo next to
+    // traffic lights (PyCharm / VS Code style). Other platforms keep frame.
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset',
+          trafficLightPosition: { x: 14, y: 12 },
+        }
+      : {}),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,

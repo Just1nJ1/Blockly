@@ -31,10 +31,28 @@
   // Match any wlkatapython robot constructor: Mirobot_UART, MT4_UART, E4_UART, etc.
   var ROBOT_CTOR_RE = /^(\w+)\s*=\s*wlkatapython\.(\w+_UART)\s*\(/;
 
+  /**
+   * Map a constructor class / setup_robot MODEL string to a short model label.
+   * e.g. 'MT4_UART' → 'MT4', 'wlkatapython.Mirobot_UART' → 'Mirobot'
+   */
+  function normalizeRobotModelName(raw) {
+    if (!raw) return null;
+    var s = String(raw).replace(/^wlkatapython\./i, '').trim();
+    if (!s) return null;
+    if (/MT4/i.test(s)) return 'MT4';
+    if (/\bE4\b/i.test(s) || /^E4/i.test(s)) return 'E4';
+    if (/Haro/i.test(s)) return 'Haro380';
+    if (/Mirobot/i.test(s)) return 'Mirobot';
+    // Generic: strip common suffixes
+    s = s.replace(/_UART$/i, '').replace(/_USB$/i, '');
+    return s || null;
+  }
+
   // Parse the generated Python code into structural info:
   //   - which variables are direct robot UART assignments at top level
   //   - which functions internally create a robot UART and return it
   //   - which variables are assigned from calling those functions
+  //   - varModels maps each robot var → constructor class (e.g. 'MT4_UART')
   function analyzeRobotCode(code) {
     const lines = code.split('\n');
     const result = {
@@ -50,15 +68,26 @@
     let funcIndent = 0;
     let funcBodyLines = [];
     let funcInternalVar = null;
+    let funcInternalModel = null;
     let funcReturnsRobot = false;
 
     function saveFunc() {
       if (inFunc && funcInternalVar && funcReturnsRobot) {
         result.robotFunctions[inFunc] = {
           internalVar: funcInternalVar,
-          bodyLines: funcBodyLines.slice()
+          bodyLines: funcBodyLines.slice(),
+          // Constructor class used inside the function (e.g. 'MT4_UART')
+          model: funcInternalModel || null
         };
       }
+    }
+
+    function resetFuncState() {
+      inFunc = null;
+      funcBodyLines = [];
+      funcInternalVar = null;
+      funcInternalModel = null;
+      funcReturnsRobot = false;
     }
 
     for (let i = 0; i < lines.length; i++) {
@@ -72,6 +101,7 @@
         funcIndent = line.search(/\S/);
         funcBodyLines = [];
         funcInternalVar = null;
+        funcInternalModel = null;
         funcReturnsRobot = false;
         continue;
       }
@@ -80,15 +110,14 @@
         const lineIndent = line.search(/\S/);
         if (trimmed.length > 0 && lineIndent <= funcIndent) {
           saveFunc();
-          inFunc = null;
-          funcBodyLines = [];
-          funcInternalVar = null;
-          funcReturnsRobot = false;
+          resetFuncState();
+          // Fall through — this line may be a top-level assignment after the def
         } else {
           funcBodyLines.push(trimmed);
           const innerAssign = trimmed.match(ROBOT_CTOR_RE);
           if (innerAssign) {
             funcInternalVar = innerAssign[1];
+            funcInternalModel = innerAssign[2];
           }
           if (funcInternalVar) {
             const retMatch = trimmed.match(/^return\s+(\w+)/);
@@ -120,6 +149,11 @@
     for (const [varName, funcName] of Object.entries(result.callerToFunc)) {
       if (result.robotFunctions[funcName]) {
         result.funcReturnVars.push(varName);
+        // Propagate constructor model from the factory function to the caller var
+        const model = result.robotFunctions[funcName].model;
+        if (model) {
+          result.varModels[varName] = model;
+        }
       }
     }
     for (const varName of Object.keys(result.callerToFunc)) {
@@ -453,6 +487,7 @@
 
   // Expose globally
   window.analyzeRobotCode = analyzeRobotCode;
+  window.normalizeRobotModelName = normalizeRobotModelName;
   window.extractMovesFromLines = extractMovesFromLines;
   window.parseMovesFromCode = parseMovesFromCode;
   window.refreshRecordedMoves = refreshRecordedMoves;

@@ -167,9 +167,11 @@ class DebugSession:
         """Execute the user code with tracing enabled."""
         old_stdout = sys.stdout
         old_stderr = sys.stderr
+        blockly_site = None
         try:
             sys.stdout = self.stdout_buffer
             sys.stderr = self.stderr_buffer
+            blockly_site = CodeExecutor._prepare_blockly_packages()
 
             safe_globals = CodeExecutor._safe_globals()
 
@@ -205,6 +207,7 @@ class DebugSession:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.finished = True
+            CodeExecutor._cleanup_blockly_packages(blockly_site)
             try:
                 mgr = SerialManager.get_instance()
                 for conn in mgr.all_connected():

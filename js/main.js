@@ -114,6 +114,12 @@ async function ensureBlocklyReady() {
 function initBlockly() {
   const toolbox = getToolboxConfig();
 
+  // Preferred block scale from Appearance settings (default 1.0)
+  var startScale = 1.0;
+  if (window.AppPreferences && typeof AppPreferences.getBlockScale === 'function') {
+    startScale = AppPreferences.getBlockScale();
+  }
+
   // Inject Blockly
   const workspace = Blockly.inject('blocklyDiv', {
     toolbox: toolbox,
@@ -127,7 +133,7 @@ function initBlockly() {
     zoom: {
       controls: true,
       wheel: true,
-      startScale: 1.0,
+      startScale: startScale,
       maxScale: 3,
       minScale: 0.3,
       scaleSpeed: 1.2,
@@ -137,7 +143,12 @@ function initBlockly() {
   // Store workspace reference
   setWorkspace(workspace);
 
-  // Initialize block area selection (Cmd/Ctrl + drag)
+  // Re-apply scale in case inject startScale was ignored / prefs changed
+  if (window.AppPreferences && typeof AppPreferences.applyBlockScale === 'function') {
+    AppPreferences.applyBlockScale();
+  }
+
+  // Initialize block area selection (Cmd/Ctrl + drag / click)
   if (typeof initBlockSelection === 'function') {
     initBlockSelection();
   }
@@ -183,6 +194,36 @@ function initBlockly() {
         updateDynamicSlots(parent);
       }
     }
+  });
+
+  // ── Restore default value shadows when a slot becomes empty ──
+  // Blockly clears shadowState if the user drags the shadow (or a replacement
+  // value) out of a socket. Remember + re-apply defaults so Number/String
+  // inputs never stay blank.
+  workspace.addChangeListener(function(event) {
+    if (event.type === Blockly.Events.BLOCK_CREATE) {
+      var created = workspace.getBlockById(event.blockId);
+      if (created && typeof ensureBlockValueShadows === 'function') {
+        // Capture toolbox-provided shadows as the permanent default.
+        ensureBlockValueShadows(created);
+      }
+      return;
+    }
+
+    if (event.type !== Blockly.Events.BLOCK_MOVE) return;
+    // Only when something left a parent (disconnect / reparent)
+    if (!event.oldParentId) return;
+
+    var parent = workspace.getBlockById(event.oldParentId);
+    if (!parent || parent.isDisposed()) return;
+
+    // Defer until Blockly finishes its own disconnect/respawn handling
+    setTimeout(function() {
+      if (parent.isDisposed()) return;
+      if (typeof ensureBlockValueShadows === 'function') {
+        ensureBlockValueShadows(parent);
+      }
+    }, 0);
   });
 
   // Listen for block creation and changes to trigger library loading

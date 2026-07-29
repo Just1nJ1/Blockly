@@ -1,16 +1,22 @@
 /* ═══ Theme Variables ═══ */
 :root {
+  /* Shared right-rail width: Blockly #output-panel + Teaching .teach-ctrl-panel */
+  --ctrl-side-width: 300px;
+  /* App UI font size (Appearance settings) */
+  --app-font-size: 14px;
+
   --bg-primary: #ffffff;
   --bg-secondary: #fafafa;
   --bg-tertiary: #f0f0f0;
   --bg-header: #e0e0e0;
-  --bg-code: #263238;
+  /* Code preview + console (light theme: light panel, dark text) */
+  --bg-code: #f4f6f8;
   --bg-model: #1a1a1a;
   --text-primary: #333;
   --text-secondary: #555;
   --text-muted: #888;
   --text-faint: #999;
-  --text-code: #aed581;
+  --text-code: #1b5e20;
   --border-primary: #ccc;
   --border-light: #ddd;
   --border-faint: #eee;
@@ -18,11 +24,13 @@
   --accent: #2196F3;
   --accent-hover: #1976D2;
   --btn-disabled: #ccc;
-  --output-stdout: #333;
-  --output-stderr: #d32f2f;
+  --output-stdout: #263238;
+  --output-stderr: #c62828;
   --output-stderr-bg: #ffebee;
-  --output-result: #1976D2;
+  --output-result: #1565c0;
   --output-result-bg: #e3f2fd;
+  --output-stdin: #2e7d32;
+  --output-system: #78909c;
   --sidebar-bg: #263238;
   --sidebar-text: #90a4ae;
   --sidebar-hover: #37474f;
@@ -69,13 +77,14 @@
   --bg-secondary: #252526;
   --bg-tertiary: #2d2d2d;
   --bg-header: #333;
+  /* Code preview + console (dark theme: dark panel, light text) */
   --bg-code: #1a1a2e;
   --bg-model: #111;
   --text-primary: #d4d4d4;
   --text-secondary: #aaa;
   --text-muted: #888;
   --text-faint: #666;
-  --text-code: #aed581;
+  --text-code: #c5e1a5;
   --border-primary: #444;
   --border-light: #3a3a3a;
   --border-faint: #333;
@@ -83,11 +92,13 @@
   --accent: #2196F3;
   --accent-hover: #42a5f5;
   --btn-disabled: #555;
-  --output-stdout: #d4d4d4;
+  --output-stdout: #e0e0e0;
   --output-stderr: #ef9a9a;
   --output-stderr-bg: #3e1e1e;
   --output-result: #64b5f6;
   --output-result-bg: #1a2e3e;
+  --output-stdin: #81c784;
+  --output-system: #90a4ae;
   --sidebar-bg: #1a1a1a;
   --sidebar-text: #777;
   --sidebar-hover: #2a2a2a;
@@ -131,14 +142,64 @@ body {
   margin: 0;
   padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: var(--app-font-size, 14px);
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
 }
 #app {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   height: 100vh;
+  min-height: 0;
+}
+
+/* Row under the custom title bar: sidebar + main content */
+#app-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── macOS custom title bar (logo next to traffic lights) ── */
+.titlebar {
+  display: none;
+  flex-shrink: 0;
+  align-items: center;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 12px 0 0;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-primary);
+  /* Entire bar is a window drag region except interactive children */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+body.platform-darwin .titlebar {
+  display: flex;
+}
+/* Leaves room for the native red/yellow/green buttons */
+.titlebar-traffic-spacer {
+  width: 78px;
+  flex-shrink: 0;
+  height: 100%;
+}
+.titlebar-logo {
+  display: block;
+  height: 22px;
+  width: auto;
+  max-width: 160px;
+  object-fit: contain;
+  /* PNG is 1536×1024 — scale by height for a compact brand mark */
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.titlebar-drag-fill {
+  flex: 1;
+  min-width: 8px;
+  height: 100%;
 }
 
 /* Left sidebar */
@@ -304,6 +365,29 @@ body {
 }
 #command-port-select:focus {
   border-color: var(--accent);
+}
+#command-port-refresh {
+  display: none;
+  padding: 4px 10px;
+  background: var(--cmd-select-bg);
+  color: var(--cmd-text);
+  border: 1px solid var(--cmd-select-border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+#command-port-refresh:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#command-port-refresh:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+#command-port-refresh.visible {
+  display: inline-block;
 }
 #command-port-remove {
   display: none;
@@ -488,9 +572,10 @@ button:disabled {
   min-height: 0;
 }
 #output-panel {
-  /* Match teaching tab control panel width (.teach-ctrl-panel) */
-  width: 260px;
-  min-width: 260px;
+  /* Same width as Teaching .teach-ctrl-panel */
+  width: var(--ctrl-side-width, 300px);
+  min-width: var(--ctrl-side-width, 300px);
+  max-width: var(--ctrl-side-width, 300px);
   flex-shrink: 0;
   border-left: 1px solid var(--border-primary);
   display: flex;
@@ -498,6 +583,7 @@ button:disabled {
   background: var(--bg-secondary);
   min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
 }
 #output-header {
   padding: 10px;
@@ -511,22 +597,85 @@ button:disabled {
   padding: 10px;
   background: var(--bg-code);
   color: var(--text-code);
+  border-bottom: 1px solid var(--border-faint);
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
-#output-content {
+#output-content,
+#output-content.console-root {
   flex: 1;
-  overflow: auto;
-  padding: 10px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
+  background: var(--bg-code);
+  color: var(--output-stdout);
+}
+.console-log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--output-stdout);
+}
+.console-log .output-stdout {
+  color: var(--output-stdout);
+}
+.console-log .output-stderr {
+  color: var(--output-stderr);
+  background: var(--output-stderr-bg);
+}
+.console-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+.console-input-row.active {
+  background: var(--bg-header);
+  box-shadow: inset 0 0 0 1px var(--accent, #4CAF50);
+}
+.console-prompt {
+  color: var(--output-stdin, var(--output-result));
+  font-weight: bold;
+  user-select: none;
+}
+.console-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.console-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.console-input::placeholder {
+  color: var(--text-muted, #888);
 }
 .output-line {
-  margin: 2px 0;
-  padding: 4px;
-  border-radius: 3px;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  display: inline;
+}
+.output-line.output-chunk {
+  display: inline;
 }
 .output-stdout {
   color: var(--output-stdout);
@@ -537,14 +686,29 @@ button:disabled {
 }
 .output-result {
   color: var(--output-result);
+  display: block;
+  margin: 4px 0;
+  padding: 4px;
+  border-radius: 3px;
   background: var(--output-result-bg);
 }
 .output-error {
   color: var(--output-stderr);
-  background: var(--output-stderr-bg);
-  padding: 8px;
+  display: block;
   margin: 4px 0;
+  padding: 8px;
   border-radius: 4px;
+  background: var(--output-stderr-bg);
+}
+.output-stdin {
+  color: var(--output-stdin, var(--output-result));
+  font-weight: 500;
+}
+.output-system {
+  color: var(--output-system, var(--text-muted));
+  font-style: italic;
+  display: block;
+  margin: 4px 0;
 }
 
 /* Secondary tab bars: Blockly/World (left) and Code/Functions/Control (right)
@@ -902,6 +1066,24 @@ button:disabled {
 #blocklyDiv.debug-mode .blocklyBlockCanvas .debug-active > .blocklyNonEditableField > text {
   opacity: 1 !important;
 }
+/* Teach target: the move block that just executed (editable via Control)
+   until the next Step. PC (debug-active) may already be on the next line. */
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > .blocklyPath {
+  fill-opacity: 1 !important;
+  stroke-opacity: 1 !important;
+  stroke: #ff9800 !important;
+  stroke-width: 3px !important;
+}
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > .blocklyEditableField > rect,
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > .blocklyNonEditableField > rect {
+  fill-opacity: 1 !important;
+}
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > text.blocklyText,
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > g > text.blocklyText,
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > .blocklyEditableField > text,
+#blocklyDiv.debug-mode .blocklyBlockCanvas .debug-teach > .blocklyNonEditableField > text {
+  opacity: 1 !important;
+}
 /* Disable pointer events on the workspace during debug */
 #blocklyDiv.debug-mode .blocklyBlockCanvas {
   pointer-events: none;
@@ -1130,11 +1312,20 @@ button:disabled {
   padding: 4px 0 4px 12px;
 }
 
-/* ═══ Control Panel ═══ */
+/* ═══ Control Panel (Blockly + Teaching share .ctrl-panel) ═══ */
+#panel-content-control-panel {
+  min-width: 0;
+  overflow: hidden;
+}
 .ctrl-panel {
   padding: 10px;
+  overflow-x: hidden;
   overflow-y: auto;
   flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .ctrl-port-row {
   display: flex;
@@ -1143,22 +1334,43 @@ button:disabled {
   margin-bottom: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-faint);
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
-#ctrl-port-select {
-  flex: 1;
+/* Port label: compact so the <select> keeps most of the rail width */
+.ctrl-port-row > .ctrl-joint-label {
+  width: auto;
+  min-width: 2.5em;
+  flex-shrink: 0;
+}
+/* Shared port dropdown (Blockly + Teaching) */
+#ctrl-port-select,
+#teach-port-select {
+  flex: 1 1 0;
+  min-width: 0; /* allow shrink inside flex row */
+  width: 0; /* force flex child to respect parent, not option text width */
+  max-width: 100%;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: 0.85rem;
   border: 1px solid var(--border-primary);
   border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
   cursor: pointer;
   outline: none;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
-#ctrl-port-select:focus {
+#ctrl-port-select:focus,
+#teach-port-select:focus {
   border-color: var(--accent);
 }
-#ctrl-port-select.port-connected {
+#ctrl-port-select.port-connected,
+#teach-port-select.port-connected {
   color: #fff;
   font-weight: 600;
 }
@@ -1185,7 +1397,7 @@ button:disabled {
 .ctrl-action-btn {
   flex: 1;
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: 0.85rem;
   font-weight: 600;
   border-radius: 4px;
   background: var(--bg-header);
@@ -1273,7 +1485,7 @@ button:disabled {
   margin-bottom: 6px;
 }
 .ctrl-joint-label {
-  font-size: 13px;
+  font-size: 0.93rem;
   font-weight: 500;
   color: var(--text-primary);
   width: 52px;
@@ -1539,6 +1751,106 @@ button:disabled {
   background: #4CAF50;
   color: #fff;
   border-color: #388E3C;
+}
+
+/* ── Workspace open / switch dialog ── */
+#workspace-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 20000;
+}
+.ws-dialog {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  padding: 30px;
+  min-width: 440px;
+  max-width: 540px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  box-sizing: border-box;
+}
+.ws-dialog-title {
+  margin: 0 0 6px 0;
+  font-size: 20px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.ws-dialog-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+.ws-dialog-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.ws-dialog-btn {
+  flex: 1;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+}
+.ws-dialog-btn-open {
+  background: var(--accent);
+}
+.ws-dialog-btn-open:hover {
+  background: var(--accent-hover);
+}
+.ws-dialog-btn-new {
+  background: #4CAF50;
+}
+.ws-dialog-btn-new:hover {
+  background: #43A047;
+}
+.ws-dialog-recent-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.ws-dialog-recent-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+.ws-dialog-recent-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-faint);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ws-dialog-recent-item:last-child {
+  border-bottom: none;
+}
+.ws-dialog-recent-item:hover {
+  background: var(--func-group-current, var(--tab-hover));
+}
+.ws-dialog-recent-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.ws-dialog-recent-path {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Robot Settings Modal ── */
@@ -1859,6 +2171,42 @@ button:disabled {
   color: var(--text-secondary);
   margin-top: 2px;
 }
+/* Appearance settings controls */
+.app-settings-field {
+  margin-bottom: 16px;
+}
+.app-settings-field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.app-settings-field-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.app-settings-range-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.app-settings-range-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.app-settings-range-value {
+  min-width: 3.5em;
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .app-settings-nav-item > svg {
   color: var(--text-muted);
   flex-shrink: 0;
@@ -1888,6 +2236,15 @@ button:disabled {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   flex-shrink: 0;
+}
+.app-settings-item-badge-blockly {
+  background: #e3f2fd;
+  color: #1565c0;
+  font-weight: 600;
+}
+[data-theme="dark"] .app-settings-item-badge-blockly {
+  background: #1a2e3e;
+  color: #64b5f6;
 }
 .app-settings-item-desc {
   font-size: 11px;
@@ -2523,6 +2880,16 @@ button:disabled {
   line-height: 1.5;
   margin-bottom: 14px;
 }
+.port-picker-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #b71c1c;
+  background: #ffebee;
+  border: 1px solid #ef9a9a;
+  border-radius: 6px;
+}
 .port-picker-model-group {
   display: flex;
   flex-direction: column;
@@ -2743,9 +3110,30 @@ button:disabled {
 [data-theme="dark"] .blocklyNonEditableField > text {
   fill: #fff !important;
 }
+/* Default/shadow value chips (e.g. math_number 0) — Blockly paints colourSecondary
+   (muted grey) which disappears on a dark workspace. Force a clearer slate + text. */
+[data-theme="dark"] .blocklyShadow > .blocklyPath,
+[data-theme="dark"] g.blocklyShadow > .blocklyPath {
+  fill: #6b7c8d !important;
+  fill-opacity: 1 !important;
+  stroke: #8a9aab !important;
+  stroke-width: 1px !important;
+}
+[data-theme="dark"] .blocklyShadow .blocklyText,
+[data-theme="dark"] .blocklyShadow .blocklyEditableField > text,
+[data-theme="dark"] .blocklyShadow .blocklyNonEditableField > text,
+[data-theme="dark"] .blocklyShadow .blocklyDropdownText {
+  fill: #ffffff !important;
+}
+[data-theme="dark"] .blocklyShadow .blocklyEditableField > rect,
+[data-theme="dark"] .blocklyShadow .blocklyNonEditableField > rect {
+  /* Darker inset on the lighter shadow body so the value reads clearly */
+  fill: rgba(0, 0, 0, 0.28) !important;
+}
+/* Non-shadow field editors (typed values) — stronger than pure wash */
 [data-theme="dark"] .blocklyEditableField > rect,
 [data-theme="dark"] .blocklyNonEditableField > rect {
-  fill: rgba(255,255,255,0.15) !important;
+  fill: rgba(255, 255, 255, 0.22) !important;
 }
 [data-theme="dark"] .blocklyDropdownText {
   fill: #fff !important;
@@ -2756,20 +3144,31 @@ button:disabled {
 [data-theme="dark"] .blocklyScrollbarHandle {
   fill: #555 !important;
 }
+/* Menus / dropdowns: use a mid-grey panel (not near-black) so options stay readable.
+   Blockly may paint DropDownDiv with the block hue; force theme colours. */
 [data-theme="dark"] .blocklyWidgetDiv .blocklyMenu {
-  background: #2d2d2d !important;
-  border: 1px solid #444 !important;
+  background: #3c3f41 !important;
+  border: 1px solid #5a5a5a !important;
+  color: #e8e8e8 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
 }
 [data-theme="dark"] .blocklyWidgetDiv .blocklyMenuItem {
-  color: #d4d4d4 !important;
+  color: #e8e8e8 !important;
+}
+[data-theme="dark"] .blocklyWidgetDiv .blocklyMenuItemContent {
+  color: #e8e8e8 !important;
 }
 [data-theme="dark"] .blocklyWidgetDiv .blocklyMenuItemHighlight {
-  background-color: #455a64 !important;
+  background-color: #4a6fa5 !important;
+  color: #fff !important;
+}
+[data-theme="dark"] .blocklyWidgetDiv .blocklyMenuItemDisabled {
+  color: #888 !important;
 }
 [data-theme="dark"] .blocklyWidgetDiv .blocklyHtmlInput {
-  background: #3c3c3c !important;
-  color: #d4d4d4 !important;
-  border-color: #555 !important;
+  background: #4a4a4a !important;
+  color: #e8e8e8 !important;
+  border-color: #666 !important;
 }
 [data-theme="dark"] .blocklyToolboxCategory {
   color: #d4d4d4 !important;
@@ -2781,27 +3180,58 @@ button:disabled {
   fill: #2a2a2a !important;
 }
 [data-theme="dark"] .blocklyDropDownDiv {
-  background-color: #2d2d2d !important;
-  border-color: #444 !important;
+  background-color: #3c3f41 !important;
+  border-color: #5a5a5a !important;
+  color: #e8e8e8 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
 }
+[data-theme="dark"] .blocklyDropDownDiv .blocklyDropDownContent,
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenu,
+[data-theme="dark"] .blocklyDropDownDiv .blocklyDropdownMenu {
+  background: transparent !important;
+  color: #e8e8e8 !important;
+}
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItem,
 [data-theme="dark"] .blocklyDropDownDiv .goog-menuitem {
-  color: #d4d4d4 !important;
+  color: #e8e8e8 !important;
 }
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemContent {
+  color: #e8e8e8 !important;
+}
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemHighlight,
 [data-theme="dark"] .blocklyDropDownDiv .goog-menuitem-highlight {
-  background-color: #455a64 !important;
+  background-color: #4a6fa5 !important;
+  color: #fff !important;
 }
-[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemCheckmark {
-  filter: invert(1);
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemHighlight .blocklyMenuItemContent {
+  color: #fff !important;
+}
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemDisabled {
+  color: #888 !important;
+}
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemCheckmark,
+[data-theme="dark"] .blocklyDropDownDiv .blocklyMenuItemCheckbox {
+  filter: invert(1) brightness(1.2);
+}
+[data-theme="dark"] .blocklyDropDownDiv .blocklyDropDownArrow {
+  background-color: #3c3f41 !important;
+  border-color: #5a5a5a !important;
 }
 [data-theme="dark"] .blocklyContextMenu {
-  background: #2d2d2d !important;
-  border: 1px solid #444 !important;
+  background: #3c3f41 !important;
+  border: 1px solid #5a5a5a !important;
+  color: #e8e8e8 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
 }
 [data-theme="dark"] .blocklyContextMenu .blocklyMenuItem {
-  color: #d4d4d4 !important;
+  color: #e8e8e8 !important;
+}
+[data-theme="dark"] .blocklyContextMenu .blocklyMenuItemContent {
+  color: #e8e8e8 !important;
 }
 [data-theme="dark"] .blocklyContextMenu .blocklyMenuItemHighlight {
-  background-color: #455a64 !important;
+  background-color: #4a6fa5 !important;
+  color: #fff !important;
 }
 [data-theme="dark"] .blocklyTreeSeparator {
   border-color: #444 !important;
@@ -2847,32 +3277,28 @@ button:disabled {
 }
 
 .teach-ctrl-panel {
-  width: 260px;
-  min-width: 260px;
+  /* Match Blockly #output-panel width exactly */
+  width: var(--ctrl-side-width, 300px);
+  min-width: var(--ctrl-side-width, 300px);
+  max-width: var(--ctrl-side-width, 300px);
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--bg-secondary);
-  padding: 8px;
+  /* No extra outer padding — .ctrl-panel already pads (same as Blockly) */
+  padding: 0;
   flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .teach-ctrl-panel .ctrl-port-row {
   min-width: 0;
 }
-#teach-port-select {
+.teach-ctrl-panel .ctrl-panel {
+  /* Full height scroll area like Blockly Control tab */
   flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
-  font-size: 12px;
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  cursor: pointer;
-  outline: none;
-  text-overflow: ellipsis;
-}
-#teach-port-select:focus {
-  border-color: var(--accent);
+  min-height: 0;
 }
 
 /* .teach-toolbar metrics shared with #toolbar above */

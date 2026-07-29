@@ -9,7 +9,7 @@ import tempfile
 import threading
 import uuid
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from .executor import CodeExecutor
 from .inspector import FunctionInspector, InstanceInspector
@@ -103,7 +103,7 @@ def list_functions():
 
 @app.route('/execute', methods=['POST'])
 def execute_code():
-    """Execute Python code."""
+    """Batch-execute Python code (legacy: wait for completion, return full output)."""
     try:
         data = request.get_json()
         if not data:
@@ -118,6 +118,90 @@ def execute_code():
 
     except Exception as e:
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/execute/start', methods=['POST'])
+def execute_start():
+    """
+    Start interactive execution in a background thread.
+    Stream events via GET /execute/events/<session_id> (SSE).
+    Send stdin lines via POST /execute/input.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+        code = data.get('code', '')
+        if not code or not str(code).strip():
+            return jsonify({'success': False, 'error': 'No code provided'}), 400
+        result = CodeExecutor.start_interactive(code)
+        status = 200 if result.get('success') else 409
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/execute/events/<session_id>', methods=['GET'])
+def execute_events(session_id):
+    """Server-Sent Events stream for an interactive execution session."""
+    import json as _json
+
+    sess = CodeExecutor.get_session(session_id)
+    if not sess:
+        return jsonify({'success': False, 'error': 'Unknown session'}), 404
+
+    def generate():
+        idx = 0
+        while True:
+            batch, idx = sess.wait_events(idx, timeout=15.0)
+            if not batch:
+                # Keep-alive so proxies don't close idle streams
+                yield ": keepalive\n\n"
+                if sess.done and idx >= 0:
+                    # Drain any final events that arrived with done
+                    batch, idx = sess.wait_events(idx, timeout=0.05)
+                    if not batch:
+                        break
+                else:
+                    continue
+            for evt in batch:
+                yield f"data: {_json.dumps(evt)}\n\n"
+                if evt.get('type') == 'done':
+                    return
+            if sess.done:
+                # One more non-blocking drain
+                batch, idx = sess.wait_events(idx, timeout=0.05)
+                for evt in batch:
+                    yield f"data: {_json.dumps(evt)}\n\n"
+                return
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
+
+@app.route('/execute/input', methods=['POST'])
+def execute_input():
+    """Feed one line of stdin to a running interactive session (for input())."""
+    try:
+        data = request.get_json() or {}
+        session_id = data.get('session_id') or data.get('sessionId')
+        if not session_id:
+            return jsonify({'success': False, 'error': 'session_id required'}), 400
+        line = data.get('line', '')
+        if line is None:
+            line = ''
+        result = CodeExecutor.feed_input(session_id, str(line))
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/execute/abort', methods=['POST'])
@@ -351,10 +435,33 @@ def cmd_connect():
 
 @app.route('/cmd/disconnect', methods=['POST'])
 def cmd_disconnect():
-    """Disconnect from the serial port."""
+    """Disconnect a serial/WiFi port (body: optional port; default = active)."""
     try:
+        data = request.get_json(silent=True) or {}
+        port = data.get('port', None)
         mgr = SerialManager.get_instance()
-        result = mgr.disconnect()
+        result = mgr.disconnect(port=port)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/reconnect', methods=['POST'])
+def cmd_reconnect():
+    """Hard refresh: disconnect then reconnect the same port.
+
+    Use after a quick device power-cycle when the path is still listed but
+    the old serial session is dead (no responses forever).
+
+    Body: { port?, model?, baudrate? }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        port = data.get('port', None)
+        model = data.get('model', None)
+        baudrate = data.get('baudrate', 115200)
+        mgr = SerialManager.get_instance()
+        result = mgr.reconnect(port=port, model=model, baudrate=baudrate)
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -422,7 +529,12 @@ def cmd_query():
 
 @app.route('/cmd/history', methods=['GET'])
 def cmd_history():
-    """Get message history since a given ID."""
+    """Get message history since a given ID.
+
+    Query params:
+      since — message id cursor
+      include_status — if true, include auto-status lines (developer mode)
+    """
     try:
         since = request.args.get('since', 0, type=int)
         include_status = request.args.get('include_status', 'false') == 'true'
@@ -430,7 +542,40 @@ def cmd_history():
         messages = mgr.get_history(since=since)
         if not include_status:
             messages = [m for m in messages if m.get('dir') != 'auto-status']
-        return jsonify({'success': True, 'messages': messages})
+        from .serial_manager import get_comm_log_path
+        return jsonify({
+            'success': True,
+            'messages': messages,
+            'comm_log_path': get_comm_log_path(),
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/cmd/comm-log', methods=['GET'])
+def cmd_comm_log():
+    """Return path (and optional tail) of the session raw communication log.
+
+    Query params:
+      tail — if set to a positive int, return last N lines of the file
+    """
+    try:
+        from .serial_manager import get_comm_log_path
+        path = get_comm_log_path()
+        result = {
+            'success': True,
+            'path': path,
+            'exists': bool(path and os.path.isfile(path)),
+        }
+        tail_n = request.args.get('tail', type=int)
+        if tail_n and path and os.path.isfile(path) and tail_n > 0:
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.readlines()
+                result['tail'] = ''.join(lines[-min(tail_n, 2000):])
+            except Exception as e:
+                result['tail_error'] = str(e)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -772,17 +917,53 @@ def cmd_status():
 
 @app.route('/cmd/probe-port', methods=['POST'])
 def cmd_probe_port():
-    """Probe a serial port to detect the robot model (sends $V).
-    Returns the model name or null if detection fails."""
+    """Probe a serial port or WiFi IP to detect the robot model (sends $V).
+
+    Body: { port: "COM3" | "192.168.1.10" | "192.168.1.10:8234" }
+
+    Returns:
+      { success, model, port?, error?, unreachable? }
+      - model set when firmware responded to $V
+      - unreachable=true when the WiFi host/port could not be opened
+      - model null + no unreachable → open succeeded but model unknown
+    """
     try:
         data = request.get_json() or {}
-        port = data.get('port', '')
+        port = (data.get('port') or '').strip()
         if not port:
             return jsonify({'success': False, 'error': 'No port provided'}), 400
 
         from .detector import detect_model
-        model = detect_model(port)
-        return jsonify({'success': True, 'model': model})
+        from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+        canonical = normalize_wifi_endpoint(port) if is_wifi_endpoint(port) else port
+        model = detect_model(canonical)
+        err = getattr(detect_model, 'last_error', None)
+
+        if model:
+            return jsonify({
+                'success': True,
+                'model': model,
+                'port': canonical,
+            })
+
+        if err and is_wifi_endpoint(canonical):
+            # TCP connect failed — do not offer model picker as if the link is fine
+            return jsonify({
+                'success': False,
+                'model': None,
+                'port': canonical,
+                'unreachable': True,
+                'error': err,
+            })
+
+        # Link opened but no recognizable $V response → caller may ask for model
+        return jsonify({
+            'success': True,
+            'model': None,
+            'port': canonical,
+            'error': err,
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'model': None})
 
@@ -790,17 +971,31 @@ def cmd_probe_port():
 @app.route('/cmd/add-manual-port', methods=['POST'])
 def cmd_add_manual_port():
     """Register a manually added port so it is managed identically
-    to auto-detected ports (cached, connected, survives poll cycles)."""
+    to auto-detected ports (cached, connected, survives poll cycles).
+
+    Accepts serial paths and WiFi IPs (``192.168.x.x`` or ``ip:tcpPort``).
+    Unreachable WiFi endpoints return success=false with an error message.
+    """
     try:
         data = request.get_json() or {}
-        port = data.get('port', '')
+        port = (data.get('port') or '').strip()
         model = data.get('model', None)
         if not port:
             return jsonify({'success': False, 'error': 'No port provided'}), 400
 
         from .detector import add_manual_port
-        add_manual_port(port, model)
-        return jsonify({'success': True, 'port': port, 'model': model})
+        from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+        if is_wifi_endpoint(port):
+            port = normalize_wifi_endpoint(port)
+
+        registered = add_manual_port(port, model)
+        return jsonify({
+            'success': True,
+            'port': registered or port,
+            'model': model,
+            'kind': 'wifi' if is_wifi_endpoint(port) else 'serial',
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -1538,26 +1733,48 @@ def cmd_download_firmware():
 
 @app.route('/env/list', methods=['GET'])
 def env_list():
-    """List all virtual environments."""
+    """List all virtual environments (ensures the reserved Blockly env exists)."""
     try:
         envs = environments.list_environments()
-        return jsonify({'success': True, 'environments': envs,
-                        'base_dir': environments.get_envs_base()})
+        return jsonify({
+            'success': True,
+            'environments': envs,
+            'base_dir': environments.get_envs_base(),
+            'blockly_env': environments.get_blockly_env_name(),
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/env/ensure-blockly', methods=['POST'])
+def env_ensure_blockly():
+    """Create the reserved Blockly environment if missing."""
+    try:
+        return jsonify(environments.ensure_blockly_environment())
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/env/create', methods=['POST'])
 def env_create():
-    """Create a new virtual environment with base packages (uses uv)."""
+    """Create a new virtual environment (uses uv).
+
+    Body: { name, python_version?, install_base_packages? }
+    Extension envs should leave install_base_packages true (flask).
+    The reserved ``blockly`` env uses install_base_packages=false.
+    """
     try:
         data = request.get_json() or {}
         name = data.get('name', '').strip()
         if not name:
             return jsonify({'success': False, 'error': 'No name provided'}), 400
         python_version = data.get('python_version', '').strip() or None
+        install_base = data.get('install_base_packages', True)
+        if name == environments.get_blockly_env_name():
+            install_base = False
         return jsonify(environments.create_environment(
-            name, python_version=python_version))
+            name, python_version=python_version,
+            install_base_packages=bool(install_base)))
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

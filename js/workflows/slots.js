@@ -248,8 +248,7 @@
     // Prefer short id: "collect" not "Collect items"
     if (step && step.id) stepPart = step.id;
     var prefix = templateId ? String(templateId).replace(/[^A-Za-z0-9_]+/g, '_') + '_' : '';
-    // Keep names readable: collect / scan_and_act_collect if needed
-    // Prefer just the step id when short
+    // Prefer short step id (process, combine) when available
     return sanitizeProcName(stepPart);
   }
 

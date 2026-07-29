@@ -82,18 +82,157 @@ function createRobotVarDropdown(fieldBlock, opt_validator) {
 }
 
 /**
+ * Remember the default shadow for a connection so we can restore it when the
+ * user pulls a value (or the shadow itself) out of the slot. Blockly clears
+ * connection.shadowState when a shadow is dragged out and promoted to a real
+ * block, which would otherwise leave an empty socket.
+ */
+function rememberDefaultShadow(connection, state) {
+  if (!connection || !state) return;
+  try {
+    connection._studioxShadow = JSON.parse(JSON.stringify(state));
+  } catch (e) {
+    connection._studioxShadow = state;
+  }
+}
+
+/**
+ * Snapshot any current shadow definition on a connection (from toolbox flyout,
+ * setShadowState, or a live shadow block).
+ */
+function captureConnectionShadowDefault(connection) {
+  if (!connection) return;
+  if (connection._studioxShadow) return;
+
+  var state = null;
+  try {
+    if (typeof connection.getShadowState === 'function') {
+      // Prefer the stored definition (survives a non-shadow replacement).
+      state = connection.getShadowState(false);
+      // When only a live shadow is present, serialize it.
+      if (!state) state = connection.getShadowState(true);
+    }
+  } catch (e) { /* ignore */ }
+
+  if (!state && connection.targetBlock && connection.targetBlock()) {
+    var tb = connection.targetBlock();
+    if (tb && tb.isShadow && tb.isShadow()) {
+      try {
+        if (Blockly.serialization && Blockly.serialization.blocks &&
+            typeof Blockly.serialization.blocks.save === 'function') {
+          state = Blockly.serialization.blocks.save(tb);
+        }
+      } catch (e2) { /* ignore */ }
+      if (!state) {
+        state = {
+          type: tb.type,
+          fields: {}
+        };
+        if (tb.type === 'math_number') {
+          state.fields.NUM = tb.getFieldValue('NUM');
+        } else if (tb.type === 'text') {
+          state.fields.TEXT = tb.getFieldValue('TEXT');
+        }
+      }
+    }
+  }
+
+  if (state) {
+    // Drop ids so each respawn is a fresh shadow instance
+    if (state.id) delete state.id;
+    rememberDefaultShadow(connection, state);
+  }
+}
+
+/**
+ * If a value input is empty (no real block and no live shadow), re-apply the
+ * remembered default or a type-based fallback (Number → math_number 0).
+ */
+function restoreDefaultShadowIfEmpty(connection) {
+  if (!connection) return;
+  // Only value sockets
+  var INPUT_VALUE = (Blockly.ConnectionType && Blockly.ConnectionType.INPUT_VALUE) ||
+    (Blockly.INPUT_VALUE !== undefined ? Blockly.INPUT_VALUE : 1);
+  if (connection.type !== undefined && connection.type !== INPUT_VALUE) return;
+
+  var target = connection.targetBlock ? connection.targetBlock() : null;
+  if (target) return; // real or shadow already present
+
+  // Capture type-based fallback if we never stored a default
+  if (!connection._studioxShadow) {
+    var checks = null;
+    try {
+      checks = connection.getCheck && connection.getCheck();
+    } catch (e) { /* ignore */ }
+    if (checks && checks.indexOf('Number') !== -1) {
+      rememberDefaultShadow(connection, {
+        type: 'math_number',
+        fields: { NUM: 0 }
+      });
+    } else if (checks && checks.indexOf('String') !== -1) {
+      rememberDefaultShadow(connection, {
+        type: 'text',
+        fields: { TEXT: '' }
+      });
+    }
+  }
+
+  var def = connection._studioxShadow;
+  if (!def || !def.type) return;
+
+  // If Blockly still has shadowState but no block, just respawn
+  try {
+    var hasState = typeof connection.getShadowState === 'function' &&
+      connection.getShadowState(false);
+    var hasDom = typeof connection.getShadowDom === 'function' &&
+      connection.getShadowDom();
+    if ((hasState || hasDom) && typeof connection.createShadowBlock === 'function') {
+      connection.createShadowBlock(true);
+      if (connection.targetBlock && connection.targetBlock()) return;
+    }
+  } catch (eRespawn) { /* fall through to re-set */ }
+
+  // Re-apply definition (also recreates the shadow block)
+  try {
+    if (typeof connection.setShadowState === 'function') {
+      connection.setShadowState(def);
+      return;
+    }
+  } catch (eSet) { /* fall through */ }
+
+  if (def.type === 'math_number') {
+    setNumberShadow(connection, def.fields && def.fields.NUM);
+  } else if (def.type === 'text') {
+    setTextShadow(connection, def.fields && def.fields.TEXT);
+  }
+}
+
+/**
+ * Capture + restore defaults for every value input on a block.
+ */
+function ensureBlockValueShadows(block) {
+  if (!block || block.isDisposed && block.isDisposed()) return;
+  var inputs = block.inputList || [];
+  for (var i = 0; i < inputs.length; i++) {
+    var conn = inputs[i].connection;
+    if (!conn) continue;
+    captureConnectionShadowDefault(conn);
+    restoreDefaultShadowIfEmpty(conn);
+  }
+}
+
+/**
  * Attach a default number shadow block to a value input connection.
  * Uses setShadowState when available (Blockly 9+), else XML setShadowDom.
  */
 function setNumberShadow(connection, value) {
   if (!connection) return;
   var num = (value === undefined || value === null || value === '') ? 0 : value;
+  var state = { type: 'math_number', fields: { NUM: num } };
+  rememberDefaultShadow(connection, state);
   try {
     if (typeof connection.setShadowState === 'function') {
-      connection.setShadowState({
-        type: 'math_number',
-        fields: { NUM: num }
-      });
+      connection.setShadowState(state);
       return;
     }
   } catch (e) { /* fall through */ }
@@ -113,12 +252,11 @@ function setNumberShadow(connection, value) {
 function setTextShadow(connection, text) {
   if (!connection) return;
   var t = (text === undefined || text === null) ? '' : String(text);
+  var state = { type: 'text', fields: { TEXT: t } };
+  rememberDefaultShadow(connection, state);
   try {
     if (typeof connection.setShadowState === 'function') {
-      connection.setShadowState({
-        type: 'text',
-        fields: { TEXT: t }
-      });
+      connection.setShadowState(state);
       return;
     }
   } catch (e) { /* fall through */ }
@@ -136,6 +274,12 @@ function setTextShadow(connection, text) {
     console.warn('[moveRobot] Could not set text shadow', e2);
   }
 }
+
+window.setNumberShadow = setNumberShadow;
+window.setTextShadow = setTextShadow;
+window.ensureBlockValueShadows = ensureBlockValueShadows;
+window.captureConnectionShadowDefault = captureConnectionShadowDefault;
+window.restoreDefaultShadowIfEmpty = restoreDefaultShadowIfEmpty;
 
 function initMoveRobotBlocks() {
 
@@ -585,22 +729,134 @@ function updateRobotBlockColors() {
 }
 
 /**
- * Get the model associated with a variable name by scanning setup_robot blocks.
- * Returns 'Mirobot', 'MT4', 'E4', or null.
+ * Map a setup_robot MODEL / constructor class name to a short label.
+ * e.g. 'MT4_UART' → 'MT4', 'wlkatapython.Harobot_UART' → 'Haro380'
  */
-function getRobotModelForVarName(varName) {
-  var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
-  if (!workspace) return null;
-  var blocks = workspace.getBlocksByType('setup_robot', false);
-  for (var i = 0; i < blocks.length; i++) {
-    var field = blocks[i].getField('VARIABLE');
-    if (field && field.getVariable() && field.getVariable().name === varName) {
-      var modelValue = blocks[i].getFieldValue('MODEL');
-      if (modelValue && modelValue.indexOf('MT4') !== -1) return 'MT4';
-      if (modelValue && modelValue.indexOf('E4') !== -1) return 'E4';
-      return 'Mirobot';
+function normalizeRobotModelName(raw) {
+  if (typeof window.normalizeRobotModelName === 'function') {
+    return window.normalizeRobotModelName(raw);
+  }
+  if (!raw) return null;
+  var s = String(raw).replace(/^wlkatapython\./i, '').trim();
+  if (!s) return null;
+  if (/MT4/i.test(s)) return 'MT4';
+  if (/\bE4\b/i.test(s) || /^E4/i.test(s)) return 'E4';
+  if (/Haro/i.test(s)) return 'Haro380';
+  if (/Mirobot/i.test(s)) return 'Mirobot';
+  s = s.replace(/_UART$/i, '').replace(/_USB$/i, '');
+  return s || null;
+}
+
+/**
+ * Find a UART constructor class used inside a procedure definition block tree.
+ * Looks for library_function_call / function_call with names like
+ * wlkatapython.MT4_UART.
+ */
+function findUartCtorInBlockTree(root) {
+  if (!root) return null;
+  var stack = [root];
+  var found = null;
+  while (stack.length) {
+    var b = stack.pop();
+    if (!b) continue;
+    if (b.type === 'library_function_call' || b.type === 'function_call') {
+      var fname = b.getFieldValue('FUNC_NAME') || '';
+      if (/_UART\b/i.test(fname) || /wlkatapython\./i.test(fname)) {
+        found = fname; // last match wins (walk order is not guaranteed)
+      }
+    }
+    var children = b.getChildren(false);
+    for (var c = 0; c < children.length; c++) {
+      stack.push(children[c]);
     }
   }
+  return found;
+}
+
+/**
+ * Infer model for a variable created via a factory function
+ * (variables_set ← procedures_callreturn → procedures_defreturn body).
+ */
+function getModelFromFactoryFunction(workspace, varName) {
+  if (!workspace || !varName) return null;
+
+  var setBlocks = workspace.getBlocksByType('variables_set', false);
+  var callBlock = null;
+  for (var i = 0; i < setBlocks.length; i++) {
+    var vf = setBlocks[i].getField('VAR');
+    var v = vf && vf.getVariable ? vf.getVariable() : null;
+    var name = v ? v.name : setBlocks[i].getFieldValue('VAR');
+    if (name !== varName) continue;
+    var val = setBlocks[i].getInputTargetBlock('VALUE');
+    if (val && (val.type === 'procedures_callreturn' || val.type === 'procedures_callnoreturn')) {
+      callBlock = val;
+      break;
+    }
+  }
+  if (!callBlock) return null;
+
+  var procName = (typeof callBlock.getProcedureCall === 'function')
+    ? callBlock.getProcedureCall()
+    : callBlock.getFieldValue('NAME');
+  if (!procName) return null;
+
+  var defs = workspace.getBlocksByType('procedures_defreturn', false)
+    .concat(workspace.getBlocksByType('procedures_defnoreturn', false));
+  for (var d = 0; d < defs.length; d++) {
+    var defName = defs[d].getFieldValue('NAME');
+    if (defName !== procName) continue;
+    var ctor = findUartCtorInBlockTree(defs[d]);
+    if (ctor) return normalizeRobotModelName(ctor);
+  }
+  return null;
+}
+
+/**
+ * Get the model associated with a variable name.
+ * Priority:
+ *   1. setup_robot MODEL field
+ *   2. analyzeRobotCode varModels (direct + factory-function callers)
+ *   3. workspace factory-function block tree (library_function_call)
+ * Returns 'Mirobot', 'MT4', 'E4', 'Haro380', or null.
+ */
+function getRobotModelForVarName(varName) {
+  if (!varName) return null;
+  var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+
+  // 1. setup_robot blocks (explicit model dropdown)
+  if (workspace) {
+    var blocks = workspace.getBlocksByType('setup_robot', false);
+    for (var i = 0; i < blocks.length; i++) {
+      var field = blocks[i].getField('VARIABLE');
+      if (field && field.getVariable() && field.getVariable().name === varName) {
+        var modelValue = blocks[i].getFieldValue('MODEL');
+        return normalizeRobotModelName(modelValue) || 'Mirobot';
+      }
+    }
+  }
+
+  // 2. Generated-code analysis (includes factory functions like GetMirobot)
+  var analysis = (window.RobotCodeAnalysis && window.RobotCodeAnalysis.lastAnalysis) || null;
+  if (!analysis || !analysis.varModels || !analysis.varModels[varName]) {
+    var codeEl = document.getElementById('code-preview');
+    var code = codeEl ? (codeEl.textContent || '') : '';
+    if (code && typeof window.analyzeRobotCode === 'function') {
+      analysis = window.analyzeRobotCode(code);
+      if (window.RobotCodeAnalysis) {
+        window.RobotCodeAnalysis.lastAnalysis = analysis;
+      }
+    }
+  }
+  if (analysis && analysis.varModels && analysis.varModels[varName]) {
+    return normalizeRobotModelName(analysis.varModels[varName]);
+  }
+
+  // 3. Blockly tree: variables_set ← call → procedure body with UART ctor
+  if (workspace) {
+    var fromFactory = getModelFromFactoryFunction(workspace, varName);
+    if (fromFactory) return fromFactory;
+  }
+
   return null;
 }
 

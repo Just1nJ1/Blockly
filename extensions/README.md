@@ -12,10 +12,11 @@ endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), or both.
 3. [The Manifest File](#the-manifest-file)
 4. [Frontend Development](#frontend-development)
 5. [Backend Development](#backend-development)
-6. [Available APIs for Extensions](#available-apis-for-extensions)
-7. [Robot Interaction](#robot-interaction)
-8. [Installation](#installation)
-9. [Tips & Limitations](#tips--limitations)
+6. [Blockly Workflow Templates](#blockly-workflow-templates)
+7. [Available APIs for Extensions](#available-apis-for-extensions)
+8. [Robot Interaction](#robot-interaction)
+9. [Installation](#installation)
+10. [Tips & Limitations](#tips--limitations)
 
 ---
 
@@ -66,8 +67,8 @@ my-extension/
 
 ## Extension Structure
 
-A minimal extension only needs `extension.json` and at least one of a frontend
-or backend contribution. Here is the full layout:
+A minimal extension only needs `extension.json` and at least one contribution
+(frontend tab, backend, and/or Blockly workflows). Here is the full layout:
 
 ```
 my-extension/
@@ -77,12 +78,14 @@ my-extension/
 │   ├── main.js             #   Tab logic (runs after HTML is in the DOM).
 │   ├── styles.css          #   Tab styles (scoped by convention, not enforced).
 │   └── icon.svg            #   Sidebar icon (22x22, stroke-based recommended).
-└── backend/                # Optional. Python backend with Flask routes.
-    └── main.py             #   Must export a `blueprint` variable.
+├── backend/                # Optional. Python backend with Flask routes.
+│   └── main.py             #   Must export a `blueprint` variable.
+└── workflows/              # Optional. Blockly workflow template JSON files.
+    └── my_pipeline.json    #   Listed under contributes.workflows
 ```
 
-You can include **only a frontend** (UI-only extension), **only a backend**
-(headless service), or **both**.
+You can include **only a frontend** (UI-only), **only a backend** (headless
+service), **only workflows** (Blockly toolbox pipelines), or any combination.
 
 ---
 
@@ -123,6 +126,25 @@ Registers a Python Flask Blueprint on the server.
 The Python file **must** export a module-level variable named `blueprint` that
 is a `flask.Blueprint` instance. All routes on this blueprint are mounted at
 `/ext/<name>/`.
+
+### `contributes.workflows`
+
+Registers **Blockly workflow templates** so they appear under the **Workflows**
+toolbox category as `workflow_run` blocks. Users pick slot functions in Blockly;
+StudioX generates real Python (not HTTP calls to your extension tab).
+
+| Format | Example |
+|--------|---------|
+| Array of paths | `"workflows": ["workflows/my_pipeline.json"]` |
+| Object form | `"workflows": { "templates": ["workflows/a.json", "workflows/b.json"] }` |
+
+Paths are relative to the extension root. Templates load **eagerly** when the
+extension is discovered (not on first sidebar-tab click), so they show up in
+Blockly even if the user never opens your tab.
+
+See [Blockly Workflow Templates](#blockly-workflow-templates) for the full
+schema and examples. Core docs also live in `workflows/README.md` in the app
+repo.
 
 ---
 
@@ -279,6 +301,219 @@ automatically detects `requirements.txt`, creates a virtual environment named
 after the extension (powered by `uv`), and installs all listed packages. Users
 can also manage environments and packages manually via **Settings >
 Environments**.
+
+---
+
+## Blockly Workflow Templates
+
+**Yes — extensions can ship workflows.** A workflow is a fixed multi-step
+pipeline (JSON) where some steps are **slots** filled by the user’s Blockly
+functions. Codegen emits a **callback-style runner**: slot algorithms are
+parameters of a `def` pipeline, then the runner is invoked with the selected
+functions and context values (not hard-coded direct calls only).
+
+### When to use a workflow
+
+| Use a **workflow** when… | Use a **sidebar tab** when… |
+|--------------------------|-----------------------------|
+| The task is “run this pipeline in Blockly / Run” | The user needs an interactive UI (camera, teach, calibration) |
+| Algorithms in the middle should be swappable as functions | You need live feedback, canvas, or continuous polling |
+| Output should be clean generated Python | Logic should live on your Flask routes |
+
+Do **not** generate HTTP calls from workflow codegen to an interactive tab.
+Put library/helper Python on `sys.path` via `imports` if needed, or document
+that users call your backend from a custom function body.
+
+### Manifest example
+
+```json
+{
+  "name": "coin-pick",
+  "displayName": "Coin Pick",
+  "version": "1.0.0",
+  "description": "Detect and pick coins with swappable vision algorithms.",
+  "contributes": {
+    "workflows": [
+      "workflows/detect_and_pick.json"
+    ],
+    "sidebarTab": {
+      "id": "coin-pick",
+      "label": "Coin Pick",
+      "icon": "frontend/icon.svg",
+      "html": "frontend/index.html",
+      "js": "frontend/main.js",
+      "css": "frontend/styles.css"
+    }
+  }
+}
+```
+
+Workflows-only extensions are valid: omit `sidebarTab` / `backend` if you only
+need toolbox templates.
+
+### Template JSON (v1)
+
+```json
+{
+  "id": "coin_pick_pipeline",
+  "name": "Detect and Pick",
+  "description": "Capture → detect poses → pick each pose with the robot.",
+  "version": "1.0.0",
+  "imports": [],
+  "context": [
+    {
+      "name": "robot",
+      "type": "Robot",
+      "blockly": "robot_var",
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "detect",
+      "label": "Detect poses",
+      "pattern": "single",
+      "inputs": [],
+      "output": { "name": "poses", "type": "Any" },
+      "slot": {
+        "required": true,
+        "signature": {
+          "params": [],
+          "returns": "Any"
+        },
+        "placeholderLabel": "Choose detect function…"
+      }
+    },
+    {
+      "id": "pick_each",
+      "label": "Pick each pose",
+      "pattern": "list_iter",
+      "iterOver": "poses",
+      "itemName": "pose",
+      "inputs": [
+        { "name": "robot", "from": "context.robot" },
+        { "name": "pose", "from": "iter.pose" }
+      ],
+      "slot": {
+        "required": true,
+        "signature": {
+          "params": [
+            { "name": "robot", "type": "Robot" },
+            { "name": "pose", "type": "Any" }
+          ],
+          "returns": "void"
+        },
+        "placeholderLabel": "Choose pick function…"
+      }
+    }
+  ]
+}
+```
+
+#### Required fields
+
+| Field | Description |
+|-------|-------------|
+| `id` | Stable id (mutation + codegen). Prefer `extensionname_pipeline`. |
+| `name` | Label in the Workflows toolbox / block header. |
+| `steps` | Non-empty ordered pipeline. |
+
+#### Context (`context[]`)
+
+Inputs fixed on the workflow block:
+
+| `blockly` | UI |
+|-----------|-----|
+| `robot_var` | Robot variable dropdown (same as move blocks) |
+| `number` / `value` / `any` | Value socket with default number shadow (`default` sets NUM) |
+| other / omitted | Plain text field |
+
+#### Step patterns
+
+| Pattern | Behavior |
+|---------|----------|
+| `single` | Call once; optional `output` binding |
+| `list_iter` | `for item in <list>: call(...)` — needs `iterOver` + `itemName` |
+| `pass_through` | Bind a value without a slot |
+
+#### Slots vs fixed calls
+
+- **`slot`** — user picks (or creates with **+**) a workspace procedure whose
+  parameter count matches `signature.params`.
+- **`call`** — fixed callable name (e.g. `"print"`) with no dropdown.
+
+#### Wiring `inputs[].from`
+
+- `context.<name>` — block context field  
+- `iter.<itemName>` — loop variable inside `list_iter`  
+- bare name — prior step’s `output.name`
+
+Full schema notes and the built-in **Process and Combine** example:
+`workflows/README.md` and `workflows/process_and_combine.json` in the app tree.
+
+### Register from JavaScript (optional)
+
+Prefer `contributes.workflows` for static JSON. If you build a template at
+runtime (e.g. after loading config), register it yourself:
+
+```js
+(function () {
+  var tpl = {
+    id: 'my_ext_dynamic',
+    name: 'Dynamic Pipeline',
+    description: 'Registered from extension JS',
+    context: [],
+    steps: [
+      {
+        id: 'run',
+        label: 'Run',
+        pattern: 'single',
+        call: 'print',
+        inputs: [{ name: 'value', from: 'context.msg' }],
+        // …or use a slot instead of call
+      }
+    ]
+  };
+
+  // If you still use context, declare it on the template; this sketch is illustrative.
+  if (window.WorkflowRegistry && WorkflowRegistry.register(tpl, 'extension:my-extension')) {
+    if (typeof refreshWorkflowsToolbox === 'function') refreshWorkflowsToolbox();
+    if (typeof refreshWorkflowBlocks === 'function' && typeof getWorkspace === 'function') {
+      var ws = getWorkspace();
+      if (ws) refreshWorkflowBlocks(ws);
+    }
+  }
+})();
+```
+
+> **Note:** Sidebar `frontend/main.js` is **lazy** (runs on first tab open).
+> Templates listed in `contributes.workflows` are **not** lazy — use the
+> manifest for anything that must appear in Blockly immediately.
+
+### Validation
+
+Invalid templates are rejected with console errors from `WorkflowSchema`
+(missing `id` / `name` / `steps`, bad patterns, bad `iterOver` refs, etc.).
+Check the DevTools console if a workflow does not show up after install.
+
+### User experience
+
+1. User opens **Blockly** → **Workflows** category.  
+2. Drops your template block.  
+3. Fills context + slot functions (**+** creates a matching stub).  
+4. **Run** → generated Python looks like:
+
+```python
+def my_pipeline(detect, pick_each, robot):
+  poses = detect()
+  for pose in poses:
+    pick_each(robot, pose)
+
+my_pipeline(user_detect, user_pick, robot)
+```
+
+(`detect` / `pick_each` are parameters; `user_detect` / `user_pick` are the
+workspace functions chosen on the block.)
 
 ---
 
@@ -744,11 +979,12 @@ users override bundled extensions with their own version.
 - **The `extension.json` `name` field is your identity.** It determines your
   backend URL prefix (`/ext/<name>/`), your settings namespace, and the
   deduplication key. Choose it carefully and do not change it after release.
-- **Lazy startup.** Both the frontend JS and the backend subprocess are
-  loaded lazily — **nothing runs until the user clicks the extension's
-  sidebar tab for the first time.** The frontend script is injected on
-  first tab click, and its initial API call triggers the backend subprocess
-  to start. This keeps app startup fast and avoids acquiring resources
-  (cameras, GPIO, etc.) until they are actually needed. Write your `tab.js`
-  as an IIFE that initializes on load — it will only execute when the user
-  opens the tab.
+- **Lazy startup (tabs / backend).** Sidebar frontend JS and the backend
+  subprocess are **lazy** — they start when the user first opens the
+  extension tab (and the first API call starts the backend). Write tab JS
+  as an IIFE that initializes on load. **Workflow JSON** from
+  `contributes.workflows` is an exception: it is registered at extension
+  discovery so Blockly can list templates without opening the tab.
+- **Workflows emit Python, not extension HTTP.** Use slots/functions and
+  optional `imports`; do not treat workflow codegen as a substitute for
+  `ExtensionAPI.fetch` interactive UIs.

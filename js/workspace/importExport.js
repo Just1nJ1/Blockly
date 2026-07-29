@@ -168,6 +168,244 @@ function collectImportedVariables(xml) {
 }
 
 /**
+ * True if this block element is (or is nested under) a procedure definition.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function _isInsideProcedureDef(el) {
+  let cur = el;
+  while (cur && cur.nodeType === 1) {
+    if (cur.tagName && cur.tagName.toLowerCase() === 'block') {
+      const type = cur.getAttribute('type') || '';
+      if (type === 'procedures_defnoreturn' || type === 'procedures_defreturn' ||
+          type.indexOf('procedures_def') === 0) {
+        return true;
+      }
+    }
+    cur = cur.parentNode;
+  }
+  return false;
+}
+
+/**
+ * Procedure parameter names declared in import XML (should not appear in the
+ * variable mapping dialog — they are function args, not workspace vars the
+ * user manages).
+ * @param {Element} xml
+ * @returns {Object.<string, boolean>}
+ */
+function collectProcedureArgNamesFromXml(xml) {
+  const names = Object.create(null);
+  if (!xml) return names;
+  const blocks = xml.getElementsByTagName('block');
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.getAttribute('shadow') != null) continue;
+    const type = block.getAttribute('type') || '';
+    if (type !== 'procedures_defnoreturn' && type !== 'procedures_defreturn' &&
+        type.indexOf('procedures_def') !== 0) {
+      continue;
+    }
+    // <mutation><arg name="a" varid="…">…</arg></mutation>
+    const muts = block.getElementsByTagName('mutation');
+    for (let m = 0; m < muts.length; m++) {
+      if (muts[m].parentNode !== block) continue;
+      const args = muts[m].getElementsByTagName('arg');
+      for (let a = 0; a < args.length; a++) {
+        const n = args[a].getAttribute('name') ||
+          (args[a].textContent || '').trim();
+        if (n) names[n] = true;
+      }
+    }
+  }
+
+  // Also: any <variable> whose every field reference with that id lives only
+  // inside a procedure def is a param (covers serializations without arg name).
+  const variablesTag = xml.getElementsByTagName('variables')[0];
+  if (!variablesTag) return names;
+  const varNodes = variablesTag.getElementsByTagName('variable');
+  const idToName = Object.create(null);
+  for (let v = 0; v < varNodes.length; v++) {
+    const id = varNodes[v].getAttribute('id');
+    const n = (varNodes[v].textContent || '').trim();
+    if (id && n) idToName[id] = n;
+  }
+  const idUseOutsideDef = Object.create(null);
+  const idUseInsideDef = Object.create(null);
+  const fields = xml.getElementsByTagName('field');
+  for (let f = 0; f < fields.length; f++) {
+    const fid = fields[f].getAttribute('id');
+    if (!fid || !idToName[fid]) continue;
+    if (_isInsideProcedureDef(fields[f])) {
+      idUseInsideDef[fid] = true;
+    } else {
+      idUseOutsideDef[fid] = true;
+    }
+  }
+  Object.keys(idToName).forEach(function(id) {
+    if (idUseInsideDef[id] && !idUseOutsideDef[id]) {
+      names[idToName[id]] = true;
+    }
+  });
+  return names;
+}
+
+/**
+ * Variables to show in the import mapping dialog (excludes procedure params).
+ * @param {Element} xml
+ * @returns {Array<{ name: string, id: string }>}
+ */
+function collectImportedVariablesForDialog(xml) {
+  const all = collectImportedVariables(xml);
+  const params = collectProcedureArgNamesFromXml(xml);
+  return all.filter(function(v) { return v && v.name && !params[v.name]; });
+}
+
+/**
+ * Procedure definition names in XML (field NAME on procedures_def*).
+ * @param {Element} xml
+ * @returns {string[]}
+ */
+function collectProcedureNamesFromXml(xml) {
+  const names = [];
+  const seen = Object.create(null);
+  if (!xml) return names;
+  const blocks = xml.getElementsByTagName('block');
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (block.getAttribute('shadow') != null) continue;
+    const type = block.getAttribute('type') || '';
+    if (type !== 'procedures_defnoreturn' && type !== 'procedures_defreturn' &&
+        type.indexOf('procedures_def') !== 0) {
+      continue;
+    }
+    const fields = block.getElementsByTagName('field');
+    for (let f = 0; f < fields.length; f++) {
+      if (fields[f].parentNode !== block) continue;
+      const fn = fields[f].getAttribute('name');
+      if (fn === 'NAME' || fn === 'PROCNAME') {
+        const n = (fields[f].textContent || '').trim();
+        if (n && !seen[n]) {
+          seen[n] = true;
+          names.push(n);
+        }
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * Procedure names already on the workspace.
+ * @param {Blockly.Workspace} workspace
+ * @returns {Object.<string, boolean>}
+ */
+function _workspaceProcedureNames(workspace) {
+  const set = Object.create(null);
+  if (!workspace) return set;
+  if (window.WorkflowSlots && typeof window.WorkflowSlots.listProcedures === 'function') {
+    const list = window.WorkflowSlots.listProcedures(workspace) || [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i].name) set[list[i].name] = true;
+    }
+    return set;
+  }
+  const types = ['procedures_defnoreturn', 'procedures_defreturn'];
+  for (let t = 0; t < types.length; t++) {
+    if (typeof workspace.getBlocksByType !== 'function') break;
+    const blocks = workspace.getBlocksByType(types[t], false) || [];
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (b.isInFlyout) continue;
+      let name = b.getFieldValue && (b.getFieldValue('NAME') || b.getFieldValue('PROCNAME'));
+      if (!name && typeof b.getProcedureDef === 'function') {
+        try {
+          const def = b.getProcedureDef();
+          if (def && def[0]) name = def[0];
+        } catch (e) { /* ignore */ }
+      }
+      if (name) set[name] = true;
+    }
+  }
+  return set;
+}
+
+/**
+ * Pick unique procedure names for definitions in the import XML that would
+ * collide with the workspace (or with each other after rename).
+ * @returns {Object.<string,string>} oldName → newName (only entries that change)
+ */
+function planProcedureRenames(xml, workspace) {
+  const map = Object.create(null);
+  const used = _workspaceProcedureNames(workspace);
+  const imported = collectProcedureNamesFromXml(xml);
+  for (let i = 0; i < imported.length; i++) {
+    const original = imported[i];
+    if (!used[original]) {
+      // Reserve so a later import def with the same name also renames
+      used[original] = true;
+      continue;
+    }
+    // Already taken — allocate process2, process3, … (Blockly-style)
+    let n = 2;
+    let finalName = original + n;
+    while (used[finalName]) {
+      n++;
+      finalName = original + n;
+    }
+    map[original] = finalName;
+    used[finalName] = true;
+  }
+  return map;
+}
+
+/**
+ * Apply procedure renames in import XML: def/call NAME fields and workflow
+ * mutation slot_* attributes that reference the old function name.
+ * @param {Element} xml
+ * @param {Object.<string,string>} renameMap
+ */
+function applyProcedureRenamesToXml(xml, renameMap) {
+  if (!xml || !renameMap) return;
+  const keys = Object.keys(renameMap);
+  if (!keys.length) return;
+
+  function renameIfMatch(text) {
+    const t = (text || '').trim();
+    return renameMap[t] || null;
+  }
+
+  const fields = xml.getElementsByTagName('field');
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    const fname = field.getAttribute('name') || '';
+    // Procedure def/call name fields
+    if (fname === 'NAME' || fname === 'PROCNAME') {
+      const next = renameIfMatch(field.textContent);
+      if (next) field.textContent = next;
+    }
+  }
+
+  // workflow_run mutation: slot_process="process" → process2
+  const muts = xml.getElementsByTagName('mutation');
+  for (let m = 0; m < muts.length; m++) {
+    const mut = muts[m];
+    if (!mut.attributes) continue;
+    // Copy attribute list — live NamedNodeMap mutates
+    const attrs = [];
+    for (let a = 0; a < mut.attributes.length; a++) {
+      attrs.push(mut.attributes[a]);
+    }
+    for (let a = 0; a < attrs.length; a++) {
+      const attr = attrs[a];
+      if (!attr.name || attr.name.indexOf('slot_') !== 0) continue;
+      const next = renameIfMatch(attr.value);
+      if (next) mut.setAttribute(attr.name, next);
+    }
+  }
+}
+
+/**
  * Look up a workspace variable by name (any type).
  * @param {Blockly.Workspace} workspace
  * @param {string} name
@@ -960,7 +1198,19 @@ function finishBlocklyImport(xml, workspace, portMapping, varChoices) {
   if (portMapping) {
     applyPortMappingToXml(xml, portMapping);
   }
-  applyImportedVariableChoices(xml, workspace, varChoices || {});
+
+  // Procedure params: auto-reuse same names (no dialog); merge with user choices
+  const paramNames = collectProcedureArgNamesFromXml(xml);
+  const mergedChoices = Object.assign({}, varChoices || {});
+  Object.keys(paramNames).forEach(function(pn) {
+    if (mergedChoices[pn] == null) mergedChoices[pn] = pn;
+  });
+  applyImportedVariableChoices(xml, workspace, mergedChoices);
+
+  // Rename colliding procedures in XML before load, and keep workflow slots in sync
+  const procRenames = planProcedureRenames(xml, workspace);
+  applyProcedureRenamesToXml(xml, procRenames);
+
   stripImportedBlockIds(xml);
 
   if (typeof Blockly.Xml.appendDomToWorkspace === 'function') {
@@ -968,6 +1218,16 @@ function finishBlocklyImport(xml, workspace, portMapping, varChoices) {
   } else {
     Blockly.Xml.domToWorkspace(xml, workspace);
   }
+
+  // Safety: if Blockly still renamed something, pending state is already updated
+  // from XML; rebuild workflow blocks so dropdowns show process2 / combine2
+  if (typeof window.applyProcedureRenamesToWorkflows === 'function' &&
+      Object.keys(procRenames).length) {
+    window.applyProcedureRenamesToWorkflows(workspace, procRenames);
+  } else if (typeof window.refreshWorkflowBlocks === 'function') {
+    window.refreshWorkflowBlocks(workspace);
+  }
+
   if (typeof updateCodePreview === 'function') {
     updateCodePreview();
   }
@@ -1370,7 +1630,8 @@ function importBlocks() {
           convertLegacyBlocklyXml(xml, workspace);
         }
 
-        const fileVars = collectImportedVariables(xml);
+        // Only prompt for real workspace variables (not procedure parameters)
+        const fileVars = collectImportedVariablesForDialog(xml);
         const portInfo = collectImportedSetupPorts(xml);
 
         if (fileVars.length === 0 && portInfo.portKeys.length === 0) {

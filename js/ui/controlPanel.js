@@ -179,7 +179,8 @@
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      // Robot will auto-report status when movement finishes ($40=1)
+      // Robot auto-reports status when movement finishes ($40=1).
+      // Teach-after-step applies via debugOnRobotStatus when poll sees new pose.
     })
     .catch(function() {});
   }
@@ -189,20 +190,28 @@
   function moveToAbsolute(sdkParam, value) {
     if (!_currentPort) return;
 
-    fetch(getServerUrl() + '/cmd/jog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        port: _currentPort,
-        mode: _currentMode,
-        axis: sdkParam,
-        step: value,
-        isAbsolute: true
-      })
+    // Same teach hook as jog so typing a value in Control updates the move block
+    var notifyPromise = Promise.resolve();
+    if (typeof window.debugNotifyJog === 'function') {
+      notifyPromise = window.debugNotifyJog() || Promise.resolve();
+    }
+
+    notifyPromise.then(function() {
+      return fetch(getServerUrl() + '/cmd/jog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          port: _currentPort,
+          mode: _currentMode,
+          axis: sdkParam,
+          step: value,
+          isAbsolute: true
+        })
+      });
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      // Robot will auto-report status when movement finishes ($40=1)
+      // Robot auto-reports status when movement finishes ($40=1)
     })
     .catch(function() {});
   }
@@ -563,6 +572,11 @@
       }
 
       updateValues(data);
+
+      // Step-mode teach: push pose into the last executed move block
+      if (typeof window.debugOnRobotStatus === 'function') {
+        try { window.debugOnRobotStatus(data); } catch (eTeach) { /* ignore */ }
+      }
     })
     .catch(function() {
       _refreshing = false;
@@ -908,6 +922,9 @@
     });
   }
 
+  /**
+   * Raw send (same as Command tab /cmd/send → send_raw).
+   */
   function sendRobotCommand(command) {
     return fetch(getServerUrl() + '/cmd/send', {
       method: 'POST',
@@ -915,9 +932,24 @@
       body: JSON.stringify({ port: _currentPort, command: command })
     })
     .then(function(r) { return r.json(); })
-    .catch(function() {});
+    .catch(function() { return { success: false }; });
   }
 
+  /** Small gap between sequential O-codes so the extender can finish each one. */
+  var SETTINGS_CMD_GAP_MS = 250;
+
+  function delayMs(ms) {
+    return new Promise(function(resolve) { setTimeout(resolve, ms); });
+  }
+
+  /**
+   * Save button on Control panel Settings modal.
+   *
+   * Sends O162/O163/O150/O151 one at a time (not in parallel). Uses a short
+   * fixed gap between commands — NOT /cmd/query wait-for-line — because the
+   * server RX buffer intentionally drops bare "ok" lines, so a query wait
+   * would always burn the full timeout (~2s × 4 = ~8s).
+   */
   function saveRobotSettings() {
     var color    = document.getElementById('ctrl-settings-color').value;
     var wifiSsid = document.getElementById('ctrl-settings-wifi-ssid').value.trim();
@@ -925,8 +957,17 @@
     var btName   = document.getElementById('ctrl-settings-bt-name').value.trim();
     var btPin    = document.getElementById('ctrl-settings-bt-pin').value.trim();
 
-    // Apply color to robot blocks and port select
-    if (_currentPort) {
+    // Snapshot at open (after load) — only send O-codes for fields that changed
+    var prev = _settingsInitialState || {};
+    function changed(key, nowVal) {
+      var before = prev[key];
+      if (before === undefined || before === null) before = '';
+      before = String(before).trim();
+      return before !== nowVal;
+    }
+
+    // Apply color to robot blocks and port select (only if color changed)
+    if (_currentPort && changed('color', color)) {
       var varName = getVarForPort(_currentPort);
       if (varName && typeof window.setRobotColorForVar === 'function') {
         window.setRobotColorForVar(varName, color);
@@ -934,18 +975,42 @@
       updatePortSelectColor(_currentPort);
     }
 
-    // Send O-codes for each non-empty field (only if extender box present)
+    // Build ordered O-code list — skip fields that match the loaded values
     var versions = _portFirmwareVersions[_currentPort] || {};
     var hasExbox = !!versions.extender;
+    var cmds = [];
     if (hasExbox) {
-      if (wifiSsid) sendRobotCommand('O162=' + wifiSsid);
-      if (wifiPass) sendRobotCommand('O163=' + wifiPass);
-      if (btName)   sendRobotCommand('O150=' + btName);
-      if (btPin)    sendRobotCommand('O151=' + btPin);
+      if (wifiSsid && changed('wifiSsid', wifiSsid)) cmds.push('O162=' + wifiSsid);
+      if (wifiPass && changed('wifiPass', wifiPass)) cmds.push('O163=' + wifiPass);
+      if (btName && changed('btName', btName))       cmds.push('O150=' + btName);
+      if (btPin && changed('btPin', btPin))           cmds.push('O151=' + btPin);
     }
 
-    _settingsInitialState = getSettingsState();
-    _settingsModal.style.display = 'none';
+    var saveBtn = document.getElementById('ctrl-settings-save');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = cmds.length ? 'Saving…' : 'Save';
+    }
+
+    // Sequential: send → short gap → next (firmware needs spacing, not a 2s wait)
+    var chain = Promise.resolve();
+    cmds.forEach(function(cmd, idx) {
+      chain = chain.then(function() {
+        return sendRobotCommand(cmd).then(function() {
+          // Gap after each command except we still gap after last for firmware settle
+          return delayMs(SETTINGS_CMD_GAP_MS);
+        });
+      });
+    });
+
+    chain.then(function() {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+      }
+      _settingsInitialState = getSettingsState();
+      _settingsModal.style.display = 'none';
+    });
   }
 
   function setupSettingsButton() {

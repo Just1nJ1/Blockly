@@ -11,9 +11,14 @@
  *   "version": "1.0.0",
  *   "contributes": {
  *     "sidebarTab": { "id", "label", "icon", "html", "js", "css" },
- *     "backend": { "main": "backend/main.py" }
+ *     "backend": { "main": "backend/main.py" },
+ *     "workflows": [ "workflows/my_pipeline.json" ]
  *   }
  * }
+ *
+ * Workflow templates are registered with WorkflowRegistry as soon as the
+ * extension is discovered (not lazy on tab click), so they appear in the
+ * Blockly Workflows toolbox without opening the extension tab.
  */
 
 var _loadedExtensions = new Map();
@@ -58,7 +63,99 @@ async function _loadSingleExtension(manifest, basePath) {
     _loadedExtensions.get(name).pendingJS = contributes.sidebarTab.js;
   }
 
+  // 4. Register Blockly workflow templates (eager — available in toolbox)
+  if (contributes.workflows) {
+    await _loadExtensionWorkflows(manifest, basePath, contributes.workflows);
+  }
+
   _loadedExtensions.get(name).status = 'ready';
+}
+
+/**
+ * Normalize contributes.workflows into a list of relative JSON paths.
+ * Accepts:
+ *   ["workflows/foo.json"]
+ *   { "templates": ["workflows/foo.json"] }
+ */
+function _normalizeWorkflowPaths(workflowsContrib) {
+  if (!workflowsContrib) return [];
+  if (Array.isArray(workflowsContrib)) return workflowsContrib.slice();
+  if (typeof workflowsContrib === 'object' && Array.isArray(workflowsContrib.templates)) {
+    return workflowsContrib.templates.slice();
+  }
+  if (typeof workflowsContrib === 'string') return [workflowsContrib];
+  return [];
+}
+
+/**
+ * Fetch and register workflow JSON templates from an extension.
+ * Templates are validated by WorkflowRegistry / WorkflowSchema.
+ */
+async function _loadExtensionWorkflows(manifest, basePath, workflowsContrib) {
+  var paths = _normalizeWorkflowPaths(workflowsContrib);
+  if (!paths.length) return;
+
+  if (!window.WorkflowRegistry || typeof window.WorkflowRegistry.register !== 'function') {
+    console.warn(
+      '[Extensions] WorkflowRegistry not available; skipping workflows for',
+      manifest.name
+    );
+    return;
+  }
+
+  var source = 'extension:' + (manifest.name || 'unknown');
+  var registered = 0;
+
+  for (var i = 0; i < paths.length; i++) {
+    var rel = paths[i];
+    if (!rel || typeof rel !== 'string') continue;
+    var url = basePath + '/' + rel.replace(/^\//, '');
+    try {
+      var resp = await fetch(url);
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status);
+      }
+      var tpl = await resp.json();
+      var ok = window.WorkflowRegistry.register(tpl, source);
+      if (ok) {
+        registered++;
+        console.log(
+          '[Extensions] Registered workflow "' + (tpl.id || rel) +
+          '" from ' + manifest.name
+        );
+      } else {
+        console.error(
+          '[Extensions] Workflow template failed validation:',
+          rel, 'from', manifest.name
+        );
+      }
+    } catch (err) {
+      console.error(
+        '[Extensions] Failed to load workflow', rel, 'from', manifest.name, ':', err
+      );
+    }
+  }
+
+  // Refresh toolbox / existing blocks if Blockly is already up
+  if (registered > 0) {
+    try {
+      if (typeof refreshWorkflowsToolbox === 'function') {
+        refreshWorkflowsToolbox();
+      }
+      if (typeof refreshWorkflowBlocks === 'function' &&
+          typeof getWorkspace === 'function') {
+        var ws = getWorkspace();
+        if (ws) refreshWorkflowBlocks(ws);
+      }
+    } catch (eRefresh) {
+      // Blockly may not be initialized yet; main.js loadCore path will refresh later
+      console.log(
+        '[Extensions] Workflows registered for',
+        manifest.name,
+        '(toolbox refresh deferred until Blockly ready)'
+      );
+    }
+  }
 }
 
 /**

@@ -14,7 +14,7 @@
   'use strict';
 
   var ANIM_CONSTS = null;  // populated from RobotAnimation
-  var loopEnabled = true;
+  var loopEnabled = false;
   var running = false;
   var paused = false;
   var animTimer = null;

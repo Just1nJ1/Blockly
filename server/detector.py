@@ -65,6 +65,13 @@ _seed_virtual_ports()
 def add_manual_port(port, model, description=''):
     """Register a manually added port. It gets cached and connected
     through the same pipeline as auto-detected ports."""
+    from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+    if is_wifi_endpoint(port):
+        port = normalize_wifi_endpoint(port)
+        if not description:
+            description = '(wifi)'
+
     if is_virtual_port(port):
         # Virtual ports are always present; just (re)connect with model
         _cache[port] = {
@@ -73,19 +80,40 @@ def add_manual_port(port, model, description=''):
         }
         mgr = SerialManager.get_instance()
         if model:
-            mgr.ensure_connected(port, model=model)
-        return
+            result = mgr.ensure_connected(port, model=model)
+            if not result.get('success'):
+                raise ConnectionError(
+                    result.get('error') or f'Failed to connect to {port}'
+                )
+        return port
+
     _cache[port] = {'model': model, 'description': description or '(manual)'}
     _manual_ports.add(port)
     _missing.discard(port)
-    if model:
-        mgr = SerialManager.get_instance()
-        mgr.ensure_connected(port, model=model)
+    mgr = SerialManager.get_instance()
+    # Always try to connect so unreachable WiFi fails loudly at add time
+    result = mgr.ensure_connected(port, model=model)
+    if not result.get('success'):
+        # Roll back registration so a dead IP does not stick in the list
+        _manual_ports.discard(port)
+        _cache.pop(port, None)
+        try:
+            mgr.unregister_port(port)
+        except Exception:
+            pass
+        raise ConnectionError(
+            result.get('error') or f'Failed to connect to {port}'
+        )
+    return port
 
 
 def remove_manual_port(port):
     """Remove a manually added port and unregister it.
     Built-in virtual ports cannot be removed."""
+    from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+    if is_wifi_endpoint(port):
+        port = normalize_wifi_endpoint(port)
     if is_virtual_port(port):
         return
     _manual_ports.discard(port)
@@ -94,9 +122,74 @@ def remove_manual_port(port):
     mgr.unregister_port(port)
 
 
+def _probe_firmware(ser, cancel_event=None, max_attempts=120, resend_s=5.0):
+    """
+    Send $V on an open link and parse FW_PREFIX_MAP responses.
+
+    Returns model name or None. Does not close *ser*.
+    """
+    model = None
+    try:
+        if hasattr(ser, 'flushInput'):
+            ser.flushInput()
+        if hasattr(ser, 'flushOutput'):
+            ser.flushOutput()
+    except Exception:
+        pass
+
+    ser.write(b"$V\r\n")
+    time.sleep(0.3)
+
+    attempts = 0
+    last_v_time = time.time()
+
+    while attempts < max_attempts:
+        if cancel_event and cancel_event.is_set():
+            break
+
+        raw = ser.readline()
+        if not raw:
+            attempts += 1
+            if time.time() - last_v_time >= resend_s:
+                try:
+                    ser.write(b"$V\r\n")
+                except Exception:
+                    break
+                last_v_time = time.time()
+            continue
+
+        if isinstance(raw, (bytes, bytearray)):
+            message = raw.decode('utf-8', errors='ignore').strip()
+        else:
+            message = str(raw).strip()
+        if not message:
+            continue
+
+        # Skip auto-report status messages (start with '<')
+        if message.startswith('<'):
+            if time.time() - last_v_time >= 2.0:
+                try:
+                    ser.write(b"$V\r\n")
+                except Exception:
+                    break
+                last_v_time = time.time()
+            continue
+
+        for prefix, model_name in FW_PREFIX_MAP.items():
+            if message.startswith(prefix):
+                model = model_name
+                break
+        if model:
+            break
+
+        attempts += 1
+
+    return model
+
+
 def detect_model(port, keep_open=False, cancel_event=None):
     """
-    Probe a serial port to determine the connected robot model.
+    Probe a serial port or WiFi IP to determine the connected robot model.
 
     The robot may be continuously sending auto-report status messages like:
     <Alarm,Angle(ABCDXYZ):0.000,...>
@@ -104,13 +197,13 @@ def detect_model(port, keep_open=False, cancel_event=None):
     We send $V and look for the firmware response (e.g. "Mirobot fw...")
     among the incoming messages. The firmware line starts with "Mirobot" or "E4".
 
-    The probe waits indefinitely for a response (no timeout), but can be
-    cancelled via the cancel_event. A watchdog thread monitors the probe
-    and sets the cancel_event if the port disappears.
+    For serial ports the probe can wait a long time (cancel_event for watchdog).
+    For WiFi IPs we fail fast if the host is unreachable.
 
     Args:
-        port (str): The serial port path (e.g. 'COM3', '/dev/ttyUSB0').
-        keep_open (bool): If True, return the open serial connection along
+        port (str): Serial path (e.g. 'COM3') or IPv4 (e.g. '192.168.1.10'
+                    or '192.168.1.10:8234').
+        keep_open (bool): If True, return the open connection along
                           with the model (for reuse by SerialManager).
         cancel_event (threading.Event): If set, abort the probe.
 
@@ -119,85 +212,73 @@ def detect_model(port, keep_open=False, cancel_event=None):
         If keep_open=True: (model, serial_obj) tuple. serial_obj is None if
                            detection failed or model not recognized.
     """
+    from .wifi_link import is_wifi_endpoint, open_wifi_link, normalize_wifi_endpoint
+
     ser = None
     model = None
+    wifi = is_wifi_endpoint(port)
+    if wifi:
+        port = normalize_wifi_endpoint(port)
+
     try:
-        # Use a short timeout for readline so we can check cancel_event periodically
-        ser = serial.Serial(port, 115200, timeout=0.5)
-        ser.flushInput()
-        ser.flushOutput()
+        if wifi:
+            # Fail fast on bad IP / closed TCP port
+            ser = open_wifi_link(port, timeout=0.5)
+            # WiFi: shorter wait (~8s) — unreachable hosts already raised
+            model = _probe_firmware(
+                ser, cancel_event=cancel_event,
+                max_attempts=16, resend_s=2.0,
+            )
+        else:
+            # Use a short timeout for readline so we can check cancel_event
+            ser = serial.Serial(port, 115200, timeout=0.5)
+            model = _probe_firmware(
+                ser, cancel_event=cancel_event,
+                max_attempts=120, resend_s=5.0,
+            )
 
-        # Send $V to request firmware version
-        # Response will be mixed with auto-report status messages
-        ser.write("$V\r\n".encode("utf-8"))
-        time.sleep(0.5)  # Give device time to process and respond
-
-        # Read lines and look for firmware response among status messages
-        # Max attempts prevents infinite loop if device never responds to $V
-        max_attempts = 120  # 120 * 0.5s timeout = 60 seconds max wait
-        attempts = 0
-        last_v_time = time.time()
-
-        while attempts < max_attempts:
-            if cancel_event and cancel_event.is_set():
-                break  # Cancelled by watchdog
-
-            raw = ser.readline()
-            if not raw:
-                # Timeout, no data - send $V again periodically
-                attempts += 1
-                if time.time() - last_v_time >= 5.0:
-                    ser.write("$V\r\n".encode("utf-8"))
-                    last_v_time = time.time()
-                continue
-
-            message = raw.decode('utf-8', errors='ignore').strip()
-            if not message:
-                continue
-
-            # Skip auto-report status messages (start with '<')
-            if message.startswith('<'):
-                # Resend $V periodically even while receiving status
-                if time.time() - last_v_time >= 2.0:
-                    ser.write("$V\r\n".encode("utf-8"))
-                    last_v_time = time.time()
-                continue
-
-            # Check for firmware version response against known prefixes
-            for prefix, model_name in FW_PREFIX_MAP.items():
-                if message.startswith(prefix):
-                    model = model_name
-                    break
-            if model:
-                break
-
-            attempts += 1
-
-    except (serial.SerialException, OSError, PermissionError):
+    except (serial.SerialException, OSError, PermissionError, ConnectionError, TimeoutError, ValueError) as e:
         # PermissionError: on Linux/Chromebook, user may not have serial access.
-        # Fix: add user to 'dialout' group: sudo usermod -aG dialout $USER
+        # ConnectionError: WiFi host unreachable / connection refused.
         if ser:
             try:
                 ser.close()
             except Exception:
                 pass
+            ser = None
+        # Stash last error for probe-port API (thread-local-ish via attribute)
+        detect_model.last_error = str(e)
         if keep_open:
             return (None, None)
         return None
 
+    detect_model.last_error = None
+
     if keep_open:
         if model:
-            # Reset timeout for normal operation
-            ser.timeout = 0.1
+            try:
+                ser.timeout = 0.1
+            except Exception:
+                pass
             return (model, ser)
         else:
             if ser:
-                ser.close()
+                try:
+                    ser.close()
+                except Exception:
+                    pass
             return (None, None)
     else:
         if ser:
-            ser.close()
+            try:
+                ser.close()
+            except Exception:
+                pass
         return model
+
+
+# Last open/probe error message (for API responses)
+detect_model.last_error = None
 
 
 def _background_probe(port, description):

@@ -1,0 +1,75 @@
+{
+  "id": "process_and_combine",
+  "name": "Process and Combine",
+  "description": "Take two values (a, b). Process a with the first function, combine that result with b using the second function, then print the final result.",
+  "version": "1.0.0",
+  "imports": [],
+  "context": [
+    {
+      "name": "a",
+      "type": "Number",
+      "blockly": "number",
+      "default": 1,
+      "required": true
+    },
+    {
+      "name": "b",
+      "type": "Number",
+      "blockly": "number",
+      "default": 2,
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "process",
+      "label": "Process first value",
+      "pattern": "single",
+      "inputs": [
+        { "name": "a", "from": "context.a" }
+      ],
+      "output": { "name": "processed", "type": "Any" },
+      "slot": {
+        "required": true,
+        "signature": {
+          "params": [
+            { "name": "a", "type": "Any" }
+          ],
+          "returns": "Any"
+        },
+        "placeholderLabel": "Choose process function…"
+      }
+    },
+    {
+      "id": "combine",
+      "label": "Combine both",
+      "pattern": "single",
+      "inputs": [
+        { "name": "processed", "from": "processed" },
+        { "name": "b", "from": "context.b" }
+      ],
+      "output": { "name": "result", "type": "Any" },
+      "slot": {
+        "required": true,
+        "signature": {
+          "params": [
+            { "name": "processed", "type": "Any" },
+            { "name": "b", "type": "Number" }
+          ],
+          "returns": "Any"
+        },
+        "placeholderLabel": "Choose combine function…"
+      }
+    },
+    {
+      "id": "print_result",
+      "label": "Print result",
+      "pattern": "single",
+      "call": "print",
+      "inputs": [
+        { "name": "value", "from": "result" }
+      ],
+      "output": null
+    }
+  ]
+}

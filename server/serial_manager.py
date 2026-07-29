@@ -17,6 +17,7 @@ import re
 import serial
 import threading
 import time
+from datetime import datetime
 
 # Add the bundled wlkatapython SDK to the path
 _SDK_PATH = os.path.join(os.path.dirname(__file__), '..', 'resources', 'python',
@@ -25,6 +26,69 @@ if _SDK_PATH not in sys.path:
     sys.path.insert(0, os.path.abspath(_SDK_PATH))
 
 import wlkatapython
+
+try:
+    from wlkatapython.transports.base import Transport as _WlkataTransport
+except ImportError:  # pragma: no cover
+    _WlkataTransport = object
+
+# ── Session communication log (raw TX/RX for debugging) ──────────
+# Written under ~/.wlkata-studiox/logs/comm-YYYYMMDD-HHMMSS.log
+_COMM_LOG_DIR = os.path.join(
+    os.path.expanduser('~'), '.wlkata-studiox', 'logs'
+)
+_comm_log_path = None
+_comm_log_file = None
+_comm_log_lock = threading.Lock()
+
+
+def _ensure_comm_log():
+    """Open (once) a session log file for all port traffic."""
+    global _comm_log_path, _comm_log_file
+    with _comm_log_lock:
+        if _comm_log_file is not None:
+            return _comm_log_path
+        try:
+            os.makedirs(_COMM_LOG_DIR, exist_ok=True)
+            stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            _comm_log_path = os.path.join(_COMM_LOG_DIR, f'comm-{stamp}.log')
+            _comm_log_file = open(_comm_log_path, 'a', encoding='utf-8', buffering=1)
+            _comm_log_file.write(
+                f'# StudioX communication log started {datetime.now().isoformat()}\n'
+                f'# Columns: ISO-timestamp | port | dir | source | text\n'
+                f'# dir: tx=host→robot, rx=robot→host, auto-status, sys\n'
+            )
+            _comm_log_file.flush()
+            print(f'[SerialManager] Communication log: {_comm_log_path}')
+        except Exception as e:
+            print(f'[SerialManager] Could not open comm log: {e}')
+            _comm_log_path = None
+            _comm_log_file = None
+        return _comm_log_path
+
+
+def get_comm_log_path():
+    """Return the path of the current session communication log (creates if needed)."""
+    return _ensure_comm_log()
+
+
+def write_comm_log(port, direction, text, source=None):
+    """Append one line of raw traffic to the session communication log."""
+    path = _ensure_comm_log()
+    if not path or _comm_log_file is None:
+        return
+    try:
+        ts = datetime.now().isoformat(timespec='milliseconds')
+        # Single-line: collapse newlines in payload for greppability
+        payload = (text or '').replace('\r', '\\r').replace('\n', '\\n')
+        src = source or '-'
+        line = f'{ts}\t{port or "-"}\t{direction}\t{src}\t{payload}\n'
+        with _comm_log_lock:
+            if _comm_log_file is not None:
+                _comm_log_file.write(line)
+                _comm_log_file.flush()
+    except Exception:
+        pass
 
 # Map model names to SDK classes
 _MODEL_CLASSES = {
@@ -101,11 +165,21 @@ class PortConnection:
     def connect(self, existing_serial=None):
         """Connect to the port. If existing_serial is provided, reuse it
         instead of opening a new connection (faster, avoids reconnect delay).
-        Virtual ports use an in-memory serial simulator (no hardware)."""
+
+        Backends:
+          - VirtualMirobot / VirtualMT4 → VirtualSerial (SDK simulator)
+          - IPv4 / IPv4:port → WifiLink (wlkatapython WifiTransport, UDP)
+          - otherwise → pyserial serial.Serial
+        """
         if self.connected:
             self.disconnect()
         try:
             from .virtual_serial import is_virtual_port, VirtualSerial
+            from .wifi_link import is_wifi_endpoint, open_wifi_link, normalize_wifi_endpoint
+
+            # Canonicalize WiFi keys (e.g. "192.168.1.1:8234" → "192.168.1.1")
+            if is_wifi_endpoint(self.port):
+                self.port = normalize_wifi_endpoint(self.port)
 
             if existing_serial and getattr(existing_serial, 'is_open', False):
                 self._serial = existing_serial
@@ -116,6 +190,8 @@ class PortConnection:
                     self.port, model=self.model or 'Mirobot',
                     baudrate=self.baudrate, timeout=0.1,
                 )
+            elif is_wifi_endpoint(self.port):
+                self._serial = open_wifi_link(self.port, timeout=0.1)
             else:
                 self._serial = serial.Serial(self.port, self.baudrate, timeout=0.1)
 
@@ -129,10 +205,21 @@ class PortConnection:
             self._init_robot()
 
             # Enable auto-report: robot sends status after each movement completes
-            time.sleep(0.05 if is_virtual_port(self.port) else 0.3)
+            if is_virtual_port(self.port):
+                time.sleep(0.05)
+            elif is_wifi_endpoint(self.port):
+                time.sleep(0.15)
+            else:
+                time.sleep(0.3)
             self._serial.write(b'$40=1\r\n')
+            self.add_history('tx', '$40=1', source='connect')
 
-            kind = 'virtual' if is_virtual_port(self.port) else 'serial'
+            if is_virtual_port(self.port):
+                kind = 'virtual'
+            elif is_wifi_endpoint(self.port):
+                kind = 'wifi'
+            else:
+                kind = 'serial'
             self.add_history(
                 'sys',
                 f'Connected to {self.port} ({self.model or "unknown"}, {kind})',
@@ -140,6 +227,13 @@ class PortConnection:
             return True
         except Exception as e:
             self.connected = False
+            # Clean up partial open
+            if self._serial is not None:
+                try:
+                    self._serial.close()
+                except Exception:
+                    pass
+                self._serial = None
             self.add_history('sys', f'Connection failed: {e}')
             return False
 
@@ -167,6 +261,12 @@ class PortConnection:
     # ── History ──
 
     def add_history(self, direction, text, source=None):
+        # Always append to session file log (even in silent mode for true raw trail)
+        try:
+            write_comm_log(self.port, direction, text, source=source)
+        except Exception:
+            pass
+
         if self._silent:
             return
         with self._history_lock:
@@ -193,23 +293,43 @@ class PortConnection:
                 time.sleep(0.1)
                 continue
             try:
-                if self._serial.in_waiting > 0:
-                    line = self._serial.readline().decode('utf-8', errors='ignore').strip()
+                # Serial: only read when OS buffer has bytes.
+                # WiFi / some adapters set _poll_always and rely on readline timeout.
+                poll_always = bool(getattr(self._serial, '_poll_always', False))
+                waiting = 0
+                try:
+                    waiting = int(self._serial.in_waiting or 0)
+                except Exception:
+                    waiting = 0
+
+                if waiting > 0 or poll_always:
+                    raw = self._serial.readline()
+                    if not raw:
+                        if not poll_always:
+                            time.sleep(0.02)
+                        continue
+                    line = raw.decode('utf-8', errors='ignore').strip() if isinstance(raw, (bytes, bytearray)) else str(raw).strip()
                     if line:
                         # Check if this is an auto-reported status line
                         m = _STATUS_RE.match(line)
                         if m:
                             self._parse_and_cache_status(m)
                             if self._awaiting_query:
-                                # Explicit ? query: record in history and pass to RX buffer
+                                # Explicit ? query: show as normal rx in Command tab
                                 self._awaiting_query = False
                                 self.add_history('rx', line)
-                                with self._rx_lock:
-                                    self._rx_lines.append(line)
-                                    self._rx_event.set()
                             else:
-                                # Auto-report: cache in history (hidden unless dev mode)
+                                # Auto-report after motion ($40=1): gray in Command tab
                                 self.add_history('auto-status', line)
+                            # ALWAYS deliver status to the SDK RX buffer.
+                            # waitIdle(event) blocks on pSerial.readline() →
+                            # ProxySerial.rx_readline and must see Idle here.
+                            # Previously auto-status was UI-only, so waitIdle
+                            # sat until the full timeout (~30s) even though
+                            # Idle already appeared in the Command log.
+                            with self._rx_lock:
+                                self._rx_lines.append(line)
+                                self._rx_event.set()
                         else:
                             self.add_history('rx', line)
                             if line.lower() != 'ok':
@@ -218,8 +338,8 @@ class PortConnection:
                                     self._rx_event.set()
                 else:
                     time.sleep(0.02)
-            except (serial.SerialException, OSError):
-                self.add_history('sys', 'Serial read error - connection lost')
+            except (serial.SerialException, OSError, ConnectionError, TimeoutError):
+                self.add_history('sys', 'Read error - connection lost')
                 self.connected = False
                 break
             except Exception:
@@ -311,6 +431,8 @@ class PortConnection:
             with self.write_lock:
                 self.rx_flush_input()
                 self.add_history('tx', command, source='command')
+                if command.strip() == '?':
+                    self._awaiting_query = True
                 self._serial.write((command.strip() + '\r\n').encode('utf-8'))
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -369,31 +491,52 @@ class PortConnection:
         return self._serial
 
 
-class ProxySerial:
-    """A serial.Serial-compatible wrapper that routes reads through the
-    PortConnection's history buffer.
+class ProxySerial(_WlkataTransport):
+    """Serial-compatible / Transport-compatible wrapper for Blockly + SDK.
 
-    The SDK calls:
-      - self.pSerial.write(...)       -> forwarded to real serial + logged
-      - self.pSerial.readline()       -> reads from RX buffer via cursor
-      - self.pSerial.in_waiting       -> unread count in RX buffer
-      - self.pSerial.flushInput()     -> advances cursor to end
-      - self.pSerial.flushOutput()    -> forwarded to real serial
-      - self.pSerial.is_open          -> connection status
-      - self.pSerial.close()          -> no-op (manager owns the port)
+    Routes reads through PortConnection's history buffer; writes go to the
+    real backend (serial, VirtualSerial/SDK sim, or future WiFi transport).
+
+    Subclasses ``wlkatapython.transports.Transport`` so ``robot.init(proxy)``
+    accepts this object under the library's Connection type.
     """
 
     def __init__(self, port_conn):
         self._conn = port_conn
+        self._timeout = 1.0
+        if port_conn.raw_serial is not None and hasattr(port_conn.raw_serial, 'timeout'):
+            try:
+                self._timeout = port_conn.raw_serial.timeout
+            except Exception:
+                pass
+
+    # ── Transport lifecycle (manager owns the link) ──
+
+    def connect(self):
+        return None
+
+    def disconnect(self):
+        return None
+
+    @property
+    def is_connected(self):
+        return bool(self._conn.connected)
 
     def write(self, data):
         if not self._conn.connected or not self._conn.raw_serial:
             raise serial.SerialException('Not connected')
-        self._conn.add_history('tx', data.decode('utf-8', errors='ignore').strip(), source='blockly')
+        text = data.decode('utf-8', errors='ignore') if isinstance(data, (bytes, bytearray)) else str(data)
+        self._conn.add_history('tx', text.strip(), source='blockly')
+        # Status replies match the auto-report regex; mark query so the line
+        # is also delivered to the SDK RX buffer (waitIdle / getstatus).
+        if text.strip().rstrip('\r\n') == '?':
+            self._conn._awaiting_query = True
         return self._conn.raw_serial.write(data)
 
     def readline(self):
-        timeout = self._conn.raw_serial.timeout if self._conn.raw_serial else 1.0
+        timeout = self.timeout
+        if timeout is None:
+            timeout = 1.0
         return self._conn.rx_readline(timeout=timeout or 1.0)
 
     @property
@@ -405,6 +548,26 @@ class ProxySerial:
 
     def flushOutput(self):
         self._conn.rx_flush_output()
+
+    @property
+    def timeout(self):
+        raw = self._conn.raw_serial
+        if raw is not None and hasattr(raw, 'timeout'):
+            try:
+                return raw.timeout
+            except Exception:
+                pass
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value):
+        self._timeout = value
+        raw = self._conn.raw_serial
+        if raw is not None and hasattr(raw, 'timeout'):
+            try:
+                raw.timeout = value
+            except Exception:
+                pass
 
     @property
     def is_open(self):
@@ -473,7 +636,15 @@ class SerialManager:
         auto-connecting discovered robots in the background.
 
         If existing_serial is provided, reuse that open serial connection
-        instead of opening a new one (avoids disconnect/reconnect delay)."""
+        instead of opening a new one (avoids disconnect/reconnect delay).
+
+        Accepts serial paths and WiFi IPs (``192.168.x.x`` / ``ip:tcpPort``).
+        """
+        from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+        if port and is_wifi_endpoint(port):
+            port = normalize_wifi_endpoint(port)
+
         if port in self._flash_locked:
             if existing_serial:
                 try:
@@ -498,7 +669,20 @@ class SerialManager:
             return {'success': True, 'port': port, 'model': conn.model}
 
         success = conn.connect(existing_serial=existing_serial)
-        return {'success': success, 'port': port, 'model': conn.model}
+        result = {'success': success, 'port': conn.port, 'model': conn.model}
+        if not success:
+            # Surface last sys history line as error (e.g. WiFi unreachable)
+            try:
+                hist = conn.get_history(since=0)
+                for entry in reversed(hist):
+                    if entry.get('dir') == 'sys' and 'fail' in (entry.get('text') or '').lower():
+                        result['error'] = entry['text']
+                        break
+            except Exception:
+                pass
+            if 'error' not in result:
+                result['error'] = f'Connection failed for {conn.port}'
+        return result
 
     def connect(self, port, model=None, baudrate=115200):
         """Connect to a port and set it as the active port.
@@ -510,7 +694,11 @@ class SerialManager:
 
     def disconnect(self, port=None):
         """Disconnect a port (default: active port)."""
+        from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
         port = port or self._active_port
+        if port and is_wifi_endpoint(port):
+            port = normalize_wifi_endpoint(port)
         if not port or port not in self._ports:
             return {'success': False, 'error': 'No port to disconnect'}
 
@@ -518,6 +706,46 @@ class SerialManager:
         if self._active_port == port:
             self._active_port = None
         return {'success': True}
+
+    def reconnect(self, port=None, model=None, baudrate=115200):
+        """Hard refresh: force-close the link and open a new serial/WiFi session.
+
+        Use after a quick power-cycle when the OS path is still present but
+        the previous serial handle is dead (no more responses).
+        """
+        from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+        port = port or self._active_port
+        if not port:
+            return {'success': False, 'error': 'No port to reconnect'}
+        if is_wifi_endpoint(port):
+            port = normalize_wifi_endpoint(port)
+
+        # Preserve model from existing registration if not provided
+        prev_model = None
+        if port in self._ports:
+            prev_model = self._ports[port].model
+            try:
+                self._ports[port].disconnect()
+            except Exception:
+                pass
+            # Drop robot/FW cache so version() and $40 re-run cleanly
+            try:
+                self._ports[port]._firmware_version = None
+                self._ports[port].robot = None
+            except Exception:
+                pass
+
+        use_model = model or prev_model
+        # Normalize Blockly dropdown values (Mirobot_UART → Mirobot)
+        if isinstance(use_model, str) and use_model.endswith('_UART'):
+            use_model = use_model[:-5]
+        result = self.ensure_connected(port, model=use_model, baudrate=baudrate)
+        if result.get('success'):
+            self._active_port = port
+            result['reconnected'] = True
+            result['model'] = self._ports[port].model if port in self._ports else use_model
+        return result
 
     def lock_for_flash(self, port):
         """Disconnect a port and prevent the detector from reconnecting it."""
@@ -601,13 +829,31 @@ class SerialManager:
 
         class ProxySerialFactory:
             def __new__(cls, port=None, baudrate=115200, **kwargs):
-                if port and port in manager._ports:
-                    conn = manager._ports[port]
+                from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+
+                key = port
+                if port and is_wifi_endpoint(port):
+                    key = normalize_wifi_endpoint(port)
+
+                if key and key in manager._ports:
+                    conn = manager._ports[key]
                     if not conn.connected:
                         conn.connect()
                     # Flush stale RX lines so the SDK starts with a clean buffer
                     conn.rx_flush_input()
                     return ProxySerial(conn)
+
+                # Unmanaged WiFi IP: open via manager so history / proxy stay consistent
+                if key and is_wifi_endpoint(key):
+                    result = manager.ensure_connected(key, baudrate=baudrate)
+                    if not result.get('success'):
+                        raise serial.SerialException(
+                            f"Cannot connect to WiFi robot at {key}"
+                        )
+                    conn = manager._ports[key]
+                    conn.rx_flush_input()
+                    return ProxySerial(conn)
+
                 # Not a managed port - create a real serial connection
                 return serial.Serial(port, baudrate, **kwargs)
 

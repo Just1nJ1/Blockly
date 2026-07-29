@@ -56,12 +56,19 @@
             continue;
           }
 
+          var isWifi = !!(entry.description && /wifi/i.test(entry.description)) ||
+            /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(port);
+
           if (model) {
-            label = port + ' (' + model + ')';
+            label = isWifi
+              ? (port + ' (WiFi, ' + model + ')')
+              : (port + ' (' + model + ')');
             var modelValue = MODEL_VALUE_MAP[model];
             if (modelValue) {
               newMap[port] = modelValue;
             }
+          } else if (isWifi) {
+            label = port + ' (WiFi)';
           }
 
           newPorts.push([label, port]);
@@ -356,7 +363,7 @@
         probeAndResolve(val);
       }
 
-      // ── Probe port and resolve (or show model picker) ──
+      // ── Probe port / WiFi IP and resolve (or show model picker) ──
       function probeAndResolve(port) {
         // Disable the dialog and show probing state
         input.disabled = true;
@@ -364,6 +371,7 @@
         connectBtn.disabled = true;
         connectBtn.textContent = 'Probing...';
         closeDropdown();
+        clearProbeError();
 
         fetch(serverUrl + '/cmd/probe-port', {
           method: 'POST',
@@ -372,24 +380,69 @@
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          if (data.success && data.model) {
-            cleanup();
-            resolve({ port: port, model: data.model });
-          } else {
-            showModelPicker(port);
+          var canonical = (data && data.port) ? data.port : port;
+
+          // WiFi host unreachable / connection refused — warn and stay on dialog
+          if (data && data.unreachable) {
+            showProbeError(
+              data.error ||
+              ('Cannot reach robot at ' + canonical +
+                '. Check the IP, UDP port (default 8234, or use ip:port), and that the arm is on the same network.')
+            );
+            resetProbeUi();
+            return;
           }
+
+          if (data && data.success && data.model) {
+            cleanup();
+            resolve({ port: canonical, model: data.model });
+            return;
+          }
+
+          // Link opened (or serial path exists) but model unknown — ask user
+          showModelPicker(canonical, data && data.error);
         })
-        .catch(function() {
-          showModelPicker(port);
+        .catch(function(err) {
+          showProbeError('Probe failed: ' + (err && err.message ? err.message : 'network error'));
+          resetProbeUi();
         });
       }
 
-      function showModelPicker(port) {
+      function resetProbeUi() {
+        input.disabled = false;
+        arrow.disabled = false;
+        connectBtn.disabled = false;
+        connectBtn.textContent = 'Connect';
+        input.focus();
+      }
+
+      function clearProbeError() {
+        var old = body.querySelector('.port-picker-error');
+        if (old) old.remove();
+      }
+
+      function showProbeError(message) {
+        clearProbeError();
+        var err = document.createElement('div');
+        err.className = 'port-picker-error';
+        err.textContent = message;
+        // Insert below the combo
+        var comboEl = body.querySelector('.port-picker-combo');
+        if (comboEl && comboEl.nextSibling) {
+          body.insertBefore(err, comboEl.nextSibling);
+        } else {
+          body.appendChild(err);
+        }
+      }
+
+      function showModelPicker(port, hint) {
         // Replace dialog body with model selection buttons
         body.innerHTML = '';
         var msg = document.createElement('div');
         msg.className = 'port-picker-probe-msg';
-        msg.textContent = 'Could not auto-detect model on ' + port + '. Select the robot type:';
+        msg.textContent = 'Could not auto-detect model on ' + port +
+          (hint ? ' (' + hint + ')' : '') +
+          '. Select the robot type:';
         body.appendChild(msg);
 
         var btnGroup = document.createElement('div');
@@ -398,7 +451,7 @@
         var models = _robotDefs.map(function(r) {
           return { label: r.label, value: r.name };
         });
-        models.push({ label: 'None (raw serial)', value: null });
+        models.push({ label: 'None (raw serial / wifi)', value: null });
 
         models.forEach(function(m) {
           var btn = document.createElement('button');
@@ -449,7 +502,7 @@
       var input = document.createElement('input');
       input.type = 'text';
       input.className = 'port-picker-input';
-      input.placeholder = 'Select or type a port path...';
+      input.placeholder = 'Serial port or WiFi IP/UDP (e.g. 192.168.1.100 or 192.168.1.100:8234)';
       combo.appendChild(input);
 
       var arrow = document.createElement('button');
@@ -650,6 +703,9 @@
 
     var val = select.value;
     removeBtn.classList.toggle('visible', val && _manualPortSet.has(val));
+    if (typeof window.commandTabUpdateRefreshButton === 'function') {
+      window.commandTabUpdateRefreshButton();
+    }
   }
 
   // Handle "Connect manually..." selection
@@ -681,19 +737,32 @@
           .then(function(data) {
             if (!data.success) {
               console.warn('[DeviceDetector] Failed to register manual port:', data.error);
+              var msg = data.error || ('Failed to connect to ' + port);
+              if (typeof window.showNotification === 'function') {
+                window.showNotification(msg, 'error');
+              } else {
+                alert(msg);
+              }
+              revertSelection(select);
+              updateRemoveButton();
+              return;
             }
+            var registeredPort = data.port || port;
             // Trigger an immediate poll so the UI updates right away
             pollDevices();
             // Select and connect after the poll refreshes the dropdown
             setTimeout(function() {
-              select.value = port;
+              select.value = registeredPort;
               updateRemoveButton();
-              connectToSelectedPort(port);
+              connectToSelectedPort(registeredPort);
             }, 500);
-            console.log('[DeviceDetector] Manually added port:', port, 'model:', model);
+            console.log('[DeviceDetector] Manually added port:', registeredPort, 'model:', model);
           })
           .catch(function(err) {
             console.error('[DeviceDetector] Error registering manual port:', err);
+            alert('Failed to register port: ' + (err && err.message ? err.message : err));
+            revertSelection(select);
+            updateRemoveButton();
           });
         });
       } else {

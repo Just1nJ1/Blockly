@@ -45,17 +45,112 @@
     });
   }
 
-  function disconnectPort() {
+  function disconnectPort(port) {
+    var body = {};
+    if (port) body.port = port;
     return fetch(getServerUrl() + '/cmd/disconnect', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       _connected = false;
-      _currentPort = null;
+      if (!port || port === _currentPort) {
+        _currentPort = null;
+      }
       return data;
     });
+  }
+
+  /**
+   * Hard refresh: force disconnect + reconnect the same port.
+   * Use after a quick power-cycle when the path is still listed but
+   * the old serial session is dead (no responses forever).
+   */
+  function refreshPortConnection(port, model) {
+    var select = document.getElementById('command-port-select');
+    port = port || (select && select.value) || _currentPort;
+    if (!port || port === '__manual__' || port.indexOf('__detecting__') === 0) {
+      appendSystemMessage('Select a connected port to refresh');
+      return Promise.resolve({ success: false, error: 'No port selected' });
+    }
+
+    if (!model && window.portModelMap && window.portModelMap[port]) {
+      // Blockly dropdown values like Mirobot_UART → short model name
+      var raw = window.portModelMap[port];
+      if (typeof raw === 'string') {
+        model = raw.replace(/_UART$/i, '').replace(/_USB$/i, '');
+        // Map display labels if needed
+        if (model === 'Haro380' || model === 'Harobot') model = 'MT4';
+      }
+    }
+    // Fallback: parse from option label "port (Mirobot)"
+    if (!model && select) {
+      var opt = select.options[select.selectedIndex];
+      var m = opt && opt.textContent && opt.textContent.match(/\(([^)]+)\)\s*$/);
+      if (m && m[1] && m[1].indexOf('WiFi') !== 0 && m[1] !== 'Detecting...') {
+        model = m[1].replace(/^WiFi,\s*/, '');
+      }
+    }
+
+    var btn = document.getElementById('command-port-refresh');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '…';
+    }
+    appendSystemMessage('Hard refresh: disconnecting ' + port + '…');
+
+    return fetch(getServerUrl() + '/cmd/reconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: port, model: model || null })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '↻';
+      }
+      if (data.success) {
+        _connected = true;
+        _currentPort = port;
+        clearOutput();
+        _lastMessageId = 0;
+        startPolling();
+        appendSystemMessage('Reconnected to ' + port +
+          (data.model ? ' (' + data.model + ')' : ''));
+        // Reset control-panel FW cache / rebind UI for this port
+        if (typeof window.controlPanelOnDisconnected === 'function') {
+          window.controlPanelOnDisconnected(port);
+        }
+        if (typeof window.controlPanelOnConnected === 'function') {
+          window.controlPanelOnConnected(port, data.model || model);
+        }
+      } else {
+        _connected = false;
+        appendSystemMessage('Refresh failed: ' + (data.error || 'unknown error'));
+      }
+      return data;
+    })
+    .catch(function(err) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '↻';
+      }
+      appendSystemMessage('Refresh error: ' + (err && err.message ? err.message : err));
+      return { success: false, error: String(err) };
+    });
+  }
+
+  function updateRefreshButton() {
+    var select = document.getElementById('command-port-select');
+    var btn = document.getElementById('command-port-refresh');
+    if (!select || !btn) return;
+    var val = select.value;
+    var show = !!(val && val !== '' && val !== '__manual__' &&
+      String(val).indexOf('__detecting__') !== 0);
+    btn.classList.toggle('visible', show);
   }
 
   // ── Send command ──
@@ -184,6 +279,19 @@
       });
     }
 
+    // Hard refresh (disconnect + reconnect same port)
+    var refreshBtn = document.getElementById('command-port-refresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function() {
+        refreshPortConnection();
+      });
+    }
+    var portSelect = document.getElementById('command-port-select');
+    if (portSelect) {
+      portSelect.addEventListener('change', updateRefreshButton);
+    }
+    updateRefreshButton();
+
     // Start polling immediately (to pick up connection status messages)
     startPolling();
   }
@@ -191,6 +299,8 @@
   // Expose for device detector to call
   window.commandTabConnect = connectToPort;
   window.commandTabDisconnect = disconnectPort;
+  window.commandTabRefresh = refreshPortConnection;
+  window.commandTabUpdateRefreshButton = updateRefreshButton;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
