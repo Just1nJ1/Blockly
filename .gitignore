@@ -22,3 +22,6 @@ __pycache__/
 *.swp
 *~
 electron-builder.env
+
+plan.md
+TODO.md

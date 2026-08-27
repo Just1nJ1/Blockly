@@ -50,7 +50,17 @@
       "resources/wlkata_arm_virtual-reality/**/*",
       "resources/icons/**/*",
       "index.html",
-      "main.js"
+      "main.js",
+      {
+        "from": "node_modules/three/build",
+        "to": "node_modules/three/build",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "node_modules/three/examples/jsm",
+        "to": "node_modules/three/examples/jsm",
+        "filter": ["**/*"]
+      }
     ],
     "extraResources": [
       {

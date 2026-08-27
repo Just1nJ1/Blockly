@@ -69,7 +69,7 @@ jobs:
     - name: Install wlkatapython SDK into embedded Python
       shell: bash
       run: |
-        ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev==1.0.0.dev2
+        ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev[ble]==1.0.0.dev3
 
     - name: Install Python dependencies into embedded Python
       shell: bash
