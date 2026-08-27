@@ -405,14 +405,20 @@
   function resolveViewerConfig(modelOrRaw) {
     var r = getRobot(modelOrRaw);
     var v = r.viewer || {};
-    var BASE = './resources/wlkata_arm_virtual-reality/';
-    return {
+    var BASE = (global.StudioXViewerPaths && global.StudioXViewerPaths.getViewerRoot)
+      ? global.StudioXViewerPaths.getViewerRoot()
+      : './resources/wlkata_arm_virtual-reality/';
+    var cfg = {
       id: v.id || 'mirobot',
       label: r.label || r.name || 'Mirobot',
       urdf: v.urdf || (BASE + 'urdf/wlkata_mirobot_description.urdf'),
       meshBasePath: v.meshBasePath || BASE,
       tcpOffset: Array.isArray(v.tcpOffset) ? v.tcpOffset.slice() : [0, 0, 0.02428]
     };
+    if (global.StudioXViewerPaths && typeof global.StudioXViewerPaths.resolveViewerConfig === 'function') {
+      return global.StudioXViewerPaths.resolveViewerConfig(cfg);
+    }
+    return cfg;
   }
 
   function getControlLayout(modelOrRaw) {

@@ -47,20 +47,9 @@
       "js/**/*",
       "workflows/**/*",
       "node_modules/**/*",
-      "resources/wlkata_arm_virtual-reality/**/*",
       "resources/icons/**/*",
       "index.html",
-      "main.js",
-      {
-        "from": "node_modules/three/build",
-        "to": "node_modules/three/build",
-        "filter": ["**/*"]
-      },
-      {
-        "from": "node_modules/three/examples/jsm",
-        "to": "node_modules/three/examples/jsm",
-        "filter": ["**/*"]
-      }
+      "main.js"
     ],
     "extraResources": [
       {
@@ -92,6 +81,29 @@
       {
         "from": "resources/firmware",
         "to": "firmware",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/wlkata_arm_virtual-reality",
+        "to": "wlkata_arm_virtual-reality",
+        "filter": [
+          "**/*",
+          "!**/.git/**",
+          "!**/.DS_Store"
+        ]
+      },
+      {
+        "from": "node_modules/three/build",
+        "to": "three/build",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "node_modules/three/examples/jsm",
+        "to": "three/examples/jsm",
         "filter": [
           "**/*"
         ]

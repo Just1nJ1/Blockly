@@ -536,13 +536,20 @@
     if (typeof resolveRobotViewerConfig === 'function') {
       return resolveRobotViewerConfig(model === 'Unknown' ? 'Mirobot' : model);
     }
-    return {
+    var base = (window.StudioXViewerPaths && window.StudioXViewerPaths.getViewerRoot)
+      ? window.StudioXViewerPaths.getViewerRoot()
+      : './resources/wlkata_arm_virtual-reality/';
+    var cfg = {
       id: 'mirobot',
       label: 'Mirobot',
-      urdf: './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
-      meshBasePath: './resources/wlkata_arm_virtual-reality/',
+      urdf: base + 'urdf/wlkata_mirobot_description.urdf',
+      meshBasePath: base,
       tcpOffset: [0, 0, 0.02428]
     };
+    if (window.StudioXViewerPaths && window.StudioXViewerPaths.resolveViewerConfig) {
+      return window.StudioXViewerPaths.resolveViewerConfig(cfg);
+    }
+    return cfg;
   }
 
   /**
@@ -551,7 +558,11 @@
    * Also used as the shared IK solver for World animation precompute.
    */
   function ensureViewer(varName) {
-    if (!window.RobotViewerClass) return Promise.resolve(null);
+    if (!window.RobotViewerClass) {
+      console.warn('[RobotViewer] RobotViewerClass not loaded',
+        window.RobotViewerLoadError || '');
+      return Promise.resolve(null);
+    }
 
     var cfg = viewerConfigForVar(varName || currentVariableName || 'robot');
 

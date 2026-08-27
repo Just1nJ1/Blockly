@@ -546,13 +546,20 @@
       return resolveRobotViewerConfig(model);
     }
     // Fallback if helper not loaded yet
-    return {
+    var base = (window.StudioXViewerPaths && window.StudioXViewerPaths.getViewerRoot)
+      ? window.StudioXViewerPaths.getViewerRoot()
+      : './resources/wlkata_arm_virtual-reality/';
+    var cfg = {
       id: 'mirobot',
       label: model || 'Mirobot',
-      urdf: './resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf',
-      meshBasePath: './resources/wlkata_arm_virtual-reality/',
+      urdf: base + 'urdf/wlkata_mirobot_description.urdf',
+      meshBasePath: base,
       tcpOffset: [0, 0, 0.02428]
     };
+    if (window.StudioXViewerPaths && window.StudioXViewerPaths.resolveViewerConfig) {
+      return window.StudioXViewerPaths.resolveViewerConfig(cfg);
+    }
+    return cfg;
   }
 
   // Bumped on clearAll / full resync so late async addRobot results are dropped

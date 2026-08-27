@@ -906,24 +906,32 @@ function resolveRobotViewerConfig(model) {
   if (window.RobotCatalog && typeof window.RobotCatalog.resolveViewerConfig === 'function') {
     return window.RobotCatalog.resolveViewerConfig(model);
   }
-  var BASE = './resources/wlkata_arm_virtual-reality/';
+  var BASE = (window.StudioXViewerPaths && window.StudioXViewerPaths.getViewerRoot)
+    ? window.StudioXViewerPaths.getViewerRoot()
+    : './resources/wlkata_arm_virtual-reality/';
   var key = model || 'Mirobot';
-  if (key === 'MT4' || key === 'E4' || key === 'Haro380' || key === 'haro380') {
-    return {
+  var cfg;
+  if (key === 'MT4' || key === 'E4' || key === 'Haro380' || key === 'haro380' || key === 'Miromax') {
+    cfg = {
       id: 'haro380',
-      label: (key === 'E4') ? 'E4' : (key === 'MT4' ? 'MT4' : 'Haro380'),
+      label: (key === 'E4') ? 'E4' : (key === 'MT4' ? 'MT4' : key),
       urdf: BASE + 'urdf/wlkata_haro380_description.urdf',
       meshBasePath: BASE,
       tcpOffset: [0, 0, -0.041]
     };
+  } else {
+    cfg = {
+      id: 'mirobot',
+      label: 'Mirobot',
+      urdf: BASE + 'urdf/wlkata_mirobot_description.urdf',
+      meshBasePath: BASE,
+      tcpOffset: [0, 0, 0.02428]
+    };
   }
-  return {
-    id: 'mirobot',
-    label: 'Mirobot',
-    urdf: BASE + 'urdf/wlkata_mirobot_description.urdf',
-    meshBasePath: BASE,
-    tcpOffset: [0, 0, 0.02428]
-  };
+  if (window.StudioXViewerPaths && typeof window.StudioXViewerPaths.resolveViewerConfig === 'function') {
+    return window.StudioXViewerPaths.resolveViewerConfig(cfg);
+  }
+  return cfg;
 }
 
 window.getRobotModelForVarName = getRobotModelForVarName;

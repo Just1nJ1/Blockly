@@ -1,10 +1,28 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog, protocol, net: electronNet } = require('electron');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
+
+// Serve packaged extraResources (viewer + Three) to the renderer.
+// Must be registered before app ready. Maps studiox://app/<rel> → resourcesPath/<rel>
+// (same Resources/ tree as server.py).
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'studiox',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+      bypassCSP: true,
+    },
+  },
+]);
 
 // Collect startup logs before the window is created so we can replay them.
 // Only forward to renderer after did-finish-load to avoid stacking
@@ -40,6 +58,42 @@ function logError(msg) {
  */
 function isPackaged() {
   return app.isPackaged;
+}
+
+/**
+ * studiox://app/wlkata_arm_virtual-reality/...
+ * studiox://app/three/build/three.module.js
+ * → process.resourcesPath/...
+ */
+function registerStudioxResourceProtocol() {
+  protocol.handle('studiox', (request) => {
+    try {
+      let rel = String(request.url || '').replace(/^studiox:\/\/app\/?/i, '');
+      try {
+        rel = decodeURIComponent(rel);
+      } catch (eDec) { /* keep */ }
+      rel = rel.split('?')[0].split('#')[0];
+      rel = path.normalize(rel).replace(/^(\.\.(\/|\\|$))+/, '');
+      rel = rel.replace(/^[/\\]+/, '');
+
+      const base = path.resolve(process.resourcesPath || path.join(__dirname));
+      const fullPath = path.resolve(base, rel);
+      const baseWithSep = base.endsWith(path.sep) ? base : base + path.sep;
+      if (fullPath !== base && !fullPath.startsWith(baseWithSep)) {
+        logError('studiox path outside resources: ' + fullPath);
+        return new Response('Forbidden', { status: 403 });
+      }
+      if (!fs.existsSync(fullPath)) {
+        logError('studiox missing: ' + fullPath);
+        return new Response('Not found: ' + rel, { status: 404 });
+      }
+      return electronNet.fetch(pathToFileURL(fullPath).href);
+    } catch (err) {
+      logError('studiox protocol error: ' + (err && err.message ? err.message : err));
+      return new Response('Error', { status: 500 });
+    }
+  });
+  log('Registered studiox://app/ → ' + (process.resourcesPath || ''));
 }
 
 /**
@@ -602,6 +656,9 @@ app.whenReady().then(async () => {
     log(`App is packaged: ${isPackaged()}`);
     log(`__dirname: ${__dirname}`);
     log(`resourcesPath: ${process.resourcesPath}`);
+
+    // Viewer + Three live in extraResources (like server.py); expose to renderer
+    registerStudioxResourceProtocol();
 
     // Discover extensions before starting the server
     _discoveredExtensions = discoverExtensions();

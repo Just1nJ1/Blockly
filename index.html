@@ -481,19 +481,40 @@
     </div><!-- #app-body -->
   </div><!-- #app -->
 
-  <!-- Three.js import map for RobotViewer (ES module) -->
-  <script type="importmap">
-  {
-      "imports": {
-          "three":         "./node_modules/three/build/three.module.js",
-          "three/addons/": "./node_modules/three/examples/jsm/"
+  <!-- Viewer/Three: dev = repo paths; packaged = extraResources via studiox://app/ -->
+  <script src="js/viewerPaths.js"></script>
+  <script>
+  (function () {
+    var threeRoot = (window.StudioXViewerPaths && window.StudioXViewerPaths.getThreeRoot)
+      ? window.StudioXViewerPaths.getThreeRoot()
+      : './node_modules/three/';
+    var map = document.createElement('script');
+    map.type = 'importmap';
+    map.textContent = JSON.stringify({
+      imports: {
+        'three': threeRoot + 'build/three.module.js',
+        'three/addons/': threeRoot + 'examples/jsm/'
       }
-  }
+    });
+    document.head.appendChild(map);
+  })();
   </script>
   <script type="module">
-  import { RobotViewer } from './resources/wlkata_arm_virtual-reality/RobotViewer.js';
-  window.RobotViewerClass = RobotViewer;
-  window.dispatchEvent(new Event('robotViewerReady'));
+  (async function () {
+    var root = (window.StudioXViewerPaths && window.StudioXViewerPaths.getViewerRoot)
+      ? window.StudioXViewerPaths.getViewerRoot()
+      : './resources/wlkata_arm_virtual-reality/';
+    var url = root + 'RobotViewer.js';
+    try {
+      var mod = await import(url);
+      window.RobotViewerClass = mod.RobotViewer;
+      console.log('[StudioX] RobotViewer loaded from', url);
+    } catch (err) {
+      console.error('[StudioX] Failed to load RobotViewer from', url, err);
+      window.RobotViewerLoadError = err;
+    }
+    window.dispatchEvent(new Event('robotViewerReady'));
+  })();
   </script>
 
   <!-- Blockly -->

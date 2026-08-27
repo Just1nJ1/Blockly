@@ -51,6 +51,33 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
+    # Only the 3D viewer submodule is required in the artifact.
+    # Do not use submodules: recursive — that would also clone extensions/*.
+    # Repo is private: GITHUB_TOKEN cannot clone other private repos.
+    # Secret WLKATA_SUBMODULE_TOKEN = PAT (contents:read) on
+    #   wlkata/wlkata_arm_virtual-reality
+    - name: Checkout viewer submodule
+      shell: bash
+      env:
+        TOKEN: ${{ secrets.WLKATA_SUBMODULE_TOKEN }}
+      run: |
+        if [ -z "$TOKEN" ]; then
+          echo "Missing secret WLKATA_SUBMODULE_TOKEN"
+          echo "Create a PAT with read access to wlkata/wlkata_arm_virtual-reality"
+          echo "and add it as a repository (or org) Actions secret."
+          exit 1
+        fi
+        SHA=$(git rev-parse HEAD:resources/wlkata_arm_virtual-reality)
+        echo "Pinned viewer SHA: $SHA"
+        rm -rf resources/wlkata_arm_virtual-reality
+        git clone --no-checkout \
+          "https://x-access-token:${TOKEN}@github.com/wlkata/wlkata_arm_virtual-reality.git" \
+          resources/wlkata_arm_virtual-reality
+        git -C resources/wlkata_arm_virtual-reality checkout --force "$SHA"
+        test -f resources/wlkata_arm_virtual-reality/RobotViewer.js
+        test -d resources/wlkata_arm_virtual-reality/urdf
+        ls resources/wlkata_arm_virtual-reality/urdf
+
     - name: Set up Node.js
       uses: actions/setup-node@v6
       with:
