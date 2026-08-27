@@ -248,7 +248,12 @@
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sel"></use></svg>
             <span class="toolbar-btn-label">Sel</span>
           </button>
-          <!-- Debug-only (visible while stepping; occupy Stop slot area) -->
+          <button type="button" class="toolbar-btn" id="exportGcodeBtn" onclick="exportGcode()" disabled
+            title="Export G-code file. Only G-code is recorded — if/else branches, sensor conditions, and external libraries are not fully exported. Delays become G4 P{seconds}.">
+            <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-gcode"></use></svg>
+            <span class="toolbar-btn-label">G-code</span>
+          </button>
+          <!-- Debug-only: replace Run/Step/Sel slots while stepping so Clear/Export/Import stay put -->
           <button type="button" class="toolbar-btn debug-btn" id="stepBtn" onclick="debugStep()" title="Step one line">
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-step"></use></svg>
             <span class="toolbar-btn-label">Next</span>
@@ -500,11 +505,16 @@
   <!-- Configuration -->
   <script src="js/config.js"></script>
 
+  <!-- Robot catalog (robots.json via /robots) — before blocks/UI that need it -->
+  <script src="js/robotCatalog.js"></script>
+
   <!-- Block Definitions -->
   <script src="js/blocks/importModule.js"></script>
   <script src="js/blocks/raw.js"></script>
   <script src="js/blocks/functionCall.js"></script>
+  <script src="js/blocks/searchableDropdown.js"></script>
   <script src="js/blocks/libraryFunctionCall.js"></script>
+  <script src="js/blocks/libraryConstant.js"></script>
   <script src="js/blocks/instanceFunctionCall.js"></script>
   <script src="js/blocks/functionParam.js"></script>
   <script src="js/blocks/setupRobot.js"></script>
@@ -535,6 +545,7 @@
   <script src="js/workspace/workspaceManager.js"></script>
   <script src="js/workspace/savedFunctions.js"></script>
   <script src="js/workspace/importExport.js"></script>
+  <script src="js/workspace/gcodeExport.js"></script>
   <script src="js/workspace/management.js"></script>
   <script src="js/workspace/blockSelection.js"></script>
 

@@ -241,13 +241,16 @@ class _FakeSerial:
 
 
 def _build_mock_wlkatapython() -> types.ModuleType:
+    from .robots import get_sdk_class_names
+
     mod = types.ModuleType("wlkatapython")
-    mod.Mirobot_UART = RecordingRobot
-    mod.MT4_UART = RecordingRobot
-    mod.E4_UART = RecordingRobot
-    mod.WLKATA_UART = RecordingRobot
-    mod.MS4220_UART = RecordingRobot
-    mod.Mirobot_Serial_GUI = RecordingRobot
+    # Inject every SDK class name from robots.json so dry-run works for new models
+    for class_name in get_sdk_class_names():
+        setattr(mod, class_name, RecordingRobot)
+    # Non-catalog SDK symbols still used by some generated / library code
+    for extra in ("WLKATA_UART", "MS4220_UART", "Mirobot_Serial_GUI"):
+        if not hasattr(mod, extra):
+            setattr(mod, extra, RecordingRobot)
     mod.robots = []
     mod.warnings = __import__("warnings")
     return mod

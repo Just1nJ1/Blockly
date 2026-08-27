@@ -19,9 +19,26 @@
  * Workflow templates are registered with WorkflowRegistry as soon as the
  * extension is discovered (not lazy on tab click), so they appear in the
  * Blockly Workflows toolbox without opening the extension tab.
+ *
+ * Saved functions: if the extension has a functions/ folder with *.json
+ * files (same schema as workspace libraries), they are auto-scanned and
+ * shown in the Saved Functions panel. Missing or empty functions/ is fine.
  */
 
 var _loadedExtensions = new Map();
+
+// Extension-bundled function libraries (auto-scanned from functions/*.json)
+// Map: extensionName -> { displayName, basePath, funcs: [entries] }
+var _extensionFunctionLibs = new Map();
+
+var _extFs = null;
+var _extPath = null;
+try {
+  _extFs = require('fs');
+  _extPath = require('path');
+} catch (eFs) {
+  console.warn('[Extensions] Node fs not available; extension function scan disabled');
+}
 
 /**
  * Called by main process via executeJavaScript after extensions are discovered.
@@ -36,6 +53,11 @@ async function loadExtensions(extensions) {
     } catch (err) {
       console.error('[Extensions] Failed to load ' + ext.manifest.name + ':', err);
     }
+  }
+
+  // Refresh Saved Functions panel if Blockly UI is already up
+  if (typeof renderSavedFunctionsList === 'function') {
+    try { renderSavedFunctionsList(); } catch (eR) { /* ignore */ }
   }
 }
 
@@ -68,8 +90,144 @@ async function _loadSingleExtension(manifest, basePath) {
     await _loadExtensionWorkflows(manifest, basePath, contributes.workflows);
   }
 
+  // 5. Auto-scan functions/ for default saved-function JSON (optional)
+  _scanExtensionFunctions(manifest, basePath);
+
   _loadedExtensions.get(name).status = 'ready';
 }
+
+/**
+ * Auto-scan <extension>/functions/*.json for default procedure libraries.
+ * No-op if the folder is missing, unreadable, or has no valid JSON.
+ * Does not require a contributes.functions entry in the manifest.
+ */
+function _scanExtensionFunctions(manifest, basePath) {
+  if (!_extFs || !_extPath || !basePath || !manifest || !manifest.name) return;
+
+  var dir = _extPath.join(basePath, 'functions');
+  if (!_extFs.existsSync(dir)) {
+    return; // optional — totally fine without functions/
+  }
+
+  var stat;
+  try {
+    stat = _extFs.statSync(dir);
+  } catch (e) {
+    return;
+  }
+  if (!stat.isDirectory()) return;
+
+  var files;
+  try {
+    files = _extFs.readdirSync(dir).filter(function(f) {
+      return f && f.toLowerCase().endsWith('.json');
+    });
+  } catch (eRead) {
+    console.warn('[Extensions] Cannot read functions/ for', manifest.name, eRead);
+    return;
+  }
+
+  if (!files.length) {
+    console.log('[Extensions] functions/ empty for', manifest.name);
+    return;
+  }
+
+  var funcs = [];
+  for (var i = 0; i < files.length; i++) {
+    var filePath = _extPath.join(dir, files[i]);
+    try {
+      var raw = _extFs.readFileSync(filePath, 'utf8');
+      var data = JSON.parse(raw);
+      if (!data || typeof data !== 'object') continue;
+      if (!data.name || !data.xml) {
+        console.warn(
+          '[Extensions] Skip function file (need name + xml):',
+          files[i], 'from', manifest.name
+        );
+        continue;
+      }
+      funcs.push({
+        name: data.name,
+        params: Array.isArray(data.params) ? data.params : [],
+        xml: data.xml,
+        timestamp: data.timestamp || 0,
+        _file: files[i]
+      });
+    } catch (eParse) {
+      console.warn(
+        '[Extensions] Bad function JSON', files[i], 'from', manifest.name, ':', eParse
+      );
+    }
+  }
+
+  if (!funcs.length) return;
+
+  funcs.sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+  var displayName = manifest.displayName || manifest.name;
+  _extensionFunctionLibs.set(manifest.name, {
+    displayName: displayName,
+    basePath: basePath,
+    funcs: funcs
+  });
+
+  console.log(
+    '[Extensions] Loaded', funcs.length,
+    'saved function(s) from', manifest.name
+  );
+}
+
+/**
+ * List extension-bundled functions in the same shape as listAllSavedFunctions:
+ * { groupDisplayName: { path, funcs, readOnly, isExtension }, ... }
+ *
+ * path is "extension:<name>" so load/delete can tell sources apart.
+ */
+function listExtensionSavedFunctions() {
+  var result = {};
+  _extensionFunctionLibs.forEach(function(lib, extName) {
+    if (!lib || !lib.funcs || !lib.funcs.length) return;
+    var displayName = lib.displayName || extName;
+    // Disambiguate if a workspace folder already uses this display name
+    if (result[displayName]) {
+      displayName = displayName + ' (' + extName + ')';
+    }
+    result[displayName] = {
+      path: 'extension:' + extName,
+      funcs: lib.funcs.slice(),
+      readOnly: true,
+      isExtension: true,
+      extensionName: extName
+    };
+  });
+  return result;
+}
+
+/**
+ * Look up one function entry from an extension source key.
+ * @param {string} sourceKey - "extension:<name>"
+ * @param {string} funcName
+ * @returns {object|null} { name, params, xml, ... }
+ */
+function getExtensionSavedFunction(sourceKey, funcName) {
+  if (!sourceKey || String(sourceKey).indexOf('extension:') !== 0) return null;
+  var extName = String(sourceKey).slice('extension:'.length);
+  var lib = _extensionFunctionLibs.get(extName);
+  if (!lib || !lib.funcs) return null;
+  for (var i = 0; i < lib.funcs.length; i++) {
+    if (lib.funcs[i].name === funcName) return lib.funcs[i];
+  }
+  return null;
+}
+
+function isExtensionFunctionSource(sourceKey) {
+  return !!(sourceKey && String(sourceKey).indexOf('extension:') === 0);
+}
+
+// Expose for Saved Functions UI
+window.listExtensionSavedFunctions = listExtensionSavedFunctions;
+window.getExtensionSavedFunction = getExtensionSavedFunction;
+window.isExtensionFunctionSource = isExtensionFunctionSource;
 
 /**
  * Normalize contributes.workflows into a list of relative JSON paths.

@@ -12,6 +12,7 @@ function initCustomBlocks() {
   initRawBlock();
   initFunctionCallBlock();
   initLibraryFunctionCallBlock();
+  initLibraryConstantBlock();
   initInstanceFunctionCallBlock();
   initFunctionParamBlock();
   initSetupRobotBlock();

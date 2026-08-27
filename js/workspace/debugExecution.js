@@ -273,13 +273,28 @@ function _applyDebugState(state) {
 
 /**
  * Show/hide debug mode UI elements.
+ *
+ * Layout contract while stepping:
+ * - Next / Cont / Stop (debug) replace the Run / Step / Sel slots so
+ *   Clear / Export / Import stay in the same horizontal positions.
+ * - Clear / Export / Import remain visible but disabled.
+ * - Emergency stop (#stopAllBtn) stays visible and enabled.
  */
 function _setDebugMode(active) {
+  var toolbar = document.getElementById('toolbar');
   var debugBtns = document.querySelectorAll('.debug-btn');
   var debugPanel = document.getElementById('debug-panel');
   var runBtn = document.getElementById('runBtn');
   var debugBtn = document.getElementById('debugBtn');
   var blocklyDiv = document.getElementById('blocklyDiv');
+  var clearBtn = document.getElementById('clearBtn');
+  var exportBtn = document.getElementById('exportBtn');
+  var importBtn = document.getElementById('importBtn');
+  var stopAllBtn = document.getElementById('stopAllBtn');
+
+  if (toolbar) {
+    toolbar.classList.toggle('step-mode', !!active);
+  }
 
   for (var i = 0; i < debugBtns.length; i++) {
     if (active) {
@@ -309,11 +324,31 @@ function _setDebugMode(active) {
     }
   }
 
-  // Disable Run/Debug/Sel buttons during debug, enable when done
+  // Playback controls are swapped out via CSS (.step-mode); keep disabled too
   if (runBtn) runBtn.disabled = active;
   if (debugBtn) debugBtn.disabled = active;
   var runSelectedBtn = document.getElementById('runSelectedBtn');
   if (runSelectedBtn) runSelectedBtn.disabled = active;
+
+  // Keep file-ops in place; disable while stepping so the program cannot change mid-debug
+  if (clearBtn) clearBtn.disabled = active;
+  if (exportBtn) exportBtn.disabled = active;
+  if (importBtn) importBtn.disabled = active;
+
+  // G-code export: leave visible next to Sel slot, but disabled during step
+  if (typeof updateGcodeExportButton === 'function') {
+    updateGcodeExportButton();
+  } else {
+    var gcodeBtn = document.getElementById('exportGcodeBtn');
+    if (gcodeBtn) gcodeBtn.disabled = true;
+  }
+
+  // Emergency stop must remain available during step mode
+  if (stopAllBtn) {
+    stopAllBtn.disabled = false;
+    stopAllBtn.style.display = '';
+    stopAllBtn.hidden = false;
+  }
 }
 
 /**

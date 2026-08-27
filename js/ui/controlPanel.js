@@ -5,10 +5,8 @@
  */
 
 (function() {
-  // Model definitions: which axes each model supports
-  // statusKey: key in the getStatus response dict (for reading values)
-  // sdkParam: parameter name for writeAngle/writeCoordinate (for jogging)
-  var MODELS = {
+  // Model axis layouts come from RobotCatalog (robots.json). Fallback used offline.
+  var FALLBACK_MODELS = {
     'Mirobot': {
       joints: [
         { label: 'Joint 1', statusKey: 'X', sdkParam: 'x' },
@@ -42,11 +40,11 @@
       ]
     }
   };
-  // E4 uses the same layout as MT4
-  MODELS['E4'] = MODELS['MT4'];
+  FALLBACK_MODELS['E4'] = FALLBACK_MODELS['MT4'];
 
-  // Default to Mirobot if model unknown
-  var DEFAULT_MODEL = 'Mirobot';
+  var DEFAULT_MODEL = (window.RobotCatalog && window.RobotCatalog.getDefaultName)
+    ? window.RobotCatalog.getDefaultName()
+    : 'Mirobot';
 
   var _currentMode = 'joint';  // 'joint' or 'coord'
   var _currentPort = null;
@@ -62,8 +60,22 @@
       ? window.getServerUrl() : 'http://127.0.0.1:5080';
   }
 
+  function normalizeModelName(raw) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+      return window.RobotCatalog.normalizeModelName(raw) || DEFAULT_MODEL;
+    }
+    if (typeof window.normalizeRobotModelName === 'function') {
+      return window.normalizeRobotModelName(raw) || DEFAULT_MODEL;
+    }
+    return raw || DEFAULT_MODEL;
+  }
+
   function getModelConfig(model) {
-    return MODELS[model] || MODELS[DEFAULT_MODEL];
+    if (window.RobotCatalog && typeof window.RobotCatalog.getControlLayout === 'function') {
+      return window.RobotCatalog.getControlLayout(model);
+    }
+    var name = normalizeModelName(model);
+    return FALLBACK_MODELS[name] || FALLBACK_MODELS[DEFAULT_MODEL] || FALLBACK_MODELS['Mirobot'];
   }
 
   function getAxes() {
@@ -303,20 +315,61 @@
 
       _currentPort = port;
 
-      // Extract model from the selected option text, e.g. "COM3 (Mirobot)"
+      // Extract model from port map or option text, e.g. "COM3 (Mirobot)"
       _currentModel = null;
-      var opt = select.options[select.selectedIndex];
-      if (opt && opt.textContent) {
-        if (opt.textContent.indexOf('Mirobot') !== -1) _currentModel = 'Mirobot';
-        else if (opt.textContent.indexOf('MT4') !== -1) _currentModel = 'MT4';
-        else if (opt.textContent.indexOf('E4') !== -1) _currentModel = 'E4';
+      if (window.portModelMap && window.portModelMap[port]) {
+        _currentModel = normalizeModelName(window.portModelMap[port]);
+      } else {
+        var opt = select.options[select.selectedIndex];
+        if (opt && opt.textContent) {
+          if (window.RobotCatalog && typeof window.RobotCatalog.nameFromOptionText === 'function') {
+            _currentModel = window.RobotCatalog.nameFromOptionText(opt.textContent);
+          } else {
+            _currentModel = normalizeModelName(opt.textContent);
+          }
+        }
       }
       _currentModel = _currentModel || DEFAULT_MODEL;
 
       updatePortSelectColor(port);
       updateSettingsButtonState();
       buildAxisRows();
+      // Ensure firmware versions are loaded when switching among connected ports
+      ensureFirmwareVersions(port);
     });
+  }
+
+  /**
+   * Load firmware versions for *port* if missing / previously empty.
+   * @param {string} port
+   * @param {boolean} [force]
+   * @returns {Promise}
+   */
+  function ensureFirmwareVersions(port, force) {
+    if (!port || isVirtualPort(port)) return Promise.resolve(null);
+    var cached = _portFirmwareVersions[port];
+    if (!force && cached && (cached.extender || cached.robot || cached.virtual)) {
+      return Promise.resolve(cached);
+    }
+    return fetch(getServerUrl() + '/cmd/firmware-version', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: port, force: !!force })
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.success) {
+          _portFirmwareVersions[port] = {
+            extender: data.extender || null,
+            robot: data.robot || null,
+            virtual: !!data.virtual
+          };
+          if (!data.virtual) checkFirmwareUpdates(port);
+          return _portFirmwareVersions[port];
+        }
+        return null;
+      })
+      .catch(function() { return null; });
   }
 
   // Called externally after a connection is successfully established
@@ -326,10 +379,7 @@
     // Update current port/model
     _currentPort = port;
     if (model) {
-      if (model.indexOf('Mirobot') !== -1) _currentModel = 'Mirobot';
-      else if (model.indexOf('MT4') !== -1) _currentModel = 'MT4';
-      else if (model.indexOf('E4') !== -1) _currentModel = 'E4';
-      else _currentModel = DEFAULT_MODEL;
+      _currentModel = normalizeModelName(model);
     }
 
     // Sync the dropdown selection and color
@@ -357,29 +407,36 @@
       return;
     }
 
-    // Fetch firmware version once on connect (cached until disconnect)
-    if (!_portFirmwareVersions[port]) {
-      fetch(getServerUrl() + '/cmd/firmware-version', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port: port })
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (data.success) {
-          _portFirmwareVersions[port] = { extender: data.extender || null, robot: data.robot || null };
-          checkFirmwareUpdates(port);
-        }
-      })
-      .catch(function() {});
-    } else {
-      checkFirmwareUpdates(port);
-    }
+    // Fetch firmware version (retry allowed if a previous attempt was empty)
+    ensureFirmwareVersions(port).then(function(versions) {
+      if (versions) checkFirmwareUpdates(port);
+    });
   }
 
-  /** Built-in VirtualMirobot / VirtualMT4 — not flashable. */
+  /** Built-in virtual ports from robots.json — not flashable. */
   function isVirtualPort(port) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.isVirtualPort === 'function') {
+      return window.RobotCatalog.isVirtualPort(port);
+    }
     return port === 'VirtualMirobot' || port === 'VirtualMT4';
+  }
+
+  /**
+   * WiFi IP endpoint (same idea as server wifi_link.is_wifi_endpoint):
+   * IPv4 or IPv4:port. Firmware flash needs a serial path, so disable in
+   * normal mode; developer mode may still force-flash if needed.
+   */
+  function isWifiPort(port) {
+    if (!port || typeof port !== 'string') return false;
+    return /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(port.trim());
+  }
+
+  /** True when firmware upload UI should be blocked for this port. */
+  function isFirmwareUpdateBlocked(port) {
+    if (isVirtualPort(port)) return true;
+    // WiFi: block unless developer mode
+    if (isWifiPort(port) && !isDeveloperMode()) return true;
+    return false;
   }
 
   // ── Firmware update check ──
@@ -395,6 +452,11 @@
 
   function checkFirmwareUpdates(port) {
     if (isVirtualPort(port)) {
+      dismissFirmwareUpdateNotification();
+      return;
+    }
+    // No update banners over WiFi (flash is serial-only) unless developer mode
+    if (isWifiPort(port) && !isDeveloperMode()) {
       dismissFirmwareUpdateNotification();
       return;
     }
@@ -439,6 +501,7 @@
 
   function showFirmwareUpdateNotification(port, updates) {
     if (isVirtualPort(port)) return;
+    if (isWifiPort(port) && !isDeveloperMode()) return;
 
     // Build notification text
     var parts = [];
@@ -725,10 +788,22 @@
     document.getElementById('ctrl-settings-cancel').addEventListener('click', attemptCloseSettings);
     document.getElementById('ctrl-settings-save').addEventListener('click', saveRobotSettings);
     document.getElementById('ctrl-settings-fw-btn').addEventListener('click', function() {
+      if (isFirmwareUpdateBlocked(_currentPort)) {
+        alert(isWifiPort(_currentPort)
+          ? 'Firmware update is not available over WiFi. Connect via USB/serial, or enable Developer mode in Settings → Advanced.'
+          : 'Firmware update is not available for this connection.');
+        return;
+      }
       _settingsModal.style.display = 'none';
       openFirmwareModal('extender');
     });
     document.getElementById('ctrl-settings-arm-fw-btn').addEventListener('click', function() {
+      if (isFirmwareUpdateBlocked(_currentPort)) {
+        alert(isWifiPort(_currentPort)
+          ? 'Firmware update is not available over WiFi. Connect via USB/serial, or enable Developer mode in Settings → Advanced.'
+          : 'Firmware update is not available for this connection.');
+        return;
+      }
       _settingsModal.style.display = 'none';
       openFirmwareModal('robot');
     });
@@ -779,8 +854,24 @@
       armBtn.title = 'Firmware update is not available on virtual devices';
       return;
     }
-    exBtn.title = '';
-    armBtn.title = '';
+
+    // WiFi: flash needs serial — disable unless developer mode
+    if (isWifiPort(_currentPort) && !isDeveloperMode()) {
+      exBtn.disabled = true;
+      armBtn.disabled = true;
+      exBtn.textContent = '\u21E7 Extender Box';
+      armBtn.textContent = '\u21E7 Robot Arm';
+      exBtn.classList.remove('ctrl-btn-fw-force');
+      armBtn.classList.remove('ctrl-btn-fw-force');
+      exBtn.title = 'Firmware update is not available over WiFi (use USB/serial, or enable Developer mode)';
+      armBtn.title = 'Firmware update is not available over WiFi (use USB/serial, or enable Developer mode)';
+      return;
+    }
+
+    exBtn.title = isWifiPort(_currentPort)
+      ? 'Developer mode: force flash over WiFi is experimental'
+      : '';
+    armBtn.title = exBtn.title;
 
     // Normal rules:
     // - ExBox button enabled if extender firmware detected
@@ -789,7 +880,7 @@
     var armAvail = !!versions.robot && !versions.extender;
 
     if (isDeveloperMode()) {
-      // Developer mode: both always enabled (real / manual ports only)
+      // Developer mode: both always enabled (real / manual / WiFi ports)
       exBtn.disabled  = false;
       armBtn.disabled = false;
 
@@ -826,17 +917,31 @@
     var color = getBlockColorForPort(_currentPort);
     document.getElementById('ctrl-settings-color').value = color;
 
-    // Populate firmware version display and button states
-    var versions = _portFirmwareVersions[_currentPort] || {};
-    if (isVirtualPort(_currentPort) || versions.virtual) {
-      document.getElementById('ctrl-settings-ext-ver').textContent   = '—';
-      document.getElementById('ctrl-settings-robot-ver').textContent = 'virtual (not flashable)';
-    } else {
-      document.getElementById('ctrl-settings-ext-ver').textContent   = versions.extender || '—';
-      document.getElementById('ctrl-settings-robot-ver').textContent = versions.robot    || '—';
+    // Populate firmware version display and button states (refresh if missing)
+    var extEl = document.getElementById('ctrl-settings-ext-ver');
+    var robotEl = document.getElementById('ctrl-settings-robot-ver');
+    function paintFwVersions(versions) {
+      versions = versions || {};
+      if (isVirtualPort(_currentPort) || versions.virtual) {
+        if (extEl) extEl.textContent = '—';
+        if (robotEl) robotEl.textContent = 'virtual (not flashable)';
+      } else {
+        if (extEl) extEl.textContent = versions.extender || '—';
+        if (robotEl) robotEl.textContent = versions.robot || '—';
+      }
+      updateFirmwareButtons();
     }
 
-    updateFirmwareButtons();
+    var cached = _portFirmwareVersions[_currentPort] || {};
+    paintFwVersions(cached);
+    if (!isVirtualPort(_currentPort) && !cached.virtual &&
+        !(cached.extender || cached.robot)) {
+      if (extEl) extEl.textContent = '…';
+      if (robotEl) robotEl.textContent = '…';
+      ensureFirmwareVersions(_currentPort, true).then(function(v) {
+        paintFwVersions(v || _portFirmwareVersions[_currentPort] || {});
+      });
+    }
 
     _settingsModal.style.display = 'flex';
 
@@ -1220,6 +1325,12 @@
   }
 
   function openFirmwareModal(type) {
+    if (isFirmwareUpdateBlocked(_currentPort)) {
+      alert(isWifiPort(_currentPort)
+        ? 'Firmware update is not available over WiFi. Connect via USB/serial, or enable Developer mode in Settings → Advanced.'
+        : 'Firmware update is not available for this connection.');
+      return;
+    }
     if (!_firmwareModal) buildFirmwareModal();
     _flashType = (type === 'robot') ? 'robot' : 'extender';
     var cfg = _FLASH_CONFIGS[_flashType];

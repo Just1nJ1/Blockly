@@ -34,14 +34,18 @@
   /**
    * Map a constructor class / setup_robot MODEL string to a short model label.
    * e.g. 'MT4_UART' → 'MT4', 'wlkatapython.Mirobot_UART' → 'Mirobot'
+   * Prefer RobotCatalog (robots.json); keep local heuristics as fallback.
    */
   function normalizeRobotModelName(raw) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+      return window.RobotCatalog.normalizeModelName(raw);
+    }
     if (!raw) return null;
     var s = String(raw).replace(/^wlkatapython\./i, '').trim();
     if (!s) return null;
     if (/MT4/i.test(s)) return 'MT4';
     if (/\bE4\b/i.test(s) || /^E4/i.test(s)) return 'E4';
-    if (/Haro/i.test(s)) return 'Haro380';
+    if (/Haro/i.test(s)) return 'MT4';
     if (/Mirobot/i.test(s)) return 'Mirobot';
     // Generic: strip common suffixes
     s = s.replace(/_UART$/i, '').replace(/_USB$/i, '');

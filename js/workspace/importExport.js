@@ -1133,12 +1133,18 @@ function applyPortMappingToXml(xml, mapping) {
  */
 function _modelDisplayName(modelValue) {
   if (!modelValue) return 'Unknown';
+  if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+    return window.RobotCatalog.normalizeModelName(modelValue) || 'Unknown';
+  }
+  if (typeof window.normalizeRobotModelName === 'function') {
+    return window.normalizeRobotModelName(modelValue) || 'Unknown';
+  }
   return String(modelValue).replace(/_UART$/i, '').replace(/_USB$/i, '');
 }
 
 /**
  * Available serial ports for the import mapping dialog.
- * Prefer live detected ports (includes VirtualMirobot / VirtualMT4).
+ * Prefer live detected ports (includes virtual ports from robots.json).
  * @returns {Array<{port:string, label:string, model:string, modelValue:string}>}
  */
 function getBlocklyImportAvailablePorts() {
@@ -1168,9 +1174,18 @@ function getBlocklyImportAvailablePorts() {
     }
   }
 
-  // Always include built-in virtual devices even if detector not ready
-  add('VirtualMirobot', 'VirtualMirobot (Mirobot)', 'Mirobot_UART');
-  add('VirtualMT4', 'VirtualMT4 (MT4)', 'MT4_UART');
+  // Always include built-in virtual devices from catalog even if detector not ready
+  if (window.RobotCatalog && typeof window.RobotCatalog.getVirtualDeviceEntries === 'function') {
+    const entries = window.RobotCatalog.getVirtualDeviceEntries();
+    const map = window.RobotCatalog.getVirtualPortModelMap();
+    for (let v = 0; v < entries.length; v++) {
+      const d = entries[v];
+      add(d.port, d.port + ' (' + d.model + ')', map[d.port] || (d.model + '_UART'));
+    }
+  } else {
+    add('VirtualMirobot', 'VirtualMirobot (Mirobot)', 'Mirobot_UART');
+    add('VirtualMT4', 'VirtualMT4 (MT4)', 'MT4_UART');
+  }
 
   // Also scrape command/teach/control selects
   const selectIds = ['command-port-select', 'teach-port-select', 'ctrl-port-select'];

@@ -43,10 +43,15 @@ function saveFunction(procBlock) {
 
 /**
  * Delete a saved function.
- * @param {string} wsPath - workspace folder path
+ * @param {string} wsPath - workspace folder path (extension sources are ignored)
  * @param {string} funcName
  */
 function deleteSavedFunction(wsPath, funcName) {
+  if (typeof isExtensionFunctionSource === 'function' &&
+      isExtensionFunctionSource(wsPath)) {
+    console.warn('[SavedFunctions] Cannot delete extension-bundled function:', funcName);
+    return;
+  }
   deleteFunctionFromWorkspace(wsPath, funcName);
   renderSavedFunctionsList();
 }
@@ -283,21 +288,45 @@ function _insertFunctionBlock(entry, overrideName) {
 }
 
 /**
+ * Resolve a saved-function entry from a workspace path or extension source key.
+ * @param {string} sourceKey - workspace folder path or "extension:<name>"
+ * @param {string} funcName
+ * @returns {object|null}
+ */
+function _resolveSavedFunctionEntry(sourceKey, funcName) {
+  if (!sourceKey || !funcName) return null;
+
+  if (typeof isExtensionFunctionSource === 'function' &&
+      isExtensionFunctionSource(sourceKey)) {
+    if (typeof getExtensionSavedFunction === 'function') {
+      return getExtensionSavedFunction(sourceKey, funcName);
+    }
+    return null;
+  }
+
+  if (typeof listFunctionsInWorkspace !== 'function') return null;
+  var funcs = listFunctionsInWorkspace(sourceKey);
+  for (var i = 0; i < funcs.length; i++) {
+    if (funcs[i].name === funcName) return funcs[i];
+  }
+  return null;
+}
+
+/**
  * Load a saved function into the Blockly workspace.
  * If a function with the same name already exists, shows a conflict dialog.
- * @param {string} wsPath - workspace folder path
+ * @param {string} wsPath - workspace folder path, or "extension:<name>"
  * @param {string} funcName
  */
 async function loadSavedFunction(wsPath, funcName) {
   var workspace = getWorkspace ? getWorkspace() : null;
   if (!workspace) return;
 
-  var funcs = listFunctionsInWorkspace(wsPath);
-  var entry = null;
-  for (var i = 0; i < funcs.length; i++) {
-    if (funcs[i].name === funcName) { entry = funcs[i]; break; }
+  var entry = _resolveSavedFunctionEntry(wsPath, funcName);
+  if (!entry) {
+    console.warn('[SavedFunctions] Function not found:', funcName, 'from', wsPath);
+    return;
   }
-  if (!entry) return;
 
   // Check for name conflict
   var existingNames = _getExistingProcedureNames(workspace);
@@ -329,6 +358,34 @@ async function loadSavedFunction(wsPath, funcName) {
   }
 }
 
+/**
+ * Merge workspace libraries + extension-bundled functions.
+ * @returns {object} { displayName: { path, funcs, readOnly?, isExtension? }, ... }
+ */
+function _collectAllFunctionLibraries() {
+  var allFuncs = {};
+  if (typeof listAllSavedFunctions === 'function') {
+    allFuncs = listAllSavedFunctions() || {};
+  }
+
+  if (typeof listExtensionSavedFunctions === 'function') {
+    var extLibs = listExtensionSavedFunctions() || {};
+    var extKeys = Object.keys(extLibs);
+    for (var i = 0; i < extKeys.length; i++) {
+      var key = extKeys[i];
+      var info = extLibs[key];
+      // Avoid overwriting a workspace group with the same display name
+      var finalKey = key;
+      if (allFuncs[finalKey]) {
+        finalKey = key + ' (extension)';
+      }
+      allFuncs[finalKey] = info;
+    }
+  }
+
+  return allFuncs;
+}
+
 // ── UI Rendering ────────────────────────────────────────────────
 
 function renderSavedFunctionsList() {
@@ -336,8 +393,8 @@ function renderSavedFunctionsList() {
   if (!container) return;
   container.innerHTML = '';
 
-  var allFuncs = listAllSavedFunctions();
-  // allFuncs = { displayName: { path: wsPath, funcs: [entries] }, ... }
+  var allFuncs = _collectAllFunctionLibraries();
+  // allFuncs = { displayName: { path, funcs, readOnly?, isExtension? }, ... }
   var wsNames = Object.keys(allFuncs);
   var currentWs = getCurrentWorkspaceName ? getCurrentWorkspaceName() : null;
 
@@ -351,10 +408,15 @@ function renderSavedFunctionsList() {
     return;
   }
 
-  // Sort: current workspace first, then alphabetical
+  // Sort: current workspace first, other workspaces A–Z, then extensions A–Z
   wsNames.sort(function(a, b) {
+    var aInfo = allFuncs[a] || {};
+    var bInfo = allFuncs[b] || {};
+    var aExt = !!aInfo.isExtension;
+    var bExt = !!bInfo.isExtension;
     if (a === currentWs) return -1;
     if (b === currentWs) return 1;
+    if (aExt !== bExt) return aExt ? 1 : -1;
     return a.localeCompare(b);
   });
 
@@ -362,20 +424,25 @@ function renderSavedFunctionsList() {
     var wsName = wsNames[w];
     var wsInfo = allFuncs[wsName];
     var wsPath = wsInfo.path;
-    var funcs = wsInfo.funcs;
-    var isCurrent = wsName === currentWs;
+    var funcs = wsInfo.funcs || [];
+    var isCurrent = !wsInfo.isExtension && wsName === currentWs;
+    var isExt = !!wsInfo.isExtension;
+    var readOnly = !!wsInfo.readOnly || isExt;
     var isCollapsed = !!_collapsedGroups[wsName];
 
     var group = document.createElement('div');
-    group.className = 'saved-func-group';
+    group.className = 'saved-func-group' + (isExt ? ' extension-lib' : '');
 
     // Group header (clickable to fold/expand)
     var header = document.createElement('div');
-    header.className = 'saved-func-group-header' + (isCurrent ? ' current' : '');
+    header.className = 'saved-func-group-header' +
+      (isCurrent ? ' current' : '') +
+      (isExt ? ' extension' : '');
     header.innerHTML =
       '<span class="group-toggle">' + (isCollapsed ? '\u25B6' : '\u25BC') + '</span>' +
       '<span class="group-name">' + _escHtml(wsName) + '</span>' +
       (isCurrent ? '<span class="group-badge">current</span>' : '') +
+      (isExt ? '<span class="group-badge group-badge-ext">extension</span>' : '') +
       '<span class="group-count">' + funcs.length + '</span>';
 
     (function(name) {
@@ -391,7 +458,7 @@ function renderSavedFunctionsList() {
       var cardsDiv = document.createElement('div');
       cardsDiv.className = 'saved-func-group-cards';
       for (var f = 0; f < funcs.length; f++) {
-        cardsDiv.appendChild(_createFunctionCard(wsPath, funcs[f]));
+        cardsDiv.appendChild(_createFunctionCard(wsPath, funcs[f], readOnly));
       }
       group.appendChild(cardsDiv);
     }
@@ -400,9 +467,9 @@ function renderSavedFunctionsList() {
   }
 }
 
-function _createFunctionCard(wsPath, entry) {
+function _createFunctionCard(wsPath, entry, readOnly) {
   var card = document.createElement('div');
-  card.className = 'saved-func-card';
+  card.className = 'saved-func-card' + (readOnly ? ' readonly' : '');
 
   var nameEl = document.createElement('div');
   nameEl.className = 'func-name';
@@ -428,17 +495,19 @@ function _createFunctionCard(wsPath, entry) {
   };
   actions.appendChild(loadBtn);
 
-  var deleteBtn = document.createElement('button');
-  deleteBtn.className = 'delete-btn';
-  deleteBtn.textContent = '\u2715';
-  deleteBtn.title = 'Delete from library';
-  deleteBtn.onclick = function(e) {
-    e.stopPropagation();
-    if (confirm('Delete saved function "' + entry.name + '"?')) {
-      deleteSavedFunction(wsPath, entry.name);
-    }
-  };
-  actions.appendChild(deleteBtn);
+  if (!readOnly) {
+    var deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.textContent = '\u2715';
+    deleteBtn.title = 'Delete from library';
+    deleteBtn.onclick = function(e) {
+      e.stopPropagation();
+      if (confirm('Delete saved function "' + entry.name + '"?')) {
+        deleteSavedFunction(wsPath, entry.name);
+      }
+    };
+    actions.appendChild(deleteBtn);
+  }
 
   card.appendChild(actions);
 

@@ -1105,12 +1105,21 @@ button:disabled {
   fill: var(--debug-bg-tint) !important;
 }
 
-/* Debug toolbar buttons — same size/style as other toolbar buttons */
+/* Debug toolbar buttons — same size/style as other toolbar buttons.
+   Hidden with display:none so they collapse; when stepping, the Run/Step/Sel
+   group is hidden instead so Clear/Export/Import keep their positions. */
 #toolbar .debug-btn.toolbar-btn {
   display: none;
 }
 #toolbar .debug-btn.toolbar-btn.visible {
   display: inline-flex;
+}
+/* While stepping, hide the idle playback trio so Next/Cont/Stop take that slot.
+   G-code export stays visible but is disabled by JS (file-side action). */
+#toolbar.step-mode #runBtn,
+#toolbar.step-mode #debugBtn,
+#toolbar.step-mode #runSelectedBtn {
+  display: none;
 }
 
 /* Debug variables panel */
@@ -1300,6 +1309,13 @@ button:disabled {
   padding: 1px 6px;
   border-radius: 8px;
   font-weight: 500;
+}
+.saved-func-group-header .group-badge-ext {
+  background: var(--text-faint, #888);
+}
+.saved-func-group-header.extension {
+  border-left: 2px solid var(--text-faint, #888);
+  padding-left: 6px;
 }
 .saved-func-group-header .group-count {
   font-size: 11px;

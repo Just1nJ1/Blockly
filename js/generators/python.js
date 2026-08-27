@@ -509,6 +509,19 @@ function initPythonGenerator() {
   generatorTarget['library_function_call'] = generatorTarget['function_call'];
 
   /**
+   * Generator for library_constant block.
+   * Produces the fully-qualified name, e.g. cv2.COLOR_BGR2GRAY
+   */
+  generatorTarget['library_constant'] = function(block) {
+    var name = block.getFieldValue('CONST_NAME') || '';
+    if (!name || name === '...') {
+      return ['None', Blockly.Python.ORDER_ATOMIC];
+    }
+    // Identifier path only (module.ATTR) — no quotes
+    return [name, Blockly.Python.ORDER_MEMBER];
+  };
+
+  /**
    * Generator for instance_function_call block.
    * Produces: instance.method(arg1, arg2, ...)
    */

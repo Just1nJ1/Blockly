@@ -26,28 +26,16 @@ _SDK_PATH = os.path.abspath(_SDK_PATH)
 if _SDK_PATH not in sys.path:
     sys.path.insert(0, _SDK_PATH)
 
-# Port name → model name (matches robots.json "name")
-VIRTUAL_DEVICES = (
-    {
-        "port": "VirtualMirobot",
-        "model": "Mirobot",
-        "description": "Virtual Mirobot (SDK simulator)",
-    },
-    {
-        "port": "VirtualMT4",
-        "model": "MT4",
-        "description": "Virtual MT4 (SDK simulator)",
-    },
+from .robots import (
+    get_sim_key,
+    get_virtual_devices,
+    get_virtual_port_set,
+    DEFAULT_MODEL_NAME,
 )
 
-_VIRTUAL_PORT_SET = {d["port"] for d in VIRTUAL_DEVICES}
-
-# StudioX model name → create_simulator() key
-_MODEL_TO_SIM = {
-    "Mirobot": "mirobot",
-    "MT4": "mt4",
-    "E4": "e4",
-}
+# Derived from robots.json (virtualPort entries)
+VIRTUAL_DEVICES = tuple(get_virtual_devices())
+_VIRTUAL_PORT_SET = get_virtual_port_set()
 
 # Keep one running sim per logical port so reconnect reuses cleanly
 _sessions: Dict[str, Tuple[Any, Any]] = {}  # port -> (sim, mock)
@@ -59,8 +47,8 @@ def is_virtual_port(port: str) -> bool:
 
 
 def virtual_device_entries():
-    """Static list used by the detector to always advertise virtual ports."""
-    return [dict(d) for d in VIRTUAL_DEVICES]
+    """List used by the detector to always advertise virtual ports (from robots.json)."""
+    return get_virtual_devices()
 
 
 def _stop_session(port: str) -> None:
@@ -85,7 +73,7 @@ def _start_session(port: str, model: str, baudrate: int, timeout: float):
     """Start SDK simulator + MockSerial for this logical port."""
     from wlkatapython.simulator import create_simulator, MockSerial
 
-    sim_key = _MODEL_TO_SIM.get(model or "Mirobot", "mirobot")
+    sim_key = get_sim_key(model or DEFAULT_MODEL_NAME)
     sim = create_simulator(sim_key, address=-1)
 
     # StudioX enables auto-report with $40=1 on connect; library sim needs a
@@ -133,9 +121,9 @@ class VirtualSerial:
     I/O goes to the simulator's MockSerial / PTY.
     """
 
-    def __init__(self, port, model="Mirobot", baudrate=115200, timeout=0.1):
+    def __init__(self, port, model=None, baudrate=115200, timeout=0.1):
         self.port = port
-        self.model = model or "Mirobot"
+        self.model = model or DEFAULT_MODEL_NAME
         self.baudrate = baudrate
         self._timeout = timeout if timeout is not None else 0.1
         self._sim = None

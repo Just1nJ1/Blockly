@@ -1,14 +1,182 @@
 [
   {
-    "name": "Mirobot",
-    "fwPrefix": ["Mirobot"],
-    "blocklyValue": "Mirobot_UART",
-    "label": "Mirobot"
+    "id": "Mirobot",
+    "identity": {
+      "name": "Mirobot",
+      "label": "Mirobot",
+      "aliases": ["Mirobot_UART", "mirobot"]
+    },
+    "library": {
+      "sdkClass": "Mirobot_UART",
+      "simKey": "mirobot"
+    },
+    "firmware": {
+      "fwPrefix": ["Mirobot"],
+      "assetPrefix": "Mirobot"
+    },
+    "blockly": {
+      "value": "Mirobot_UART",
+      "virtualPort": "VirtualMirobot",
+      "virtualDescription": "Virtual Mirobot (SDK simulator)"
+    },
+    "kinematics": {
+      "axisCount": 6,
+      "joints": [
+        { "label": "Joint 1", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Joint 2", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Joint 3", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "Joint 4", "statusKey": "A", "sdkParam": "a" },
+        { "label": "Joint 5", "statusKey": "B", "sdkParam": "b" },
+        { "label": "Joint 6", "statusKey": "C", "sdkParam": "c" }
+      ],
+      "coords": [
+        { "label": "X", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Y", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Z", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "RX", "statusKey": "Rx", "sdkParam": "a" },
+        { "label": "RY", "statusKey": "Ry", "sdkParam": "b" },
+        { "label": "RZ", "statusKey": "Rz", "sdkParam": "c" }
+      ]
+    },
+    "viewer": {
+      "id": "mirobot",
+      "urdf": "./resources/wlkata_arm_virtual-reality/urdf/wlkata_mirobot_description.urdf",
+      "meshBasePath": "./resources/wlkata_arm_virtual-reality/",
+      "tcpOffset": [0, 0, 0.02428]
+    }
   },
   {
-    "name": "MT4",
-    "fwPrefix": ["E4", "MT4"],
-    "blocklyValue": "MT4_UART",
-    "label": "E4 / MT4"
+    "id": "MT4",
+    "identity": {
+      "name": "MT4",
+      "label": "E4 / MT4",
+      "aliases": ["MT4_UART", "mt4"]
+    },
+    "library": {
+      "sdkClass": "MT4_UART",
+      "simKey": "mt4"
+    },
+    "firmware": {
+      "fwPrefix": ["E4", "MT4"],
+      "assetPrefix": "MT4"
+    },
+    "blockly": {
+      "value": "MT4_UART",
+      "virtualPort": "VirtualMT4",
+      "virtualDescription": "Virtual MT4 (SDK simulator)"
+    },
+    "kinematics": {
+      "axisCount": 4,
+      "joints": [
+        { "label": "Joint 1", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Joint 2", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Joint 3", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "Joint 4", "statusKey": "A", "sdkParam": "a" }
+      ],
+      "coords": [
+        { "label": "X", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Y", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Z", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "RX", "statusKey": "Rx", "sdkParam": "a" }
+      ]
+    },
+    "viewer": {
+      "id": "haro380",
+      "urdf": "./resources/wlkata_arm_virtual-reality/urdf/wlkata_haro380_description.urdf",
+      "meshBasePath": "./resources/wlkata_arm_virtual-reality/",
+      "tcpOffset": [0, 0, -0.041]
+    }
+  },
+  {
+    "id": "Haro380",
+    "identity": {
+      "name": "Haro380",
+      "label": "Haro380",
+      "aliases": ["Harobot_UART", "haro380", "harobot"]
+    },
+    "library": {
+      "sdkClass": "Harobot_UART",
+      "simKey": "harobot"
+    },
+    "firmware": {
+      "fwPrefix": ["Harobot"],
+      "assetPrefix": "Harobot"
+    },
+    "blockly": {
+      "value": "Harobot_UART",
+      "virtualPort": null,
+      "virtualDescription": null
+    },
+    "kinematics": {
+      "axisCount": 6,
+      "joints": [
+        { "label": "Joint 1", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Joint 2", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Joint 3", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "Joint 4", "statusKey": "A", "sdkParam": "a" },
+        { "label": "Joint 5", "statusKey": "B", "sdkParam": "b" },
+        { "label": "Joint 6", "statusKey": "C", "sdkParam": "c" }
+      ],
+      "coords": [
+        { "label": "X", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Y", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Z", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "RX", "statusKey": "Rx", "sdkParam": "a" },
+        { "label": "RY", "statusKey": "Ry", "sdkParam": "b" },
+        { "label": "RZ", "statusKey": "Rz", "sdkParam": "c" }
+      ]
+    },
+    "viewer": {
+      "id": "haro380",
+      "urdf": "./resources/wlkata_arm_virtual-reality/urdf/wlkata_haro380_description.urdf",
+      "meshBasePath": "./resources/wlkata_arm_virtual-reality/",
+      "tcpOffset": [0, 0, -0.041]
+    }
+  },
+  {
+    "id": "Miromax",
+    "identity": {
+      "name": "Miromax",
+      "label": "Miromax",
+      "aliases": ["Miromax_UART", "miromax"]
+    },
+    "library": {
+      "sdkClass": "Miromax_UART",
+      "simKey": "miromax"
+    },
+    "firmware": {
+      "fwPrefix": ["Miromax"],
+      "assetPrefix": "Miromax"
+    },
+    "blockly": {
+      "value": "Miromax_UART",
+      "virtualPort": null,
+      "virtualDescription": null
+    },
+    "kinematics": {
+      "axisCount": 6,
+      "joints": [
+        { "label": "Joint 1", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Joint 2", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Joint 3", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "Joint 4", "statusKey": "A", "sdkParam": "a" },
+        { "label": "Joint 5", "statusKey": "B", "sdkParam": "b" },
+        { "label": "Joint 6", "statusKey": "C", "sdkParam": "c" }
+      ],
+      "coords": [
+        { "label": "X", "statusKey": "X", "sdkParam": "x" },
+        { "label": "Y", "statusKey": "Y", "sdkParam": "y" },
+        { "label": "Z", "statusKey": "Z", "sdkParam": "z" },
+        { "label": "RX", "statusKey": "Rx", "sdkParam": "a" },
+        { "label": "RY", "statusKey": "Ry", "sdkParam": "b" },
+        { "label": "RZ", "statusKey": "Rz", "sdkParam": "c" }
+      ]
+    },
+    "viewer": {
+      "id": "miromax",
+      "urdf": "./resources/wlkata_arm_virtual-reality/urdf/wlkata_miromax_description.urdf",
+      "meshBasePath": "./resources/wlkata_arm_virtual-reality/",
+      "tcpOffset": [0, 0, -0.0486]
+    }
   }
 ]

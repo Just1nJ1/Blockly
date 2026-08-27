@@ -43,12 +43,12 @@ _probing = {}
 # Manually added ports — protected from eviction and unregistration
 _manual_ports = set()
 
-# Built-in virtual ports (always available, never evicted)
+# Built-in virtual ports from robots.json (always available, never evicted)
 _virtual_ports = {d['port'] for d in VIRTUAL_DEVICES}
 
 
 def _seed_virtual_ports():
-    """Ensure VirtualMirobot / VirtualMT4 exist in the cache permanently."""
+    """Ensure virtual ports from robots.json exist in the cache permanently."""
     for d in virtual_device_entries():
         port = d['port']
         if port not in _cache or _cache[port].get('model') is None:
@@ -64,7 +64,13 @@ _seed_virtual_ports()
 
 def add_manual_port(port, model, description=''):
     """Register a manually added port. It gets cached and connected
-    through the same pipeline as auto-detected ports."""
+    through the same pipeline as auto-detected ports.
+
+    WiFi endpoints fail loudly (unreachable IP is not kept).
+    Serial / named paths always stay registered: a missing device file
+    opens as a ghost connection so TX can still be sent (legacy manual-
+    port behaviour, e.g. port name ``test``).
+    """
     from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
 
     if is_wifi_endpoint(port):
@@ -87,23 +93,29 @@ def add_manual_port(port, model, description=''):
                 )
         return port
 
-    _cache[port] = {'model': model, 'description': description or '(manual)'}
+    is_wifi = is_wifi_endpoint(port)
+    _cache[port] = {
+        'model': model,
+        'description': description or ('(wifi)' if is_wifi else '(manual)'),
+    }
     _manual_ports.add(port)
     _missing.discard(port)
     mgr = SerialManager.get_instance()
-    # Always try to connect so unreachable WiFi fails loudly at add time
     result = mgr.ensure_connected(port, model=model)
     if not result.get('success'):
-        # Roll back registration so a dead IP does not stick in the list
-        _manual_ports.discard(port)
-        _cache.pop(port, None)
-        try:
-            mgr.unregister_port(port)
-        except Exception:
-            pass
-        raise ConnectionError(
-            result.get('error') or f'Failed to connect to {port}'
-        )
+        if is_wifi:
+            # Unreachable WiFi should not stick in the port list
+            _manual_ports.discard(port)
+            _cache.pop(port, None)
+            try:
+                mgr.unregister_port(port)
+            except Exception:
+                pass
+            raise ConnectionError(
+                result.get('error') or f'Failed to connect to {port}'
+            )
+        # Serial / arbitrary names: keep registration even if open failed
+        # (ghost path usually makes connect succeed; this is a safety net).
     return port
 
 
@@ -202,7 +214,7 @@ def detect_model(port, keep_open=False, cancel_event=None):
 
     Args:
         port (str): Serial path (e.g. 'COM3') or IPv4 (e.g. '192.168.1.10'
-                    or '192.168.1.10:8234').
+                    or '192.168.1.10:7676').
         keep_open (bool): If True, return the open connection along
                           with the model (for reuse by SerialManager).
         cancel_event (threading.Event): If set, abort the probe.

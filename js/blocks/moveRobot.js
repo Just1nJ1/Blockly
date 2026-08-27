@@ -303,41 +303,71 @@ function initMoveRobotBlocks() {
       var field = blocks[i].getField('VARIABLE');
       if (field && field.getVariable() && field.getVariable().getId() === varId) {
         var modelValue = blocks[i].getFieldValue('MODEL');
-        if (modelValue && modelValue.indexOf('MT4') !== -1) return 'MT4';
-        if (modelValue && modelValue.indexOf('E4') !== -1) return 'E4';
-        return 'Mirobot';
+        if (typeof normalizeRobotModelName === 'function') {
+          return normalizeRobotModelName(modelValue);
+        }
+        if (window.RobotCatalog) {
+          return window.RobotCatalog.normalizeModelName(modelValue);
+        }
+        return modelValue || null;
       }
     }
     return null;
   }
 
   function getAxisCountForModel(model) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.getAxisCount === 'function') {
+      return window.RobotCatalog.getAxisCount(model);
+    }
     return (model === 'MT4' || model === 'E4') ? 4 : 6;
   }
 
   function rebuildAxes(block, labels, keys) {
+    // When switching 6↔4 axes (e.g. Mirobot var remapped onto MT4), keep
+    // X/Y/Z/A values and only drop B/C — do not zero the remaining axes.
     var savedBlocks = {};
+    var savedShadowValues = {};
     for (var i = 0; i < ALL_AXIS_KEYS.length; i++) {
-      var inp = block.getInput('AXIS_' + ALL_AXIS_KEYS[i]);
+      var key = ALL_AXIS_KEYS[i];
+      var inp = block.getInput('AXIS_' + key);
       if (inp && inp.connection && inp.connection.targetBlock()) {
-        // Keep real (non-shadow) blocks; shadows will be recreated
         var tb = inp.connection.targetBlock();
         if (tb && !tb.isShadow()) {
-          savedBlocks[ALL_AXIS_KEYS[i]] = tb;
+          // Real plugged-in number/expression blocks
+          savedBlocks[key] = tb;
           inp.connection.disconnect();
+        } else if (tb) {
+          // Default math_number shadows — preserve NUM for axes we keep
+          var num = tb.getFieldValue('NUM');
+          if (num !== null && num !== undefined && num !== '') {
+            savedShadowValues[key] = num;
+          }
         }
       }
-      if (inp) block.removeInput('AXIS_' + ALL_AXIS_KEYS[i]);
+      if (inp) block.removeInput('AXIS_' + key);
     }
     for (var j = 0; j < keys.length; j++) {
-      var newInp = block.appendValueInput('AXIS_' + keys[j])
+      var keepKey = keys[j];
+      var newInp = block.appendValueInput('AXIS_' + keepKey)
           .setCheck('Number')
           .appendField(labels[j]);
-      if (savedBlocks[keys[j]] && newInp.connection) {
-        newInp.connection.connect(savedBlocks[keys[j]].outputConnection);
+      if (savedBlocks[keepKey] && newInp.connection) {
+        newInp.connection.connect(savedBlocks[keepKey].outputConnection);
+        delete savedBlocks[keepKey];
       } else if (newInp.connection) {
-        setNumberShadow(newInp.connection, 0);
+        var defVal = 0;
+        if (Object.prototype.hasOwnProperty.call(savedShadowValues, keepKey)) {
+          defVal = savedShadowValues[keepKey];
+        }
+        setNumberShadow(newInp.connection, defVal);
       }
+    }
+    // Dispose real blocks that belonged to dropped axes (B/C on 6→4)
+    for (var dropKey in savedBlocks) {
+      if (!Object.prototype.hasOwnProperty.call(savedBlocks, dropKey)) continue;
+      try {
+        savedBlocks[dropKey].dispose(false);
+      } catch (eDisp) { /* ignore */ }
     }
   }
 
@@ -730,10 +760,15 @@ function updateRobotBlockColors() {
 
 /**
  * Map a setup_robot MODEL / constructor class name to a short label.
- * e.g. 'MT4_UART' → 'MT4', 'wlkatapython.Harobot_UART' → 'Haro380'
+ * e.g. 'MT4_UART' → 'MT4', 'wlkatapython.Harobot_UART' → 'MT4'
+ * Delegates to RobotCatalog when available.
  */
 function normalizeRobotModelName(raw) {
-  if (typeof window.normalizeRobotModelName === 'function') {
+  if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+    return window.RobotCatalog.normalizeModelName(raw);
+  }
+  if (typeof window.normalizeRobotModelName === 'function' &&
+      window.normalizeRobotModelName !== normalizeRobotModelName) {
     return window.normalizeRobotModelName(raw);
   }
   if (!raw) return null;
@@ -741,7 +776,7 @@ function normalizeRobotModelName(raw) {
   if (!s) return null;
   if (/MT4/i.test(s)) return 'MT4';
   if (/\bE4\b/i.test(s) || /^E4/i.test(s)) return 'E4';
-  if (/Haro/i.test(s)) return 'Haro380';
+  if (/Haro/i.test(s)) return 'MT4';
   if (/Mirobot/i.test(s)) return 'Mirobot';
   s = s.replace(/_UART$/i, '').replace(/_USB$/i, '');
   return s || null;
@@ -862,12 +897,15 @@ function getRobotModelForVarName(varName) {
 
 /**
  * Map a logical robot model name to 3D viewer assets (URDF + TCP offset).
- * MT4 / E4 share the Haro380 meshes from wlkata_arm_virtual-reality.
+ * Prefer RobotCatalog (robots.json viewer block); keep inline fallback.
  *
  * @param {string|null} model — 'Mirobot' | 'MT4' | 'E4' | ...
  * @returns {{id:string, label:string, urdf:string, meshBasePath:string, tcpOffset:number[]}}
  */
 function resolveRobotViewerConfig(model) {
+  if (window.RobotCatalog && typeof window.RobotCatalog.resolveViewerConfig === 'function') {
+    return window.RobotCatalog.resolveViewerConfig(model);
+  }
   var BASE = './resources/wlkata_arm_virtual-reality/';
   var key = model || 'Mirobot';
   if (key === 'MT4' || key === 'E4' || key === 'Haro380' || key === 'haro380') {
@@ -889,7 +927,19 @@ function resolveRobotViewerConfig(model) {
 }
 
 window.getRobotModelForVarName = getRobotModelForVarName;
-window.resolveRobotViewerConfig = resolveRobotViewerConfig;
+// Prefer catalog globals if already set by robotCatalog.js; else export local
+if (typeof window.normalizeRobotModelName !== 'function') {
+  window.normalizeRobotModelName = normalizeRobotModelName;
+}
+if (typeof window.resolveRobotViewerConfig !== 'function') {
+  window.resolveRobotViewerConfig = resolveRobotViewerConfig;
+} else {
+  // Keep name available but catalog owns the implementation
+  window.resolveRobotViewerConfig = function (model) {
+    if (window.RobotCatalog) return window.RobotCatalog.resolveViewerConfig(model);
+    return resolveRobotViewerConfig(model);
+  };
+}
 
 window.setRobotColorForVar = function(varName, color) {
   _robotVarColorMap[varName] = color;

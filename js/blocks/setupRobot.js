@@ -2,22 +2,39 @@
  * Setup Robot Block Definition
  * A built-in block that generates the boilerplate code to initialize a robot arm.
  * Produces: import wlkatapython (hoisted), variable = wlkatapython.Model('port')
+ *
+ * MODEL and offline PORT options come from RobotCatalog (robots.json).
  */
 
 /**
  * Initialize the setup_robot block.
  */
 function initSetupRobotBlock() {
+  function getModelOptions() {
+    if (window.RobotCatalog && typeof window.RobotCatalog.getSetupModelDropdownOptions === 'function') {
+      return window.RobotCatalog.getSetupModelDropdownOptions();
+    }
+    return [['Mirobot', 'Mirobot_UART'], ['E4 / MT4', 'MT4_UART']];
+  }
+
+  function getOfflinePortOptions() {
+    if (window.RobotCatalog && typeof window.RobotCatalog.getVirtualPortOptions === 'function') {
+      var opts = window.RobotCatalog.getVirtualPortOptions();
+      if (opts && opts.length) return opts;
+    }
+    return [
+      ['VirtualMirobot (Mirobot)', 'VirtualMirobot'],
+      ['VirtualMT4 (MT4)', 'VirtualMT4']
+    ];
+  }
+
   Blockly.Blocks['setup_robot'] = {
     init: function() {
       this.appendDummyInput()
           .appendField('Setup')
           .appendField(new Blockly.FieldVariable('robot'), 'VARIABLE')
           .appendField('as')
-          .appendField(new Blockly.FieldDropdown([
-            ['Mirobot', 'Mirobot_UART'],
-            ['MT4', 'MT4_UART']
-          ]), 'MODEL')
+          .appendField(new Blockly.FieldDropdown(getModelOptions), 'MODEL')
           .appendField('on')
           .appendField(new Blockly.FieldDropdown(
             this.getPortOptions
@@ -32,22 +49,14 @@ function initSetupRobotBlock() {
 
     /**
      * Dynamic dropdown generator for COM ports.
-     * Returns detected ports if available, otherwise built-in virtual devices
-     * (VirtualMirobot / VirtualMT4) so Blockly works offline.
+     * Returns detected ports if available, otherwise virtual devices from catalog.
      */
     getPortOptions: function() {
-      // If device detector has populated available ports, use those.
-      // detectedPorts is an array of [label, value] pairs,
-      // e.g. [['VirtualMirobot (Mirobot)', 'VirtualMirobot'], ['COM3 (Mirobot)', 'COM3']]
+      // detectedPorts is an array of [label, value] pairs
       if (window.detectedPorts && window.detectedPorts.length > 0) {
         return window.detectedPorts;
       }
-
-      // Offline defaults — same virtual ports the server always advertises
-      return [
-        ['VirtualMirobot (Mirobot)', 'VirtualMirobot'],
-        ['VirtualMT4 (MT4)', 'VirtualMT4']
-      ];
+      return getOfflinePortOptions();
     }
   };
 }

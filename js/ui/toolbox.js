@@ -302,14 +302,34 @@ async function syncToolboxWithImports() {
  * Load module information from the server.
  * @param {string} moduleName - The name of the module to load
  */
+/**
+ * Normalize cached module info to { functions, constants }.
+ * Supports older cache entries that stored a bare functions array.
+ */
+function normalizeModuleInfo(entry) {
+  if (!entry) return { functions: [], constants: [] };
+  if (Array.isArray(entry)) {
+    return { functions: entry, constants: [] };
+  }
+  return {
+    functions: Array.isArray(entry.functions) ? entry.functions : [],
+    constants: Array.isArray(entry.constants) ? entry.constants : []
+  };
+}
+
 async function loadModuleInfo(moduleName) {
   const moduleFunctionCache = getModuleFunctionCache ? getModuleFunctionCache() : new Map();
   const importedModules = getImportedModules ? getImportedModules() : new Set();
   const serverUrl = getServerUrl ? getServerUrl() : 'http://127.0.0.1:5080';
 
   if (moduleFunctionCache.has(moduleName)) {
-    importedModules.add(moduleName);
-    return;
+    // Re-fetch if cache is pre-constants format (array or missing constants)
+    var cached = moduleFunctionCache.get(moduleName);
+    if (!Array.isArray(cached) && cached && Array.isArray(cached.constants)) {
+      importedModules.add(moduleName);
+      return;
+    }
+    moduleFunctionCache.delete(moduleName);
   }
 
   try {
@@ -321,8 +341,13 @@ async function loadModuleInfo(moduleName) {
 
     const info = await response.json();
     if (info.success) {
-      moduleFunctionCache.set(moduleName, info.functions);
+      moduleFunctionCache.set(moduleName, {
+        functions: info.functions || [],
+        constants: info.constants || []
+      });
       importedModules.add(moduleName);
+    } else {
+      console.warn('[Import] Module ' + moduleName + ':', info.error || 'failed');
     }
   } catch (error) {
     console.error(`Error loading module ${moduleName}:`, error);
@@ -344,6 +369,9 @@ function isModuleInToolbox(moduleName) {
 
 /**
  * Update the toolbox display with current imported modules.
+ * Each module gets a category with:
+ *   - call  (library_function_call) — functions / callables
+ *   - const (library_constant)      — non-callable constants/flags
  */
 function updateToolboxDisplay() {
   const workspace = getWorkspace ? getWorkspace() : null;
@@ -355,24 +383,41 @@ function updateToolboxDisplay() {
   const toolbox = JSON.parse(JSON.stringify(workspace.initialToolbox));
 
   for (const moduleName of importedModules) {
-    const functions = moduleFunctionCache.get(moduleName);
-    if (functions) {
-      toolbox.contents.push({
-        kind: 'category',
-        name: moduleName,
-        colour: '#4B8BBE',
-        contents: [
-          {
-            kind: 'block',
-            type: 'library_function_call',
-            extraState: {
-              'func_name': functions[0],
-              'options': functions
-            }
-          }
-        ]
+    const info = normalizeModuleInfo(moduleFunctionCache.get(moduleName));
+    const functions = info.functions;
+    const constants = info.constants;
+    if (!functions.length && !constants.length) continue;
+
+    const contents = [];
+
+    if (functions.length) {
+      contents.push({
+        kind: 'block',
+        type: 'library_function_call',
+        extraState: {
+          'func_name': functions[0],
+          'options': functions
+        }
       });
     }
+
+    if (constants.length) {
+      contents.push({
+        kind: 'block',
+        type: 'library_constant',
+        extraState: {
+          'const_name': constants[0],
+          'options': constants
+        }
+      });
+    }
+
+    toolbox.contents.push({
+      kind: 'category',
+      name: moduleName,
+      colour: '#4B8BBE',
+      contents: contents
+    });
   }
 
   workspace.updateToolbox(toolbox);

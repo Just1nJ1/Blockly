@@ -294,6 +294,40 @@ class CodeExecutor:
             pass
 
     @staticmethod
+    def _import_module_resolved(module_path: str):
+        """
+        Import a module for inspect / toolbox listing.
+
+        Tries the **server process** environment first (wlkatapython, flask,
+        etc.), then temporarily adds the reserved **blockly** venv
+        site-packages and retries (opencv-python and other user packages).
+
+        Matches Run/Debug resolution so ``import cv2`` works when the package
+        is installed only in the blockly env.
+        """
+        import importlib
+
+        try:
+            return importlib.import_module(module_path)
+        except ImportError:
+            pass
+
+        site = CodeExecutor._prepare_blockly_packages()
+        try:
+            importlib.invalidate_caches()
+            # Drop failed/partial entries for this module so retry can load
+            # from the blockly site-packages path.
+            for key in list(sys.modules.keys()):
+                if key == module_path or key.startswith(module_path + '.'):
+                    # Only purge if the module failed to fully load
+                    mod = sys.modules.get(key)
+                    if mod is None or getattr(mod, '__file__', None) is None:
+                        sys.modules.pop(key, None)
+            return importlib.import_module(module_path)
+        finally:
+            CodeExecutor._cleanup_blockly_packages(site)
+
+    @staticmethod
     def _prepare_serial_proxy(safe_globals: dict) -> None:
         mgr = SerialManager.get_instance()
         if not mgr.connected:

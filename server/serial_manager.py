@@ -27,10 +27,88 @@ if _SDK_PATH not in sys.path:
 
 import wlkatapython
 
+from .robots import get_sdk_class_name, normalize_model_name, DEFAULT_MODEL_NAME
+
 try:
     from wlkatapython.transports.base import Transport as _WlkataTransport
 except ImportError:  # pragma: no cover
     _WlkataTransport = object
+
+
+class GhostSerial:
+    """pyserial-compatible stand-in when the device path is not present.
+
+    Manual ports (e.g. ``test``) can still be "connected": TX is accepted and
+    logged via PortConnection, RX always returns empty. Useful for dry wiring
+    and command-path testing without a real adapter.
+    """
+
+    def __init__(self, port, baudrate=115200, timeout=0.1):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.is_open = True
+        self._ghost = True
+
+    def write(self, data):
+        if not self.is_open:
+            raise serial.SerialException('Ghost serial is closed')
+        if data is None:
+            return 0
+        if isinstance(data, (bytes, bytearray)):
+            return len(data)
+        return len(str(data).encode('utf-8'))
+
+    def read(self, size=1):
+        return b''
+
+    def readline(self, size=-1):
+        return b''
+
+    def flush(self):
+        return None
+
+    def flushInput(self):
+        return None
+
+    def flushOutput(self):
+        return None
+
+    def reset_input_buffer(self):
+        return None
+
+    def reset_output_buffer(self):
+        return None
+
+    @property
+    def in_waiting(self):
+        return 0
+
+    def close(self):
+        self.is_open = False
+
+    def open(self):
+        self.is_open = True
+
+
+def _is_missing_serial_device_error(exc):
+    """True when pyserial failed because the path/device does not exist."""
+    if isinstance(exc, FileNotFoundError):
+        return True
+    if isinstance(exc, OSError) and getattr(exc, 'errno', None) == 2:
+        return True
+    msg = str(exc).lower()
+    markers = (
+        'no such file',
+        'file not found',
+        'could not open port',
+        'port not found',
+        'cannot find the file',
+        'the system cannot find',
+        'errno 2',
+        '[errno 2]',
+    )
+    return any(m in msg for m in markers)
 
 # ── Session communication log (raw TX/RX for debugging) ──────────
 # Written under ~/.wlkata-studiox/logs/comm-YYYYMMDD-HHMMSS.log
@@ -90,12 +168,14 @@ def write_comm_log(port, direction, text, source=None):
     except Exception:
         pass
 
-# Map model names to SDK classes
-_MODEL_CLASSES = {
-    'Mirobot': wlkatapython.Mirobot_UART,
-    'MT4': wlkatapython.MT4_UART,
-    'E4': wlkatapython.E4_UART,
-}
+
+def _resolve_sdk_class(model):
+    """Resolve wlkatapython UART class from robots.json (via sdkClass)."""
+    class_name = get_sdk_class_name(model)
+    cls = getattr(wlkatapython, class_name, None)
+    if cls is None:
+        cls = getattr(wlkatapython, 'Mirobot_UART', None)
+    return cls
 
 # Regex for the status line auto-reported by the robot after $40=1
 _STATUS_RE = re.compile(
@@ -117,7 +197,7 @@ class PortConnection:
 
     def __init__(self, port, model=None, baudrate=115200):
         self.port = port
-        self.model = model
+        self.model = normalize_model_name(model) if model else model
         self.baudrate = baudrate
 
         self._serial = None
@@ -145,8 +225,10 @@ class PortConnection:
         # SDK robot instance (initialized on connect)
         self.robot = None
 
-        # Silent mode: when True, add_history is suppressed
-        self._silent = False
+        # Silent mode: when > 0, Command-tab history is suppressed (comm log still written).
+        # Use a nesting counter so concurrent version()/status queries cannot leave
+        # silent stuck True and hide all subsequent TX/RX in the Command tab.
+        self._silent_depth = 0
 
         # Cached status from auto-report ($40=1) or explicit ? query
         self._last_status = None
@@ -177,26 +259,57 @@ class PortConnection:
             from .virtual_serial import is_virtual_port, VirtualSerial
             from .wifi_link import is_wifi_endpoint, open_wifi_link, normalize_wifi_endpoint
 
-            # Canonicalize WiFi keys (e.g. "192.168.1.1:8234" → "192.168.1.1")
+            # Canonicalize WiFi keys (e.g. "192.168.1.1:7676" → "192.168.1.1")
             if is_wifi_endpoint(self.port):
                 self.port = normalize_wifi_endpoint(self.port)
 
-            if existing_serial and getattr(existing_serial, 'is_open', False):
+            reused = bool(
+                existing_serial and getattr(existing_serial, 'is_open', False)
+            )
+            if reused:
                 self._serial = existing_serial
                 if hasattr(self._serial, 'timeout'):
                     self._serial.timeout = 0.1
+                # Detector probe already sent $V and drained some replies.
+                # Flush residual serial bytes so the Command log does not show
+                # orphan partial version lines (e.g. only "EXbox,...") before
+                # our own $40=1 / Connected messages.
+                self._drain_serial_input()
             elif is_virtual_port(self.port):
                 self._serial = VirtualSerial(
-                    self.port, model=self.model or 'Mirobot',
+                    self.port, model=self.model or DEFAULT_MODEL_NAME,
                     baudrate=self.baudrate, timeout=0.1,
                 )
             elif is_wifi_endpoint(self.port):
+                # Long TCP handshake timeout; short read timeout for the poll loop
                 self._serial = open_wifi_link(self.port, timeout=0.1)
             else:
-                self._serial = serial.Serial(self.port, self.baudrate, timeout=0.1)
+                try:
+                    self._serial = serial.Serial(
+                        self.port, self.baudrate, timeout=0.1)
+                except Exception as open_err:
+                    # Missing device path (e.g. manual port "test"): stay
+                    # connected with a ghost serial so TX/RX path still works.
+                    if not _is_missing_serial_device_error(open_err):
+                        raise
+                    self._serial = GhostSerial(
+                        self.port, baudrate=self.baudrate, timeout=0.1)
+                    self.add_history(
+                        'sys',
+                        f'Device path not present — ghost connection to '
+                        f'{self.port} (TX accepted, RX empty until a real '
+                        f'device appears)'
+                    )
 
             self.connected = True
             self._stop_event.clear()
+            # Reset RX cursor / lines for a clean SDK session
+            with self._rx_lock:
+                self._rx_lines = []
+                self._rx_cursor = 0
+                self._rx_event.clear()
+            self._firmware_version = None
+
             self._read_thread = threading.Thread(
                 target=self._read_loop, daemon=True)
             self._read_thread.start()
@@ -205,10 +318,13 @@ class PortConnection:
             self._init_robot()
 
             # Enable auto-report: robot sends status after each movement completes
+            is_ghost = bool(getattr(self._serial, '_ghost', False))
             if is_virtual_port(self.port):
                 time.sleep(0.05)
             elif is_wifi_endpoint(self.port):
                 time.sleep(0.15)
+            elif is_ghost:
+                time.sleep(0.02)
             else:
                 time.sleep(0.3)
             self._serial.write(b'$40=1\r\n')
@@ -218,12 +334,14 @@ class PortConnection:
                 kind = 'virtual'
             elif is_wifi_endpoint(self.port):
                 kind = 'wifi'
+            elif is_ghost:
+                kind = 'ghost'
             else:
                 kind = 'serial'
-            self.add_history(
-                'sys',
-                f'Connected to {self.port} ({self.model or "unknown"}, {kind})',
-            )
+            note = f'Connected to {self.port} ({self.model or "unknown"}, {kind})'
+            if reused:
+                note += ' [after probe]'
+            self.add_history('sys', note)
             return True
         except Exception as e:
             self.connected = False
@@ -239,7 +357,7 @@ class PortConnection:
 
     def _init_robot(self):
         """Create and initialize the SDK robot instance for this port."""
-        cls = _MODEL_CLASSES.get(self.model, wlkatapython.Mirobot_UART)
+        cls = _resolve_sdk_class(self.model)
         self.robot = cls()
         proxy = ProxySerial(self)
         self.robot.init(proxy, -1)
@@ -260,6 +378,19 @@ class PortConnection:
 
     # ── History ──
 
+    @property
+    def _silent(self):
+        return self._silent_depth > 0
+
+    def begin_silent(self):
+        """Enter silent history mode (nestable)."""
+        self._silent_depth += 1
+
+    def end_silent(self):
+        """Leave silent history mode (nestable)."""
+        if self._silent_depth > 0:
+            self._silent_depth -= 1
+
     def add_history(self, direction, text, source=None):
         # Always append to session file log (even in silent mode for true raw trail)
         try:
@@ -267,7 +398,7 @@ class PortConnection:
         except Exception:
             pass
 
-        if self._silent:
+        if self._silent_depth > 0:
             return
         with self._history_lock:
             entry = {
@@ -284,6 +415,33 @@ class PortConnection:
     def get_history(self, since=0):
         with self._history_lock:
             return [e for e in self._history if e['id'] >= since]
+
+    def _drain_serial_input(self):
+        """Discard pending bytes on the raw serial/WiFi link (not PortConnection history)."""
+        ser = self._serial
+        if not ser:
+            return
+        try:
+            if hasattr(ser, 'reset_input_buffer'):
+                ser.reset_input_buffer()
+            elif hasattr(ser, 'flushInput'):
+                ser.flushInput()
+            # Best-effort drain of any leftover complete lines
+            if hasattr(ser, 'in_waiting'):
+                deadline = time.time() + 0.15
+                while time.time() < deadline:
+                    try:
+                        n = int(ser.in_waiting or 0)
+                    except Exception:
+                        break
+                    if n <= 0:
+                        break
+                    try:
+                        ser.read(n)
+                    except Exception:
+                        break
+        except Exception:
+            pass
 
     # ── Background read thread ──
 
@@ -441,17 +599,34 @@ class PortConnection:
         response = line.decode('utf-8', errors='ignore').strip() if line else ''
         return {'success': True, 'response': response}
 
-    def fetch_firmware_version(self):
+    def fetch_firmware_version(self, force=False):
         """Call version() on the robot and cache the result.
         Returns dict with keys: extender (str or None), robot (str or None).
-        Version strings like 'EXbox,20230710' are trimmed to the part after the comma."""
-        if self._firmware_version is not None:
+        Version strings like 'EXbox,20230710' are trimmed to the part after the comma.
+
+        Only successful responses with at least one non-empty version field are
+        cached permanently. Failures are not sticky so Settings can retry.
+        """
+        if (
+            not force
+            and self._firmware_version is not None
+            and (
+                self._firmware_version.get('extender')
+                or self._firmware_version.get('robot')
+            )
+        ):
             print(f'[FW-DEBUG] {self.port}: returning cached version: {self._firmware_version}')
             return {'success': True, **self._firmware_version}
         if not self.robot:
             print(f'[FW-DEBUG] {self.port}: no robot instance')
             return {'success': False, 'error': 'No robot instance'}
+        # Quiet Command history during version query; still write to comm log.
+        # Nestable so concurrent fetches cannot leave silent stuck on.
+        self.begin_silent()
         try:
+            # Discard unread RX so version() does not consume stale lines
+            self.rx_flush_input()
+            self._drain_serial_input()
             print(f'[FW-DEBUG] {self.port}: calling robot.version()...')
             v = self.robot.version()
             print(f'[FW-DEBUG] {self.port}: raw version response: {repr(v)} (type: {type(v).__name__})')
@@ -463,28 +638,45 @@ class PortConnection:
                 print(f'[FW-DEBUG] {self.port}: list/tuple with 2+ items')
                 print(f'[FW-DEBUG]   extender raw: {repr(ext_raw)} -> parsed: {repr(ext_parsed)}')
                 print(f'[FW-DEBUG]   robot raw: {repr(robot_raw)} -> parsed: {repr(robot_parsed)}')
-                self._firmware_version = {
-                    'extender': ext_parsed,
-                    'robot':    robot_parsed,
+                result = {
+                    'extender': ext_parsed or None,
+                    'robot':    robot_parsed or None,
                 }
             elif isinstance(v, str) and '查询失败' in v:
                 print(f'[FW-DEBUG] {self.port}: query failed (查询失败)')
-                self._firmware_version = {'extender': None, 'robot': None}
+                result = {'extender': None, 'robot': None}
             else:
                 robot_parsed = _extract_version(str(v)) if v is not None else None
                 print(f'[FW-DEBUG] {self.port}: single value or other type')
                 print(f'[FW-DEBUG]   raw: {repr(v)} -> robot parsed: {repr(robot_parsed)}')
-                self._firmware_version = {
+                result = {
                     'extender': None,
-                    'robot':    robot_parsed,
+                    'robot':    robot_parsed or None,
                 }
+
+            # Only stick the cache on a useful success
+            if result.get('extender') or result.get('robot'):
+                self._firmware_version = result
+            else:
+                self._firmware_version = None
+                print(f'[FW-DEBUG] {self.port}: empty version; not caching')
+                return {
+                    'success': False,
+                    'error': 'Firmware version query returned empty',
+                    'extender': None,
+                    'robot': None,
+                }
+
             print(f'[FW-DEBUG] {self.port}: final result: {self._firmware_version}')
             return {'success': True, **self._firmware_version}
         except Exception as e:
             import traceback
             print(f'[FW-DEBUG] {self.port}: exception: {e}')
             traceback.print_exc()
+            self._firmware_version = None
             return {'success': False, 'error': str(e)}
+        finally:
+            self.end_silent()
 
     @property
     def raw_serial(self):
@@ -606,6 +798,8 @@ class SerialManager:
 
     def register_port(self, port, model=None, baudrate=115200):
         """Register a detected port. Does not connect yet."""
+        if model:
+            model = normalize_model_name(model) or model
         if port not in self._ports:
             self._ports[port] = PortConnection(port, model=model, baudrate=baudrate)
         else:
@@ -658,7 +852,7 @@ class SerialManager:
 
         conn = self._ports[port]
         if model:
-            conn.model = model
+            conn.model = normalize_model_name(model) or model
 
         if conn.connected:
             if existing_serial:
@@ -737,9 +931,9 @@ class SerialManager:
                 pass
 
         use_model = model or prev_model
-        # Normalize Blockly dropdown values (Mirobot_UART → Mirobot)
-        if isinstance(use_model, str) and use_model.endswith('_UART'):
-            use_model = use_model[:-5]
+        # Normalize Blockly dropdown / alias values via robots.json
+        if use_model:
+            use_model = normalize_model_name(use_model) or use_model
         result = self.ensure_connected(port, model=use_model, baudrate=baudrate)
         if result.get('success'):
             self._active_port = port

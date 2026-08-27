@@ -72,6 +72,10 @@
         ]
       },
       {
+        "from": "robots.json",
+        "to": "robots.json"
+      },
+      {
         "from": "resources/esptool.cfg",
         "to": "esptool.cfg"
       },

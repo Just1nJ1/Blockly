@@ -1,7 +1,8 @@
 # WLKATA StudioX Extension Development Guide
 
 Build custom extensions for WLKATA StudioX. Extensions can add new backend
-endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), or both.
+endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), Blockly workflow
+templates, and default saved functions.
 
 ---
 
@@ -13,10 +14,11 @@ endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), or both.
 4. [Frontend Development](#frontend-development)
 5. [Backend Development](#backend-development)
 6. [Blockly Workflow Templates](#blockly-workflow-templates)
-7. [Available APIs for Extensions](#available-apis-for-extensions)
-8. [Robot Interaction](#robot-interaction)
-9. [Installation](#installation)
-10. [Tips & Limitations](#tips--limitations)
+7. [Default Saved Functions](#default-saved-functions-functions)
+8. [Available APIs for Extensions](#available-apis-for-extensions)
+9. [Robot Interaction](#robot-interaction)
+10. [Installation](#installation)
+11. [Tips & Limitations](#tips--limitations)
 
 ---
 
@@ -68,7 +70,8 @@ my-extension/
 ## Extension Structure
 
 A minimal extension only needs `extension.json` and at least one contribution
-(frontend tab, backend, and/or Blockly workflows). Here is the full layout:
+(frontend tab, backend, Blockly workflows, and/or default functions). Here is
+the full layout:
 
 ```
 my-extension/
@@ -80,12 +83,16 @@ my-extension/
 │   └── icon.svg            #   Sidebar icon (22x22, stroke-based recommended).
 ├── backend/                # Optional. Python backend with Flask routes.
 │   └── main.py             #   Must export a `blueprint` variable.
-└── workflows/              # Optional. Blockly workflow template JSON files.
-    └── my_pipeline.json    #   Listed under contributes.workflows
+├── workflows/              # Optional. Blockly workflow template JSON files.
+│   └── my_pipeline.json    #   Listed under contributes.workflows
+└── functions/              # Optional. Default saved-function JSON (auto-scanned).
+    └── my_helper.json      #   Same schema as workspace functions/*.json
 ```
 
 You can include **only a frontend** (UI-only), **only a backend** (headless
-service), **only workflows** (Blockly toolbox pipelines), or any combination.
+service), **only workflows**, **only functions**, or any combination. Omitting
+`functions/` entirely is fine — StudioX simply loads nothing from that
+extension into the Saved Functions panel.
 
 ---
 
@@ -145,6 +152,58 @@ Blockly even if the user never opens your tab.
 See [Blockly Workflow Templates](#blockly-workflow-templates) for the full
 schema and examples. Core docs also live in `workflows/README.md` in the app
 repo.
+
+### Default saved functions (`functions/`)
+
+Drop procedure library JSON files under a **`functions/`** folder at the
+extension root. StudioX **auto-scans** that directory when the extension loads
+— you do **not** list files in `extension.json`.
+
+| Behavior | Detail |
+|----------|--------|
+| Discovery | Every `functions/*.json` file is read on extension load |
+| Optional | Missing `functions/`, empty folder, or zero valid files → no-op |
+| UI | Appears in the **Saved Functions** panel under the extension’s `displayName`, with an **extension** badge |
+| Insert | Users can **+ Add**, double-click, or drag onto the Blockly workspace (same as workspace libraries) |
+| Read-only | Extension-bundled functions cannot be deleted from the panel; ship updates by changing the extension files |
+| Schema | Same as user workspace `functions/*.json` (see below) |
+
+**File schema** (one procedure per file):
+
+```json
+{
+  "name": "my_helper",
+  "params": ["robot", "target"],
+  "xml": "<xml xmlns=\"https://developers.google.com/blockly/xml\">…</xml>",
+  "timestamp": 0
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Procedure name (must match the definition block’s name) |
+| `xml` | Yes | Blockly XML of the `procedures_defreturn` / `procedures_defnoreturn` tree |
+| `params` | No | Parameter names for display in the Saved Functions card |
+| `timestamp` | No | Optional metadata |
+
+Files that are not valid JSON, or that lack `name` / `xml`, are skipped with a
+console warning; other files in the same folder still load.
+
+**Authoring tip:** In StudioX, build the function with blocks, right-click the
+definition → **Save to Library**, then copy the generated
+`<workspace>/functions/<name>.json` into your extension’s `functions/` folder.
+
+Example layout for a vision pick extension:
+
+```
+cv-pick/
+├── extension.json
+├── functions/
+│   ├── detect_pick_point.json
+│   └── grasp_and_place.json
+└── workflows/
+    └── cv_pick.json
+```
 
 ---
 

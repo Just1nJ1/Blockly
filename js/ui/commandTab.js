@@ -80,9 +80,14 @@
       // Blockly dropdown values like Mirobot_UART → short model name
       var raw = window.portModelMap[port];
       if (typeof raw === 'string') {
-        model = raw.replace(/_UART$/i, '').replace(/_USB$/i, '');
-        // Map display labels if needed
-        if (model === 'Haro380' || model === 'Harobot') model = 'MT4';
+        if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+          model = window.RobotCatalog.normalizeModelName(raw);
+        } else if (typeof window.normalizeRobotModelName === 'function') {
+          model = window.normalizeRobotModelName(raw);
+        } else {
+          model = raw.replace(/_UART$/i, '').replace(/_USB$/i, '');
+          if (model === 'Haro380' || model === 'Harobot') model = 'MT4';
+        }
       }
     }
     // Fallback: parse from option label "port (Mirobot)"
@@ -90,7 +95,12 @@
       var opt = select.options[select.selectedIndex];
       var m = opt && opt.textContent && opt.textContent.match(/\(([^)]+)\)\s*$/);
       if (m && m[1] && m[1].indexOf('WiFi') !== 0 && m[1] !== 'Detecting...') {
-        model = m[1].replace(/^WiFi,\s*/, '');
+        var labelModel = m[1].replace(/^WiFi,\s*/, '');
+        if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+          model = window.RobotCatalog.normalizeModelName(labelModel);
+        } else {
+          model = labelModel;
+        }
       }
     }
 
@@ -158,17 +168,35 @@
   function sendCommand(command) {
     if (!command.trim()) return;
 
+    // Prefer explicit Command-tab port, else dropdown selection
+    var port = _currentPort;
+    if (!port) {
+      var select = document.getElementById('command-port-select');
+      if (select && select.value && select.value !== '__manual__' &&
+          String(select.value).indexOf('__detecting__') !== 0) {
+        port = select.value;
+      }
+    }
+
+    var body = { command: command };
+    if (port) body.port = port;
+
     return fetch(getServerUrl() + '/cmd/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: command })
+      body: JSON.stringify(body)
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      if (data && data.success === false) {
+        appendSystemMessage('Send failed: ' + (data.error || 'unknown error'));
+      }
       // Mark control panel as stale after sending a command
       if (typeof window.controlPanelMarkStale === 'function') {
         window.controlPanelMarkStale();
       }
+      // Nudge history so TX/RX appear promptly (don't wait for next poll)
+      pollHistory();
       return data;
     })
     .catch(function(err) {
@@ -178,13 +206,27 @@
 
   // ── Poll history ──
 
+  function portsMatch(a, b) {
+    if (!a || !b) return !a && !b;
+    return String(a) === String(b);
+  }
+
   function pollHistory() {
+    // Always scope history to the Command-tab port (not "whatever is active"
+    // if the client is mid-switch or another tab changed the active connection).
     var url = getServerUrl() + '/cmd/history?since=' + _lastMessageId;
+    if (_currentPort) {
+      url += '&port=' + encodeURIComponent(_currentPort);
+    }
     if (window.developerMode) url += '&include_status=true';
+    var requestedPort = _currentPort;
     fetch(url)
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (!data.success || !data.messages) return;
+        // Ignore late responses from a previous port after a switch
+        if (data.port && requestedPort && !portsMatch(data.port, requestedPort)) return;
+        if (requestedPort && _currentPort && !portsMatch(requestedPort, _currentPort)) return;
         for (var i = 0; i < data.messages.length; i++) {
           var msg = data.messages[i];
           appendMessage(msg);

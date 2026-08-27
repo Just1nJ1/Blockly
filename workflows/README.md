@@ -105,26 +105,39 @@ Step inputs use `from`:
 - `iter.<itemName>` — loop variable inside `list_iter`
 - bare name — prior step `output.name`
 
-### Example: future CV coin pick (sketch)
+### Example: CV Pick (shipped with `extensions/cv-pick`)
 
 ```text
-1. capture  (library call)     → Image
-2. detect   (SLOT: image→PoseList)   ← user Blockly function or default
-3. pick     (list_iter poses)  → pick_at(robot, pose)
+1. capture       (SLOT: () → Image)
+2. detect        (SLOT: image → List of pixel positions)
+3. map_to_robot  (SLOT: positions + affine cal → robot {x,y,z} list)
+4. pick          (list_iter robot positions; SLOT: robot, pose)
 ```
 
-Ship that as an extension with JSON under the extension folder and:
+Context matches the CV Pick tab calibration result:
+
+```text
+robot_x = a·px + b·py + tx
+robot_y = c·px + d·py + ty
+robot_z = z          (constant pick height)
+```
+
+Fields: **robot**, **a**, **b**, **tx**, **c**, **d**, **ty**, **z**
+(same keys as `calibration` in the extension backend).
+
+Registered via:
 
 ```json
 "contributes": {
-  "workflows": ["workflows/detect_and_pick.json"]
+  "workflows": ["workflows/cv_pick.json"]
 }
 ```
 
 StudioX loads those templates eagerly via `WorkflowRegistry` (see
 `extensions/README.md` → **Blockly Workflow Templates**). Do **not** generate
-HTTP calls to an interactive tab (e.g. `cv-pick`); use slots + optional
-`imports` for library helpers.
+HTTP calls to an interactive tab; use slots + optional `imports` for library
+helpers. Optional defaults can ship under the extension’s `functions/` folder
+(auto-scanned into Saved Functions).
 
 ### Registering from extension JS
 

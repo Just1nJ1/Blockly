@@ -7,28 +7,53 @@
   var POLL_INTERVAL = 3000;
   var pollTimer = null;
 
-  // Loaded from /robots at init — maps model name → Blockly dropdown value
+  // Loaded from RobotCatalog / /robots — maps model name → Blockly dropdown value
   var MODEL_VALUE_MAP = {};
   // Full robot definitions from robots.json (for manual port picker)
   var _robotDefs = [];
 
+  function _seedFromCatalog() {
+    var cat = window.RobotCatalog;
+    if (cat && typeof cat.getVirtualDeviceEntries === 'function') {
+      var entries = cat.getVirtualDeviceEntries();
+      window.detectedPorts = cat.getVirtualPortOptions();
+      window.portModelMap = cat.getVirtualPortModelMap();
+      lastDetectedPorts = entries.map(function (d) {
+        return {
+          port: d.port,
+          model: d.model,
+          description: d.description || ('Virtual ' + d.model),
+          virtual: true
+        };
+      });
+      _robotDefs = cat.getAll();
+      MODEL_VALUE_MAP = {};
+      for (var i = 0; i < _robotDefs.length; i++) {
+        if (_robotDefs[i].name) {
+          MODEL_VALUE_MAP[_robotDefs[i].name] = _robotDefs[i].blocklyValue ||
+            (_robotDefs[i].name + '_UART');
+        }
+      }
+      return;
+    }
+    window.detectedPorts = [
+      ['VirtualMirobot (Mirobot)', 'VirtualMirobot'],
+      ['VirtualMT4 (MT4)', 'VirtualMT4']
+    ];
+    window.portModelMap = {
+      'VirtualMirobot': 'Mirobot_UART',
+      'VirtualMT4': 'MT4_UART'
+    };
+    lastDetectedPorts = [
+      { port: 'VirtualMirobot', model: 'Mirobot', description: 'Virtual Mirobot (no hardware)', virtual: true },
+      { port: 'VirtualMT4', model: 'MT4', description: 'Virtual MT4 (no hardware)', virtual: true }
+    ];
+  }
+
   // Shared state: populated by polling, read by the block's dropdown generator
-  // detectedPorts: array of [label, value] pairs, e.g. [['VirtualMirobot (Mirobot)', 'VirtualMirobot']]
-  // portModelMap:  { portValue -> modelValue }, e.g. { 'VirtualMirobot': 'Mirobot_UART' }
-  // Seed virtual devices so Blockly/teaching work before the first poll
-  // (and when the server is offline). Server always re-advertises these too.
-  window.detectedPorts = [
-    ['VirtualMirobot (Mirobot)', 'VirtualMirobot'],
-    ['VirtualMT4 (MT4)', 'VirtualMT4']
-  ];
-  window.portModelMap = {
-    'VirtualMirobot': 'Mirobot_UART',
-    'VirtualMT4': 'MT4_UART'
-  };
-  var lastDetectedPorts = [
-    { port: 'VirtualMirobot', model: 'Mirobot', description: 'Virtual Mirobot (no hardware)', virtual: true },
-    { port: 'VirtualMT4', model: 'MT4', description: 'Virtual MT4 (no hardware)', virtual: true }
-  ];
+  // Seed virtual devices so Blockly/teaching work before the first poll.
+  var lastDetectedPorts = [];
+  _seedFromCatalog();
 
   function pollDevices() {
     var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
@@ -387,7 +412,7 @@
             showProbeError(
               data.error ||
               ('Cannot reach robot at ' + canonical +
-                '. Check the IP, UDP port (default 8234, or use ip:port), and that the arm is on the same network.')
+                '. Check the IP, TCP port (default 7676, or use ip:port), and that the arm is on the same network.')
             );
             resetProbeUi();
             return;
@@ -502,7 +527,7 @@
       var input = document.createElement('input');
       input.type = 'text';
       input.className = 'port-picker-input';
-      input.placeholder = 'Serial port or WiFi IP/UDP (e.g. 192.168.1.100 or 192.168.1.100:8234)';
+      input.placeholder = 'Serial port or WiFi IP/TCP (e.g. 192.168.1.100 or 192.168.1.100:7676)';
       combo.appendChild(input);
 
       var arrow = document.createElement('button');
@@ -872,8 +897,17 @@
     }
   };
 
-  // Load robot definitions from server, then start polling
+  // Load robot definitions via RobotCatalog (GET /robots), then start polling
   function loadRobotDefs(callback) {
+    var done = function () {
+      _seedFromCatalog();
+      if (typeof callback === 'function') callback();
+    };
+    if (window.RobotCatalog && typeof window.RobotCatalog.load === 'function') {
+      window.RobotCatalog.load().then(done).catch(done);
+      return;
+    }
+    // Fallback direct fetch if catalog missing
     var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
     fetch(serverUrl + '/robots')
       .then(function(r) { return r.json(); })
@@ -887,7 +921,7 @@
         }
       })
       .catch(function() { /* use empty defaults */ })
-      .then(callback);
+      .then(done);
   }
 
   function init() {

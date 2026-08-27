@@ -17,8 +17,9 @@ from .debugger import StepDebugger
 from .detector import scan_devices
 from .serial_manager import SerialManager
 from .move_simulator import MoveSimulator
+from .gcode_export import GcodeExporter
 from . import environments
-from .robots import ROBOTS
+from .robots import ROBOTS, get_firmware_asset_prefix
 
 # In-memory store for firmware flash jobs (desktop app, single user)
 _flash_jobs = {}
@@ -240,6 +241,31 @@ def simulate_moves():
         timeout = max(0.5, min(timeout, 15.0))
 
         result = MoveSimulator.simulate(code, timeout_s=timeout)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/export-gcode', methods=['POST'])
+def export_gcode():
+    """
+    Dry-run Blockly/Python with real wlkatapython command formatting and
+    record every G-code TX line. ``time.sleep`` becomes ``G4 P{seconds}``.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
+
+        code = data.get('code', '')
+        timeout = data.get('timeout', 5.0)
+        try:
+            timeout = float(timeout)
+        except (TypeError, ValueError):
+            timeout = 5.0
+        timeout = max(0.5, min(timeout, 30.0))
+
+        result = GcodeExporter.export(code, timeout_s=timeout)
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
@@ -482,13 +508,24 @@ def cmd_send():
         port = data.get('port', None)
         mgr = SerialManager.get_instance()
         conn = None
-        if port and port in mgr._ports:
-            conn = mgr._ports[port]
-        elif mgr.active_connection:
+        if port:
+            from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+            key = normalize_wifi_endpoint(port) if is_wifi_endpoint(port) else port
+            if key in mgr._ports:
+                conn = mgr._ports[key]
+            elif port in mgr._ports:
+                conn = mgr._ports[port]
+        if not conn and mgr.active_connection:
             conn = mgr.active_connection
 
         if not conn or not conn.connected:
             return jsonify({'success': False, 'error': 'Not connected'})
+
+        # Keep active port aligned with the Command-tab sender
+        try:
+            mgr._active_port = conn.port
+        except Exception:
+            pass
 
         result = conn.send_raw(command, source='command')
         return jsonify(result)
@@ -533,19 +570,27 @@ def cmd_history():
 
     Query params:
       since — message id cursor
+      port — optional port key (defaults to active port). Pass the Command-tab
+             selection so logs stay correct when multiple ports are connected.
       include_status — if true, include auto-status lines (developer mode)
     """
     try:
         since = request.args.get('since', 0, type=int)
         include_status = request.args.get('include_status', 'false') == 'true'
+        port = request.args.get('port', None) or None
         mgr = SerialManager.get_instance()
-        messages = mgr.get_history(since=since)
+        if port:
+            from .wifi_link import is_wifi_endpoint, normalize_wifi_endpoint
+            if is_wifi_endpoint(port):
+                port = normalize_wifi_endpoint(port)
+        messages = mgr.get_history(port=port, since=since)
         if not include_status:
             messages = [m for m in messages if m.get('dir') != 'auto-status']
         from .serial_manager import get_comm_log_path
         return jsonify({
             'success': True,
             'messages': messages,
+            'port': port or mgr.active_port,
             'comm_log_path': get_comm_log_path(),
         })
     except Exception as e:
@@ -647,48 +692,45 @@ def cmd_get_status():
 
         status = None
         max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                if silent:
-                    conn._silent = True
-                conn.rx_flush_input()
-                conn._awaiting_query = True
-                conn.raw_serial.write(b'?\r\n')
-                # Wait for response via RX buffer
-                line_bytes = conn.rx_readline(timeout=1.0)
-                if silent:
-                    conn._silent = False
-
-                if not line_bytes:
-                    _time.sleep(0.2)
-                    continue
-
-                line = line_bytes.decode('utf-8', errors='ignore').strip()
-                if line.startswith('<') and line.endswith('>'):
-                    pattern = r'<(\w+),Angle\(ABCDXYZ\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),Cartesian coordinate\(XYZ RxRyRz\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),Pump PWM:([\d.-]+),Valve PWM:([\d.-]+),Motion_MODE:([\d.-]+)>'
-                    m = _re.match(pattern, line)
-                    if m:
-                        status = {
-                            'state': m.group(1),
-                            'angle_A': m.group(2), 'angle_B': m.group(3),
-                            'angle_C': m.group(4), 'angle_D': m.group(5),
-                            'angle_X': m.group(6), 'angle_Y': m.group(7),
-                            'angle_Z': m.group(8),
-                            'coordinate_X': m.group(9), 'coordinate_Y': m.group(10),
-                            'coordinate_Z': m.group(11), 'coordinate_RX': m.group(12),
-                            'coordinate_RY': m.group(13), 'coordinate_RZ': m.group(14),
-                            'pump': m.group(15), 'valve': m.group(16),
-                            'mode': m.group(17)
-                        }
-                        break
-                _time.sleep(0.2)
-            except Exception:
-                if silent:
-                    conn._silent = False
-                _time.sleep(0.2)
-
         if silent:
-            conn._silent = False
+            conn.begin_silent()
+        try:
+            for attempt in range(max_retries):
+                try:
+                    conn.rx_flush_input()
+                    conn._awaiting_query = True
+                    conn.raw_serial.write(b'?\r\n')
+                    # Wait for response via RX buffer
+                    line_bytes = conn.rx_readline(timeout=1.0)
+
+                    if not line_bytes:
+                        _time.sleep(0.2)
+                        continue
+
+                    line = line_bytes.decode('utf-8', errors='ignore').strip()
+                    if line.startswith('<') and line.endswith('>'):
+                        pattern = r'<(\w+),Angle\(ABCDXYZ\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),Cartesian coordinate\(XYZ RxRyRz\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),Pump PWM:([\d.-]+),Valve PWM:([\d.-]+),Motion_MODE:([\d.-]+)>'
+                        m = _re.match(pattern, line)
+                        if m:
+                            status = {
+                                'state': m.group(1),
+                                'angle_A': m.group(2), 'angle_B': m.group(3),
+                                'angle_C': m.group(4), 'angle_D': m.group(5),
+                                'angle_X': m.group(6), 'angle_Y': m.group(7),
+                                'angle_Z': m.group(8),
+                                'coordinate_X': m.group(9), 'coordinate_Y': m.group(10),
+                                'coordinate_Z': m.group(11), 'coordinate_RX': m.group(12),
+                                'coordinate_RY': m.group(13), 'coordinate_RZ': m.group(14),
+                                'pump': m.group(15), 'valve': m.group(16),
+                                'mode': m.group(17)
+                            }
+                            break
+                    _time.sleep(0.2)
+                except Exception:
+                    _time.sleep(0.2)
+        finally:
+            if silent:
+                conn.end_silent()
 
         if not status:
             return jsonify({'success': False, 'error': 'Failed to get status'})
@@ -919,7 +961,7 @@ def cmd_status():
 def cmd_probe_port():
     """Probe a serial port or WiFi IP to detect the robot model (sends $V).
 
-    Body: { port: "COM3" | "192.168.1.10" | "192.168.1.10:8234" }
+    Body: { port: "COM3" | "192.168.1.10" | "192.168.1.10:7676" }
 
     Returns:
       { success, model, port?, error?, unreachable? }
@@ -973,7 +1015,7 @@ def cmd_add_manual_port():
     """Register a manually added port so it is managed identically
     to auto-detected ports (cached, connected, survives poll cycles).
 
-    Accepts serial paths and WiFi IPs (``192.168.x.x`` or ``ip:tcpPort``).
+    Accepts serial paths and WiFi IPs (``192.168.x.x`` or ``ip:port``, default TCP 7676).
     Unreachable WiFi endpoints return success=false with an error message.
     """
     try:
@@ -1095,7 +1137,8 @@ def cmd_firmware_version():
                 'virtual': True,
             })
 
-        result = conn.fetch_firmware_version()
+        force = bool(data.get('force', False))
+        result = conn.fetch_firmware_version(force=force)
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -1500,11 +1543,10 @@ def cmd_check_firmware_update():
         updates = {'extender': None, 'robot': None}
         date_re = re.compile(r'v?(\d{8})')  # matches 20260422 or v20260422
 
-        # Model name matching for robot arm .hex files
-        # E4 uses MT4 firmware, so look for MT4 assets when model is E4
-        robot_prefix = model.upper() if model else ''
-        if robot_prefix == 'E4':
-            robot_prefix = 'MT4'
+        # Model name → firmware asset prefix from robots.json (e.g. E4 → MT4)
+        robot_prefix = ''
+        if model:
+            robot_prefix = (get_firmware_asset_prefix(model) or '').upper()
 
         # Scan all releases, all assets — keep the newest match for each type
         for release in releases:
@@ -1571,10 +1613,10 @@ def cmd_list_firmware_versions():
         versions = []
         seen = set()
 
-        # Model prefix for robot arm
-        robot_prefix = model.upper() if model else ''
-        if robot_prefix == 'E4':
-            robot_prefix = 'MT4'
+        # Model prefix for robot arm (from robots.json firmwareAssetPrefix)
+        robot_prefix = ''
+        if model:
+            robot_prefix = (get_firmware_asset_prefix(model) or '').upper()
 
         for release in releases:
             release_date = release.get('published_at', '')[:10]  # YYYY-MM-DD

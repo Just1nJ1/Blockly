@@ -12,6 +12,11 @@
 var _blocklyInitialized = false;
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Prefetch robot catalog from server (falls back to embedded defaults)
+  if (window.RobotCatalog && typeof window.RobotCatalog.load === 'function') {
+    window.RobotCatalog.load();
+  }
+
   // Init blocks & generators first (no workspace needed)
   initCustomBlocks();
   initPythonGenerator();
@@ -170,8 +175,16 @@ function initBlockly() {
       if (typeof updateRobotBlockColors === 'function') {
         updateRobotBlockColors();
       }
+      if (typeof updateGcodeExportButton === 'function') {
+        updateGcodeExportButton();
+      }
     }
   });
+
+  // Initial G-code export button state
+  if (typeof updateGcodeExportButton === 'function') {
+    updateGcodeExportButton();
+  }
 
   // ── Dynamic *args / **kwargs slot management ──
   // On any connect or disconnect, immediately cleanup trailing empties and

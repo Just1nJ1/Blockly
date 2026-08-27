@@ -10,14 +10,17 @@
 function initLibraryFunctionCallBlock() {
   Blockly.Blocks['library_function_call'] = {
     init: function() {
+      var dd = (typeof createTypeaheadDropdown === 'function')
+        ? createTypeaheadDropdown([['...', '...']])
+        : new Blockly.FieldDropdown([['...', '...']]);
       this.appendDummyInput('FUNCTION_NAME')
           .appendField('call')
-          .appendField(new Blockly.FieldDropdown([['...', '...']]), 'FUNC_NAME');
+          .appendField(dd, 'FUNC_NAME');
 
       this.setInputsInline(false);
       this.setOutput(true, null);
       this.setColour(290);
-      this.setTooltip('Call a function from the library.');
+      this.setTooltip('Call a function from the library. Type to jump in the list (case-sensitive).');
       this.setHelpUrl('');
 
       this.functionInfo_ = null;
@@ -245,7 +248,15 @@ function initLibraryFunctionCallBlock() {
         if (menuOptions.length === 0) {
           menuOptions.push(['...', '...']);
         }
-        dropdown.menuGenerator_ = menuOptions;
+        // Prefer setOptions when available so generatedOptions cache is cleared
+        if (typeof dropdown.setOptions === 'function') {
+          dropdown.setOptions(menuOptions);
+        } else {
+          dropdown.menuGenerator_ = menuOptions;
+        }
+        if (typeof installTypeaheadOnDropdown === 'function') {
+          installTypeaheadOnDropdown(dropdown);
+        }
 
         // Add validator to trigger info update when selected
         dropdown.setValidator((newValue) => {

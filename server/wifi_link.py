@@ -4,7 +4,8 @@ WiFi endpoint helpers + serial-compatible facade over wlkatapython WifiTransport
 StudioX treats an IPv4 address (optional ``:port``) the same way as a serial
 port name: one logical ``port`` string in the UI/manager, I/O via Transport.
 
-Default protocol is **UDP** (WLKATA extender WiFi mode).
+Default protocol is **TCP** on port **7676**. The TCP socket is held open for
+the whole connect session (``WifiTransport.connect`` / ``disconnect``).
 """
 
 from __future__ import annotations
@@ -27,11 +28,13 @@ _SDK_PATH = os.path.abspath(_SDK_PATH)
 if _SDK_PATH not in sys.path:
     sys.path.insert(0, _SDK_PATH)
 
-# Default UDP port when the user types only an IP (override via host:port).
-# WLKATA WiFi / extender UDP port; users can set e.g. 192.168.1.10:8899 when needed.
-DEFAULT_WIFI_TCP_PORT = 8234  # name kept for callers; used as default UDP port too
-DEFAULT_WIFI_PORT = 8234
-DEFAULT_WIFI_PROTOCOL = "udp"
+# Default TCP port when the user types only an IP (override via host:port).
+DEFAULT_WIFI_TCP_PORT = 7676
+DEFAULT_WIFI_PORT = 7676
+DEFAULT_WIFI_PROTOCOL = "tcp"
+# TCP handshake can take >100ms on WiFi; keep read polls short after connect.
+DEFAULT_WIFI_CONNECT_TIMEOUT = 5.0
+DEFAULT_WIFI_READ_TIMEOUT = 0.1
 
 # IPv4 with optional :port  (e.g. 192.168.1.100 or 192.168.1.100:8899)
 _IPV4_ENDPOINT_RE = re.compile(
@@ -65,7 +68,7 @@ def is_wifi_endpoint(value: Optional[str]) -> bool:
 
 def parse_wifi_endpoint(value: str) -> Tuple[str, int]:
     """
-    Parse ``host`` or ``host:port`` into (host, udp_port).
+    Parse ``host`` or ``host:port`` into (host, port).
 
     Raises:
         ValueError: if not a valid WiFi endpoint string.
@@ -75,8 +78,8 @@ def parse_wifi_endpoint(value: str) -> Tuple[str, int]:
     m = _IPV4_ENDPOINT_RE.match(value)
     host = m.group("host")
     port_s = m.group("port")
-    udp_port = int(port_s) if port_s else DEFAULT_WIFI_PORT
-    return host, udp_port
+    port = int(port_s) if port_s else DEFAULT_WIFI_PORT
+    return host, port
 
 
 def normalize_wifi_endpoint(value: str) -> str:
@@ -84,19 +87,20 @@ def normalize_wifi_endpoint(value: str) -> str:
     Canonical port-key for manager/cache: always ``ip`` or ``ip:port``
     (omit ``:port`` when it equals the default).
     """
-    host, udp_port = parse_wifi_endpoint(value)
-    if udp_port == DEFAULT_WIFI_PORT:
+    host, port = parse_wifi_endpoint(value)
+    if port == DEFAULT_WIFI_PORT:
         return host
-    return f"{host}:{udp_port}"
+    return f"{host}:{port}"
 
 
 class WifiLink:
     """
     pyserial-shaped wrapper around ``WifiTransport`` for PortConnection.
 
-    Defaults to **UDP**. Provides ``is_open``, ``write``, ``readline``,
-    ``in_waiting``, ``timeout``, and ``close`` so the existing read thread /
-    ProxySerial path works unchanged.
+    Defaults to **TCP** on port 7676. ``connect()`` holds the TCP socket open
+    until ``close()`` / disconnect. Provides ``is_open``, ``write``,
+    ``readline``, ``in_waiting``, ``timeout``, and ``close`` so the existing
+    read thread / ProxySerial path works unchanged.
     """
 
     # Tell PortConnection to poll via readline (socket in_waiting is buffer-only)
@@ -106,18 +110,28 @@ class WifiLink:
         self,
         endpoint: str,
         baudrate: int = 115200,
-        timeout: float = 0.1,
+        timeout: float = None,
         protocol: str = None,
+        connect_timeout: float = None,
     ):
         # baudrate ignored (API parity with serial.Serial)
         self.port = normalize_wifi_endpoint(endpoint)
         self.baudrate = baudrate
         self.protocol = (protocol or DEFAULT_WIFI_PROTOCOL).lower()
-        self._timeout = timeout if timeout is not None else 0.1
-        host, udp_port = parse_wifi_endpoint(endpoint)
+        # Read/poll timeout after the socket is up (short, like serial)
+        self._timeout = (
+            timeout if timeout is not None else DEFAULT_WIFI_READ_TIMEOUT
+        )
+        # TCP connect() only — must be long enough for WiFi RTT + accept
+        self._connect_timeout = (
+            connect_timeout
+            if connect_timeout is not None
+            else DEFAULT_WIFI_CONNECT_TIMEOUT
+        )
+        host, port = parse_wifi_endpoint(endpoint)
         self.host = host
-        self.tcp_port = udp_port  # attribute name kept; value is UDP port
-        self.udp_port = udp_port
+        self.tcp_port = port
+        self.udp_port = port  # alias kept for older call sites
         self._transport = None
         self.is_open = False
         self.open()
@@ -127,13 +141,19 @@ class WifiLink:
             return
         from wlkatapython.transports import WifiTransport
 
+        # Use a longer timeout for the TCP handshake, then drop to a short
+        # read timeout so the PortConnection read loop stays snappy.
         t = WifiTransport(
             self.host,
-            self.udp_port,
+            self.tcp_port,
             protocol=self.protocol,
-            timeout=self._timeout,
+            timeout=self._connect_timeout,
         )
         t.connect()
+        try:
+            t.timeout = self._timeout
+        except Exception:
+            pass
         self._transport = t
         self.is_open = True
 
@@ -200,19 +220,33 @@ class WifiLink:
             self._transport.timeout = value
 
 
-def open_wifi_link(endpoint: str, timeout: float = 0.1, protocol: str = None) -> WifiLink:
-    """Open a WifiLink (default UDP) or raise a clear ConnectionError on failure."""
+def open_wifi_link(
+    endpoint: str,
+    timeout: float = None,
+    protocol: str = None,
+    connect_timeout: float = None,
+) -> WifiLink:
+    """Open a WifiLink (default TCP) or raise a clear ConnectionError on failure.
+
+    *timeout* is the post-connect read timeout (default 0.1s).
+    *connect_timeout* is only for the TCP handshake (default 5s).
+    """
     try:
         return WifiLink(
             endpoint,
-            timeout=timeout,
+            timeout=timeout if timeout is not None else DEFAULT_WIFI_READ_TIMEOUT,
+            connect_timeout=(
+                connect_timeout
+                if connect_timeout is not None
+                else DEFAULT_WIFI_CONNECT_TIMEOUT
+            ),
             protocol=protocol or DEFAULT_WIFI_PROTOCOL,
         )
     except ValueError:
         raise
     except Exception as e:
-        host, udp_port = parse_wifi_endpoint(endpoint)
+        host, port = parse_wifi_endpoint(endpoint)
         raise ConnectionError(
-            f"Cannot reach WiFi robot at {host}:{udp_port} via "
+            f"Cannot reach WiFi robot at {host}:{port} via "
             f"{(protocol or DEFAULT_WIFI_PROTOCOL).upper()} ({e})"
         ) from e

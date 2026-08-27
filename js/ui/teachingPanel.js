@@ -5,7 +5,8 @@
  */
 
 (function() {
-  var MODELS = {
+  // Axis layouts from RobotCatalog (robots.json); fallback offline.
+  var FALLBACK_MODELS = {
     'Mirobot': {
       joints: [
         { label: 'Joint 1', statusKey: 'X', sdkParam: 'x' },
@@ -39,7 +40,7 @@
       ]
     }
   };
-  MODELS['E4'] = MODELS['MT4'];
+  FALLBACK_MODELS['E4'] = FALLBACK_MODELS['MT4'];
 
   var _currentMode = 'joint';
   var _currentPort = null;
@@ -73,8 +74,28 @@
       ? window.getServerUrl() : 'http://127.0.0.1:5080';
   }
 
+  function defaultModelName() {
+    return (window.RobotCatalog && window.RobotCatalog.getDefaultName)
+      ? window.RobotCatalog.getDefaultName()
+      : 'Mirobot';
+  }
+
+  function normalizeModel(raw) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.normalizeModelName === 'function') {
+      return window.RobotCatalog.normalizeModelName(raw) || defaultModelName();
+    }
+    if (typeof window.normalizeRobotModelName === 'function') {
+      return window.normalizeRobotModelName(raw) || defaultModelName();
+    }
+    return raw || defaultModelName();
+  }
+
   function getModelConfig(model) {
-    return MODELS[model] || MODELS['Mirobot'];
+    if (window.RobotCatalog && typeof window.RobotCatalog.getControlLayout === 'function') {
+      return window.RobotCatalog.getControlLayout(model);
+    }
+    var name = normalizeModel(model);
+    return FALLBACK_MODELS[name] || FALLBACK_MODELS['Mirobot'];
   }
 
   function getAxes() {
@@ -84,20 +105,26 @@
   }
 
   function getModelForPort(port) {
-    if (!port || !window.detectedPorts) return 'Mirobot';
-    var map = window.detectedPorts;
-    if (map[port]) {
-      var val = map[port];
-      if (typeof val === 'string') {
-        if (val.indexOf('MT4') !== -1) return 'MT4';
-        if (val.indexOf('E4') !== -1) return 'E4';
+    if (!port) return defaultModelName();
+    if (window.portModelMap && window.portModelMap[port]) {
+      return normalizeModel(window.portModelMap[port]);
+    }
+    if (window.detectedPorts) {
+      var map = window.detectedPorts;
+      if (map[port] && typeof map[port] === 'string') {
+        return normalizeModel(map[port]);
       }
     }
-    return 'Mirobot';
+    return defaultModelName();
   }
 
-  function isMT4Model(model) {
-    return model === 'MT4' || model === 'E4';
+  /** True when model has 4 axes (no B/C) — from catalog axisCount. */
+  function isFourAxisModel(model) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.getAxisCount === 'function') {
+      return window.RobotCatalog.getAxisCount(model) <= 4;
+    }
+    var name = normalizeModel(model);
+    return name === 'MT4' || name === 'E4';
   }
 
   // ── Axis Rows ──
@@ -241,13 +268,18 @@
       if (!port) return;
       _currentPort = port;
       _currentModel = null;
-      var opt = select.options[select.selectedIndex];
-      if (opt && opt.textContent) {
-        if (opt.textContent.indexOf('Mirobot') !== -1) _currentModel = 'Mirobot';
-        else if (opt.textContent.indexOf('MT4') !== -1) _currentModel = 'MT4';
-        else if (opt.textContent.indexOf('E4') !== -1) _currentModel = 'E4';
+      if (window.portModelMap && window.portModelMap[port]) {
+        _currentModel = normalizeModel(window.portModelMap[port]);
+      } else {
+        var opt = select.options[select.selectedIndex];
+        if (opt && opt.textContent && window.RobotCatalog &&
+            typeof window.RobotCatalog.nameFromOptionText === 'function') {
+          _currentModel = window.RobotCatalog.nameFromOptionText(opt.textContent);
+        } else if (opt && opt.textContent) {
+          _currentModel = normalizeModel(opt.textContent);
+        }
       }
-      if (!_currentModel) _currentModel = 'Mirobot';
+      if (!_currentModel) _currentModel = defaultModelName();
       console.log('[TeachingPanel] Port selected:', _currentPort, 'Model:', _currentModel);
       buildAxisRows();
       startStatusPolling();
@@ -547,7 +579,7 @@
               inp.className = 'teach-cell-input';
               inp.step = '0.01';
               inp.value = (action.values[key] !== undefined) ? action.values[key].toFixed(2) : '';
-              if (isMT4Model(action.model) && (key === 'b' || key === 'c')) {
+              if (isFourAxisModel(action.model) && (key === 'b' || key === 'c')) {
                 inp.disabled = true;
                 inp.value = '';
               }
@@ -1044,9 +1076,14 @@
     for (var i = 0; i < select.options.length; i++) {
       var opt = select.options[i];
       if (opt.disabled || !opt.value) continue;
-      var model = 'Mirobot';
-      if (opt.textContent.indexOf('MT4') !== -1) model = 'MT4';
-      else if (opt.textContent.indexOf('E4') !== -1) model = 'E4';
+      var model = defaultModelName();
+      if (window.portModelMap && window.portModelMap[opt.value]) {
+        model = normalizeModel(window.portModelMap[opt.value]);
+      } else if (window.RobotCatalog && typeof window.RobotCatalog.nameFromOptionText === 'function') {
+        model = window.RobotCatalog.nameFromOptionText(opt.textContent);
+      } else {
+        model = normalizeModel(opt.textContent);
+      }
       ports.push({ port: opt.value, label: opt.textContent, model: model });
     }
     return ports;
@@ -1184,10 +1221,15 @@
       for (var key in selects) {
         var s = selects[key].select;
         if (s.value) {
-          var selectedModel = 'Mirobot';
+          var selectedModel = defaultModelName();
           var txt = s.options[s.selectedIndex].textContent;
-          if (txt.indexOf('MT4') !== -1) selectedModel = 'MT4';
-          else if (txt.indexOf('E4') !== -1) selectedModel = 'E4';
+          if (window.portModelMap && window.portModelMap[s.value]) {
+            selectedModel = normalizeModel(window.portModelMap[s.value]);
+          } else if (window.RobotCatalog && typeof window.RobotCatalog.nameFromOptionText === 'function') {
+            selectedModel = window.RobotCatalog.nameFromOptionText(txt);
+          } else {
+            selectedModel = normalizeModel(txt);
+          }
           mapping[key] = { port: s.value, model: selectedModel };
         }
       }
@@ -1203,11 +1245,13 @@
 
   // ── Export to Blockly ──
 
-  var MODEL_TO_BLOCK_VALUE = {
-    'Mirobot': 'Mirobot_UART',
-    'MT4': 'MT4_UART',
-    'E4': 'MT4_UART'
-  };
+  function modelToBlockValue(model) {
+    if (window.RobotCatalog && typeof window.RobotCatalog.modelToBlocklyValue === 'function') {
+      return window.RobotCatalog.modelToBlocklyValue(model);
+    }
+    var map = { 'Mirobot': 'Mirobot_UART', 'MT4': 'MT4_UART', 'E4': 'E4_UART' };
+    return map[model] || 'Mirobot_UART';
+  }
 
   function getUniqueVarName(ws, base) {
     var existing = new Set();
@@ -1295,7 +1339,7 @@
       if (item.blockType === 'setup_robot') {
         block = ws.newBlock('setup_robot');
         block.setFieldValue(portVarIds[item.port], 'VARIABLE');
-        block.setFieldValue(MODEL_TO_BLOCK_VALUE[item.model] || 'Mirobot_UART', 'MODEL');
+        block.setFieldValue(modelToBlockValue(item.model), 'MODEL');
         block.setFieldValue(item.port, 'PORT');
         block.initSvg();
         block.render();
@@ -1327,7 +1371,7 @@
         // Move action (coord or joint)
         var varName2 = portVarNames[item.port] || 'robot';
         var axisKeys = ['X', 'Y', 'Z', 'A', 'B', 'C'];
-        var numAxes = isMT4Model(item.model) ? 4 : 6;
+        var numAxes = isFourAxisModel(item.model) ? 4 : 6;
 
         if (item.mode === 'coord') {
           block = ws.newBlock('write_coordinate');
