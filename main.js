@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, dialog, protocol, net: electronNet } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog, protocol, net: electronNet, systemPreferences } = require('electron');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
@@ -168,17 +168,67 @@ function findServerPackageDir() {
   return null;
 }
 
+function getStudioxHome() {
+  return path.join(os.homedir(), '.wlkata-studiox');
+}
+
 /**
  * Get the path to the user's extensions directory.
  * Creates it if it doesn't exist.
  */
 function getExtensionsDir() {
-  const dir = path.join(os.homedir(), '.wlkata-studiox', 'extensions');
+  const dir = path.join(getStudioxHome(), 'extensions');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('Created extensions directory: ' + dir);
   }
   return dir;
+}
+
+/**
+ * Wipe user venvs and comm logs when the packaged app is a new install
+ * (version or embedded Python binary changed). Leaves extensions/ alone.
+ * Dev (`electron .`) never does this.
+ */
+function resetRuntimeOnNewInstall() {
+  if (!isPackaged()) return;
+
+  const home = getStudioxHome();
+  const stampPath = path.join(home, '.install-id');
+
+  let pythonId = '';
+  try {
+    const pythonCmd = findPython();
+    if (pythonCmd && fs.existsSync(pythonCmd)) {
+      const st = fs.statSync(pythonCmd);
+      pythonId = [pythonCmd, st.size, Math.trunc(st.mtimeMs)].join('|');
+    }
+  } catch (e) { /* ignore */ }
+
+  const currentId = `${app.getVersion()}|${pythonId}`;
+  let previous = '';
+  try {
+    previous = fs.readFileSync(stampPath, 'utf8').trim();
+  } catch (e) { /* first launch or missing stamp */ }
+
+  if (previous === currentId) return;
+
+  ['environments', 'logs'].forEach((name) => {
+    const dir = path.join(home, name);
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      log(`Cleared ${dir} (new install)`);
+    } catch (err) {
+      logError(`Failed to clear ${dir}: ${err.message}`);
+    }
+  });
+
+  try {
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(stampPath, currentId);
+  } catch (err) {
+    logError('Failed to write install stamp: ' + err.message);
+  }
 }
 
 /**
@@ -657,6 +707,8 @@ app.whenReady().then(async () => {
     log(`__dirname: ${__dirname}`);
     log(`resourcesPath: ${process.resourcesPath}`);
 
+    resetRuntimeOnNewInstall();
+
     // Viewer + Three live in extraResources (like server.py); expose to renderer
     registerStudioxResourceProtocol();
 
@@ -818,6 +870,117 @@ ipcMain.handle('dialog:selectFirmware', async (event, fileType) => {
     path: filePath,
     name: path.basename(filePath)
   };
+});
+
+// ── Extension media permissions (camera / microphone) ───────────
+// Declared in the app Info.plist + entitlements. Prompted only when
+// an extension that lists the permission in extension.json is opened.
+
+const MEDIA_PERMISSIONS = {
+  camera: {
+    label: 'Camera',
+    settingsUrl: process.platform === 'win32'
+      ? 'ms-settings:privacy-webcam'
+      : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera',
+  },
+  microphone: {
+    label: 'Microphone',
+    settingsUrl: process.platform === 'win32'
+      ? 'ms-settings:privacy-microphone'
+      : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+  },
+};
+
+function extensionsNeedingPermission(permission) {
+  const names = [];
+  for (const ext of _discoveredExtensions) {
+    const perms = Array.isArray(ext.manifest && ext.manifest.permissions)
+      ? ext.manifest.permissions
+      : [];
+    if (perms.indexOf(permission) !== -1) {
+      names.push(ext.manifest.displayName || ext.manifest.name);
+    }
+  }
+  return names;
+}
+
+function permissionListText(permission, openerName) {
+  const listed = [];
+  if (openerName) listed.push(openerName);
+  extensionsNeedingPermission(permission).forEach((n) => {
+    if (listed.indexOf(n) === -1) listed.push(n);
+  });
+  return listed.join(', ') || openerName || 'an extension';
+}
+
+async function showPermissionBlockedDialog(meta, listText) {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const res = await dialog.showMessageBox(parent, {
+    type: 'warning',
+    buttons: ['Open Settings', 'OK'],
+    defaultId: 0,
+    cancelId: 1,
+    message: meta.label + ' permission is blocked',
+    detail:
+      meta.label +
+      ' access was denied. Enable it in System Settings for WLKATA StudioX, then try again.\n\nRequired by: ' +
+      listText,
+  });
+  if (res.response === 0) {
+    shell.openExternal(meta.settingsUrl);
+  }
+}
+
+ipcMain.handle('permissions:ensure', async (event, payload) => {
+  const permission = payload && payload.permission;
+  const meta = MEDIA_PERMISSIONS[permission];
+  if (!meta) return { granted: true };
+
+  const opener = (payload && (payload.displayName || payload.extensionName)) || '';
+  const listText = permissionListText(permission, opener);
+
+  // Electron can show the TCC prompt only on macOS.
+  if (process.platform !== 'darwin') {
+    if (process.platform === 'win32' && typeof systemPreferences.getMediaAccessStatus === 'function') {
+      const winStatus = systemPreferences.getMediaAccessStatus(permission);
+      if (winStatus === 'denied' || winStatus === 'restricted') {
+        await showPermissionBlockedDialog(meta, listText);
+        return { granted: false, status: winStatus };
+      }
+    }
+    return { granted: true };
+  }
+
+  const status = systemPreferences.getMediaAccessStatus(permission);
+  if (status === 'granted') return { granted: true, status };
+
+  if (status === 'denied' || status === 'restricted') {
+    await showPermissionBlockedDialog(meta, listText);
+    return { granted: false, status };
+  }
+
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const pre = await dialog.showMessageBox(parent, {
+    type: 'info',
+    buttons: ['Continue', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+    message: meta.label + ' permission required',
+    detail:
+      meta.label +
+      ' permission required for the following extension(s): ' +
+      listText,
+  });
+  if (pre.response !== 0) {
+    return { granted: false, status: 'not-determined' };
+  }
+
+  const ok = await systemPreferences.askForMediaAccess(permission);
+  if (!ok) {
+    await showPermissionBlockedDialog(meta, listText);
+    return { granted: false, status: 'denied' };
+  }
+  return { granted: true, status: 'granted' };
 });
 
 // ── Extension management (native OS) ────────────────────────────

@@ -6,34 +6,25 @@
 
 function initSidebar() {
   var sidebar = document.getElementById('sidebar');
+  var switching = false;
 
-  sidebar.addEventListener('click', function(e) {
-    var tab = e.target.closest('.sidebar-tab');
-    if (!tab || tab.classList.contains('disabled')) return;
-
+  function applyTabSwitch(tab) {
     var targetTab = tab.dataset.tab;
-    if (!targetTab) return;
-
-    // Detect previously active extension tab (before we clear classes)
     var prevExtTab = sidebar.querySelector('.sidebar-tab.active[data-extension]');
     var prevExtName = prevExtTab ? prevExtTab.dataset.extension : null;
     var extName = tab.dataset.extension || null;
 
-    // Update sidebar active state (all tabs, including extension tabs)
     document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
     tab.classList.add('active');
 
-    // Switch views
     document.querySelectorAll('.app-view').forEach(function(v) { v.classList.remove('active'); });
     var targetView = document.getElementById(targetTab + '-view');
     if (targetView) targetView.classList.add('active');
 
-    // Lazy-load extension frontend JS on first tab click
     if (extName && typeof activateExtensionFrontend === 'function') {
       activateExtensionFrontend(extName);
     }
 
-    // Fire extension lifecycle events
     if (prevExtName && prevExtName !== extName) {
       ExtensionAPI._fireLifecycle(prevExtName, 'deactivate');
     }
@@ -41,7 +32,6 @@ function initSidebar() {
       ExtensionAPI._fireLifecycle(extName, 'activate');
     }
 
-    // When switching to Blockly, ensure workspace + Blockly are ready
     if (targetTab === 'blockly') {
       ensureBlocklyReady();
       if (typeof window.controlPanelCheckAndRefresh === 'function') {
@@ -49,12 +39,34 @@ function initSidebar() {
       }
     }
 
-    // When switching to Teaching, refresh status if a port is selected
     if (targetTab === 'teaching') {
       var teachPort = document.getElementById('teach-port-select');
       if (teachPort && teachPort.value) {
         // Trigger a status refresh by firing the change event logic
       }
     }
+  }
+
+  sidebar.addEventListener('click', function(e) {
+    var tab = e.target.closest('.sidebar-tab');
+    if (!tab || tab.classList.contains('disabled') || switching) return;
+
+    var targetTab = tab.dataset.tab;
+    if (!targetTab) return;
+    if (tab.classList.contains('active')) return;
+
+    var extName = tab.dataset.extension || null;
+    if (extName && typeof ensureExtensionPermissions === 'function') {
+      switching = true;
+      ensureExtensionPermissions(extName).then(function(ok) {
+        switching = false;
+        if (ok) applyTabSwitch(tab);
+      }).catch(function() {
+        switching = false;
+      });
+      return;
+    }
+
+    applyTabSwitch(tab);
   });
 }

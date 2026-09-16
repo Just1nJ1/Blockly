@@ -116,10 +116,6 @@ def _collect_orphan_deps(pip, env, initial_deps):
 
 def _find_uv():
     """Locate the uv binary (installed via pip as a project dependency)."""
-    uv = shutil.which('uv')
-    if uv:
-        return uv
-    # Fallback: check alongside the embedded Python (pip installs scripts there)
     base = os.path.dirname(sys.executable)
     for candidate in [
         os.path.join(base, 'uv'),
@@ -275,8 +271,9 @@ def create_environment(name, python_version=None, install_base_packages=True):
                 'error': 'uv not found. It should be installed as a project dependency.'}
 
     cmd = [uv, 'venv', '--seed']
-    if python_version:
-        cmd += ['--python', python_version]
+    # Default: the embedded interpreter running this server. An explicit
+    # python_version (Settings UI) still lets uv fetch that version instead.
+    cmd += ['--python', python_version or sys.executable]
     cmd.append(env_dir)
 
     env = _clean_env()

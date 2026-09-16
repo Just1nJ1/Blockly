@@ -9,6 +9,7 @@
  *   "name": "my-extension",
  *   "displayName": "My Extension",
  *   "version": "1.0.0",
+ *   "permissions": ["camera"],
  *   "contributes": {
  *     "sidebarTab": { "id", "label", "icon", "html", "js", "css" },
  *     "backend": { "main": "backend/main.py" },
@@ -421,6 +422,47 @@ async function activateExtensionFrontend(name) {
 
   await _injectExtScript(ext.basePath, jsPath, 'ext-tab-' + name);
   console.log('[Extensions] Activated frontend JS for: ' + name);
+}
+
+/**
+ * Ask the main process to grant any media permissions listed on the
+ * extension manifest. No-op if none are declared or already granted.
+ * Returns false if the user declines / the OS denies — caller should
+ * not switch to the tab.
+ */
+async function ensureExtensionPermissions(name) {
+  var ext = _loadedExtensions.get(name);
+  if (!ext || !ext.manifest) return true;
+
+  var raw = ext.manifest.permissions;
+  if (!raw || !raw.length) return true;
+
+  var perms = [];
+  for (var i = 0; i < raw.length; i++) {
+    var p = String(raw[i] || '').toLowerCase();
+    if (p && perms.indexOf(p) === -1) perms.push(p);
+  }
+  if (!perms.length) return true;
+
+  var ipcRenderer = null;
+  try { ipcRenderer = require('electron').ipcRenderer; } catch (e) { return true; }
+  if (!ipcRenderer) return true;
+
+  var displayName = ext.manifest.displayName || name;
+  for (var j = 0; j < perms.length; j++) {
+    try {
+      var result = await ipcRenderer.invoke('permissions:ensure', {
+        permission: perms[j],
+        extensionName: name,
+        displayName: displayName
+      });
+      if (!result || !result.granted) return false;
+    } catch (err) {
+      console.error('[Extensions] Permission request failed:', perms[j], err);
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

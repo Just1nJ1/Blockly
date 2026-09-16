@@ -107,6 +107,7 @@ extension provides.
 | `displayName` | string | No | Human-readable name shown in the UI. Falls back to `name`. |
 | `version` | string | No | Semver version string. |
 | `description` | string | No | Short description of the extension. |
+| `permissions` | string[] | No | OS media permissions to request when the tab is opened (`camera`, `microphone`). Already-granted permissions are skipped. |
 | `contributes` | object | Yes | What the extension provides (see below). |
 
 ### `contributes.sidebarTab`
