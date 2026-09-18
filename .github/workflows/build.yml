@@ -1,9 +1,11 @@
 name: Build & Release
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  # Temporarily disabled — re-enable when ready:
+  # push:
+  #   branches: [main]
+  #   tags: ['v*']
+  workflow_dispatch:
   repository_dispatch:
     types: [sdk-release]
 
@@ -239,9 +241,9 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Publish to SDK repo for tag pushes and SDK dispatches
+  # Publish to SDK repo for tag pushes and SDK dispatches (not manual runs)
   release-to-sdk:
-    if: github.event_name != 'push' || github.ref_type == 'tag'
+    if: github.event_name == 'repository_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag')
     needs: [build-blockly]
     runs-on: ubuntu-latest
 
