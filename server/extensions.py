@@ -42,7 +42,7 @@ def load_extensions(app, extensions_dir, main_server_url='http://127.0.0.1:5080'
             continue
 
         try:
-            with open(manifest_path, 'r') as f:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest = json.load(f)
 
             name = manifest.get('name', entry)

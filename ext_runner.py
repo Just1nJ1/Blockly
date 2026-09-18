@@ -172,7 +172,7 @@ def main():
 
     # Read manifest
     manifest_path = os.path.join(args.ext_dir, 'extension.json')
-    with open(manifest_path, 'r') as f:
+    with open(manifest_path, 'r', encoding='utf-8') as f:
         manifest = json.load(f)
 
     name = manifest.get('name', os.path.basename(args.ext_dir))
