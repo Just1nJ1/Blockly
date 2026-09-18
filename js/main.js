@@ -164,6 +164,13 @@ function initBlockly() {
   // Update code preview on block change
   workspace.addChangeListener(updateCodePreview);
 
+  // Mark workspace dirty on real block edits (not UI / load events)
+  workspace.addChangeListener(function(event) {
+    if (typeof isSignificantBlocklyEvent === 'function' && isSignificantBlocklyEvent(event)) {
+      if (typeof markWorkspaceDirty === 'function') markWorkspaceDirty();
+    }
+  });
+
   // Refresh control panel port labels and block colors when setup_robot blocks change
   workspace.addChangeListener(function(event) {
     if (event.type === Blockly.Events.BLOCK_CREATE ||

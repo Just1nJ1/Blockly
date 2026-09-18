@@ -151,6 +151,10 @@ function _settingsRenderPage(page) {
       title.textContent = 'Appearance';
       _buildSettingsAppearancePage(body);
       break;
+    case 'editor':
+      title.textContent = 'Editor';
+      _buildSettingsEditorPage(body);
+      break;
     case 'extensions':
       title.textContent = 'Extensions';
       _buildSettingsExtensionsPage(body);
@@ -175,6 +179,7 @@ function _settingsRenderPage(page) {
 function _buildSettingsMainPage(container) {
   var items = [
     { id: 'appearance',   label: 'Appearance',   desc: 'Font size and Blockly block size' },
+    { id: 'editor',       label: 'Editor',       desc: 'Auto-save interval' },
     { id: 'extensions',   label: 'Extensions',   desc: 'Manage installed extensions' },
     { id: 'environments', label: 'Environments', desc: 'Blockly packages + extension venvs' },
     { id: 'advanced',     label: 'Advanced',     desc: 'Developer mode, firmware settings' },
@@ -275,6 +280,45 @@ function _buildSettingsAppearancePage(container) {
     blockRange.addEventListener('input', function() {
       var n = prefs.setBlockScale(blockRange.value);
       if (blockVal) blockVal.textContent = Math.round(n * 100) + '%';
+    });
+  }
+}
+
+// ── Editor Page ──
+
+function _buildSettingsEditorPage(container) {
+  var prefs = window.AppPreferences;
+  if (!prefs || typeof prefs.getAutosaveInterval !== 'function') {
+    container.innerHTML = '<div class="app-settings-empty">Preferences module not loaded.</div>';
+    return;
+  }
+
+  var current = prefs.getAutosaveInterval();
+  var options = prefs.AUTOSAVE_OPTIONS || [];
+  var optsHtml = '';
+  for (var i = 0; i < options.length; i++) {
+    var opt = options[i];
+    optsHtml += '<option value="' + opt.value + '"' +
+      (opt.value === current ? ' selected' : '') + '>' +
+      opt.label + '</option>';
+  }
+
+  var field = document.createElement('div');
+  field.className = 'app-settings-field';
+  field.innerHTML =
+    '<label class="app-settings-field-label" for="app-autosave-interval">Auto-save</label>' +
+    '<select id="app-autosave-interval" class="app-settings-select" style="width:100%;max-width:240px;">' +
+      optsHtml +
+    '</select>' +
+    '<div class="app-settings-field-hint">' +
+      'Automatically writes the Blockly workspace (and a named Teaching file) after this interval when there are unsaved changes. Manual Save still works anytime.' +
+    '</div>';
+  container.appendChild(field);
+
+  var select = document.getElementById('app-autosave-interval');
+  if (select) {
+    select.addEventListener('change', function() {
+      prefs.setAutosaveInterval(select.value);
     });
   }
 }

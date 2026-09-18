@@ -3491,3 +3491,76 @@ button:disabled {
   font-size: 14px;
   line-height: 1.6;
 }
+
+/* ── Save toast ── */
+.save-toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 20000;
+  pointer-events: none;
+}
+.save-toast {
+  background: rgba(38, 50, 56, 0.94);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  white-space: nowrap;
+}
+.save-toast.save-toast-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.save-toast.save-toast-error {
+  background: rgba(183, 28, 28, 0.94);
+}
+[data-theme="dark"] .save-toast {
+  background: rgba(245, 245, 245, 0.94);
+  color: #1e1e1e;
+}
+[data-theme="dark"] .save-toast.save-toast-error {
+  background: rgba(239, 83, 80, 0.95);
+  color: #fff;
+}
+
+/* ── Unsaved-changes quit dialog ── */
+.unsaved-exit-overlay {
+  z-index: 20001;
+}
+.unsaved-exit-dialog {
+  max-width: 440px;
+}
+.unsaved-exit-message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.unsaved-exit-footer {
+  justify-content: space-between;
+}
+.unsaved-exit-footer-right {
+  display: flex;
+  gap: 8px;
+}
+.ctrl-modal-btn-discard {
+  background: transparent;
+  color: #c62828;
+  border-color: transparent;
+}
+.ctrl-modal-btn-discard:hover {
+  background: #ffebee;
+}
+[data-theme="dark"] .ctrl-modal-btn-discard {
+  color: #ef9a9a;
+}
+[data-theme="dark"] .ctrl-modal-btn-discard:hover {
+  background: rgba(239, 83, 80, 0.16);
+}

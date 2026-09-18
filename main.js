@@ -33,24 +33,13 @@ let _rendererReady = false;
 function log(msg) {
   const line = `[Main] ${msg}`;
   console.log(line);
-  startupLogs.push({ level: 'log', message: line });
-  // Forward to renderer only after page has finished loading
-  if (_rendererReady && mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.executeJavaScript(
-      `console.log(${JSON.stringify(line)})`
-    ).catch(() => {});
-  }
+  if (!_rendererReady) startupLogs.push({ level: 'log', message: line });
 }
 
 function logError(msg) {
   const line = `[Main] ${msg}`;
   console.error(line);
-  startupLogs.push({ level: 'error', message: line });
-  if (_rendererReady && mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.executeJavaScript(
-      `console.error(${JSON.stringify(line)})`
-    ).catch(() => {});
-  }
+  if (!_rendererReady) startupLogs.push({ level: 'error', message: line });
 }
 
 /**
@@ -286,6 +275,9 @@ function discoverExtensions() {
 let mainWindow;
 let pythonProcess;
 let serverPort = 5080; // Will be updated to an available port
+let _allowWindowClose = false;
+let _closeCheckInFlight = false;
+let _isQuitting = false;
 
 /**
  * Kill the main Python server and all its child processes (extension subprocesses).
@@ -476,6 +468,95 @@ function buildAppMenu() {
   Menu.setApplicationMenu(menu);
 }
 
+function finishAppClose(fromQuit) {
+  _allowWindowClose = true;
+  _closeCheckInFlight = false;
+  if (fromQuit || _isQuitting) {
+    app.quit();
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  }
+}
+
+function cancelAppClose() {
+  _isQuitting = false;
+  _closeCheckInFlight = false;
+}
+
+/**
+ * Confirm unsaved Blockly / Teaching files before closing.
+ * Uses a native dialog so Cmd+Q / the traffic-light close cannot get stuck
+ * waiting on a renderer Promise.
+ * fromQuit: true when triggered by Cmd+Q / File > Quit.
+ */
+async function requestAppClose(fromQuit) {
+  if (_allowWindowClose || _closeCheckInFlight) return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    _allowWindowClose = true;
+    app.quit();
+    return;
+  }
+
+  _closeCheckInFlight = true;
+
+  let state = { dirty: false, detail: '' };
+  try {
+    if (!mainWindow.webContents.isDestroyed()) {
+      state = await mainWindow.webContents.executeJavaScript(
+        '(typeof getUnsavedCloseState === "function") ? getUnsavedCloseState() : { dirty: false }'
+      );
+    }
+  } catch (err) {
+    logError('Unsaved-state check failed: ' + (err && err.message ? err.message : err));
+    finishAppClose(fromQuit);
+    return;
+  }
+
+  if (!state || !state.dirty) {
+    finishAppClose(fromQuit);
+    return;
+  }
+
+  let response = 2;
+  try {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Save', "Don't Save", 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      message: 'Do you want to save your changes before quitting?',
+      detail: state.detail || 'You have unsaved changes.',
+    });
+    response = result.response;
+  } catch (err) {
+    logError('Close dialog failed: ' + (err && err.message ? err.message : err));
+    cancelAppClose();
+    return;
+  }
+
+  if (response === 0) {
+    let saved = false;
+    try {
+      saved = await mainWindow.webContents.executeJavaScript(
+        '(typeof saveAllBeforeExit === "function") ? saveAllBeforeExit() : true'
+      );
+    } catch (err) {
+      logError('Save before exit failed: ' + (err && err.message ? err.message : err));
+      saved = false;
+    }
+    if (saved) finishAppClose(fromQuit);
+    else cancelAppClose();
+    return;
+  }
+
+  if (response === 1) {
+    finishAppClose(fromQuit);
+    return;
+  }
+
+  cancelAppClose();
+}
+
 function createWindow() {
   const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
@@ -537,6 +618,15 @@ function createWindow() {
     }
 
     _rendererReady = true;
+  });
+
+  mainWindow.on('close', (e) => {
+    if (_allowWindowClose) return;
+    e.preventDefault();
+    requestAppClose(false).catch((err) => {
+      logError('Close confirm failed: ' + (err && err.message ? err.message : err));
+      cancelAppClose();
+    });
   });
 
   mainWindow.on('closed', () => {
@@ -738,6 +828,16 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
+  });
+});
+
+app.on('before-quit', (e) => {
+  if (_allowWindowClose) return;
+  e.preventDefault();
+  _isQuitting = true;
+  requestAppClose(true).catch((err) => {
+    logError('Quit confirm failed: ' + (err && err.message ? err.message : err));
+    cancelAppClose();
   });
 });
 

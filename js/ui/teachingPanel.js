@@ -824,8 +824,16 @@
   }
 
   function setDirty(dirty) {
+    var wasDirty = _fileDirty;
     _fileDirty = !!dirty;
     updateFileLabel();
+    if (_fileDirty && !wasDirty && typeof startAutosaveTimer === 'function') {
+      startAutosaveTimer();
+    }
+  }
+
+  function canAutosave() {
+    return !!(_fileDirty && _filePath);
   }
 
   function setCurrentFile(filePath) {
@@ -837,6 +845,7 @@
     }
     _fileDirty = false;
     updateFileLabel();
+    if (typeof restartAutosaveTimer === 'function') restartAutosaveTimer();
   }
 
   function serializeDocument() {
@@ -908,7 +917,8 @@
     });
   }
 
-  function writeToPath(filePath) {
+  function writeToPath(filePath, opts) {
+    opts = opts || {};
     if (!_fs) {
       alert('Saving is only available in the desktop app.');
       return false;
@@ -920,11 +930,20 @@
       }
       _fs.writeFileSync(filePath, serializeDocument(), 'utf8');
       setCurrentFile(filePath);
+      if (!opts.silent && typeof showSaveToast === 'function') {
+        showSaveToast(opts.auto ? 'Teaching file auto-saved' : 'Teaching file saved');
+      }
       return true;
     } catch (err) {
       alert('Failed to save: ' + err.message);
       return false;
     }
+  }
+
+  /** Silent overwrite when a path already exists (used by autosave). */
+  function autosave() {
+    if (!_fileDirty || !_filePath) return false;
+    return writeToPath(_filePath, { silent: true, auto: true });
   }
 
   /**
@@ -951,12 +970,13 @@
             { name: 'All Files', extensions: ['*'] }
           ]
         });
-        if (!picked) return;
+        if (!picked) return false;
         target = picked;
       }
-      writeToPath(target);
+      return writeToPath(target);
     } catch (err) {
       alert('Save failed: ' + err.message);
+      return false;
     }
   }
 
@@ -1535,6 +1555,10 @@
   window.TeachingPanel = {
     openFile: openFile,
     saveFile: function() { return saveFile(false); },
-    saveFileAs: function() { return saveFile(true); }
+    saveFileAs: function() { return saveFile(true); },
+    isDirty: function() { return !!_fileDirty; },
+    getFileDisplayName: function() { return _fileDisplayName; },
+    canAutosave: canAutosave,
+    autosave: autosave
   };
 })();

@@ -777,7 +777,7 @@
    * @param {string} varName
    * @param {{x?:number, y?:number, z?:number, rotZ?:number}} pose — in metres and degrees
    */
-  function setRobotPose(varName, pose) {
+  function setRobotPose(varName, pose, options) {
     var r = robots[varName];
     if (!r) return;
     if (pose.x !== undefined) r.pose.x = pose.x;
@@ -794,6 +794,9 @@
       z: r.pose.z,
       rotZ: r.pose.rotZ
     };
+    if (!(options && options.silent) && typeof markWorkspaceDirty === 'function') {
+      markWorkspaceDirty();
+    }
   }
 
   /**
@@ -857,7 +860,7 @@
     for (var j = 0; j < names.length; j++) {
       var n = names[j];
       if (robots[n]) {
-        setRobotPose(n, pendingPoses[n]);
+        setRobotPose(n, pendingPoses[n], { silent: true });
       }
     }
     console.log('[WorldViewer] Applied saved poses for', names.length, 'robot(s)');

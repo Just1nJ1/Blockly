@@ -21,6 +21,10 @@ var _ipcRenderer = require('electron').ipcRenderer;
 
 var _currentWorkspacePath = null;  // full folder path
 var _currentWorkspaceName = null;  // folder basename (display name)
+var _workspaceDirty = false;
+var _suppressDirty = false;
+var _autosaveTimer = null;
+var _saveToastTimer = null;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -111,17 +115,231 @@ function setCurrentWorkspace(wsPath) {
   _ensureDir(_getFunctionsDir(wsPath));
   _addRecentWorkspace(wsPath);
 
-  // Update title bar
-  document.title = _currentWorkspaceName + ' - WLKATA StudioX';
-  // Update toolbar indicator (label only — keep the chevron)
+  _updateWorkspaceChrome();
+}
+
+function _updateWorkspaceChrome() {
+  var name = _currentWorkspaceName || 'Workspace';
+  var dirtyMark = _workspaceDirty ? ' *' : '';
+  document.title = name + dirtyMark + ' - WLKATA StudioX';
   var label = document.getElementById('workspace-name-label');
   if (label) {
-    label.textContent = _currentWorkspaceName;
+    label.textContent = name + dirtyMark;
   } else {
     var indicator = document.getElementById('workspace-name-indicator');
-    if (indicator) indicator.textContent = _currentWorkspaceName;
+    if (indicator) indicator.textContent = name + dirtyMark;
   }
 }
+
+function isWorkspaceDirty() {
+  return !!_workspaceDirty;
+}
+
+function markWorkspaceDirty() {
+  if (_suppressDirty) return;
+  if (_workspaceDirty) return;
+  _workspaceDirty = true;
+  _updateWorkspaceChrome();
+  startAutosaveTimer();
+}
+
+function _setWorkspaceDirty(dirty) {
+  var wasDirty = _workspaceDirty;
+  _workspaceDirty = !!dirty;
+  _updateWorkspaceChrome();
+  if (_workspaceDirty && !wasDirty) startAutosaveTimer();
+  if (!_workspaceDirty && !_canAutosave()) stopAutosaveTimer();
+}
+
+function withWorkspaceLoad(fn) {
+  _suppressDirty = true;
+  try {
+    fn();
+  } finally {
+    // Blockly may flush FINISHED_LOADING / create events on the next tick
+    setTimeout(function() {
+      _suppressDirty = false;
+      _setWorkspaceDirty(false);
+    }, 0);
+  }
+}
+
+function isSignificantBlocklyEvent(event) {
+  if (!event) return false;
+  if (event.isUiEvent) return false;
+  if (event.recordUndo === false) return false;
+  var t = event.type;
+  if (typeof Blockly !== 'undefined' && Blockly.Events) {
+    if (t === Blockly.Events.FINISHED_LOADING) return false;
+    if (t === Blockly.Events.VIEWPORT_CHANGE) return false;
+    if (t === Blockly.Events.THEME_CHANGE) return false;
+    if (t === Blockly.Events.SELECTED) return false;
+    if (t === Blockly.Events.CLICK) return false;
+    if (t === Blockly.Events.BLOCK_DRAG) return false;
+  }
+  if (t === 'finished_loading' || t === 'viewport_change' || t === 'theme_change' ||
+      t === 'selected' || t === 'click' || t === 'drag' || t === 'ui') {
+    return false;
+  }
+  return true;
+}
+
+function showSaveToast(message, kind) {
+  if (!document.body) return;
+  var host = document.getElementById('save-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'save-toast-host';
+    host.className = 'save-toast-host';
+    document.body.appendChild(host);
+  }
+  host.innerHTML = '';
+  var toast = document.createElement('div');
+  toast.className = 'save-toast' + (kind === 'error' ? ' save-toast-error' : '');
+  toast.textContent = message || 'Saved';
+  host.appendChild(toast);
+  // Force layout so the fade-in transition runs
+  void toast.offsetWidth;
+  toast.classList.add('save-toast-visible');
+  if (_saveToastTimer) clearTimeout(_saveToastTimer);
+  _saveToastTimer = setTimeout(function() {
+    toast.classList.remove('save-toast-visible');
+    setTimeout(function() {
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }, 220);
+  }, 2200);
+}
+
+function _getAutosaveMs() {
+  if (window.AppPreferences && typeof AppPreferences.getAutosaveIntervalMs === 'function') {
+    return AppPreferences.getAutosaveIntervalMs();
+  }
+  return 30000;
+}
+
+function _canAutosave() {
+  if (_workspaceDirty && _currentWorkspacePath) return true;
+  return !!(window.TeachingPanel &&
+    typeof TeachingPanel.canAutosave === 'function' &&
+    TeachingPanel.canAutosave());
+}
+
+function stopAutosaveTimer() {
+  if (_autosaveTimer) {
+    clearTimeout(_autosaveTimer);
+    _autosaveTimer = null;
+  }
+}
+
+/** Start (or restart) the countdown. No-op until there is something to save. */
+function startAutosaveTimer() {
+  stopAutosaveTimer();
+  var ms = _getAutosaveMs();
+  if (!ms || !_canAutosave()) return;
+  _autosaveTimer = setTimeout(function() {
+    _autosaveTimer = null;
+    runAutosave();
+    if (_canAutosave()) startAutosaveTimer();
+  }, ms);
+}
+
+/** Settings changed: restart countdown only if an edit is already pending. */
+function restartAutosaveTimer() {
+  if (_canAutosave()) startAutosaveTimer();
+  else stopAutosaveTimer();
+}
+
+function _workspaceIsDragging() {
+  try {
+    var ws = getWorkspace ? getWorkspace() : null;
+    if (ws && typeof ws.isDragging === 'function' && ws.isDragging()) return true;
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
+function runAutosave() {
+  if (_workspaceIsDragging()) return;
+  var saved = [];
+  if (_workspaceDirty && _currentWorkspacePath) {
+    if (saveWorkspaceBlocks({ silent: true })) saved.push('workspace');
+  }
+  if (window.TeachingPanel && typeof TeachingPanel.autosave === 'function') {
+    if (TeachingPanel.autosave()) saved.push('teaching');
+  }
+  if (!saved.length) return;
+  if (saved.length === 2) showSaveToast('Auto-saved');
+  else if (saved[0] === 'workspace') showSaveToast('Workspace auto-saved');
+  else showSaveToast('Teaching file auto-saved');
+}
+
+function _teachingIsDirty() {
+  return !!(window.TeachingPanel &&
+    typeof TeachingPanel.isDirty === 'function' &&
+    TeachingPanel.isDirty());
+}
+
+function _collectUnsavedSources() {
+  var sources = [];
+  if (_workspaceDirty) {
+    sources.push(_currentWorkspaceName
+      ? 'workspace \u201c' + _currentWorkspaceName + '\u201d'
+      : 'the workspace');
+  }
+  if (_teachingIsDirty()) {
+    var teachName = (window.TeachingPanel && TeachingPanel.getFileDisplayName)
+      ? TeachingPanel.getFileDisplayName()
+      : 'Untitled';
+    sources.push('Teaching file \u201c' + teachName + '\u201d');
+  }
+  return sources;
+}
+
+/** Sync snapshot for the main-process quit dialog. */
+function getUnsavedCloseState() {
+  var sources = _collectUnsavedSources();
+  if (!sources.length) return { dirty: false, detail: '' };
+  var list = sources.length === 1
+    ? sources[0]
+    : sources.slice(0, -1).join(', ') + ' and ' + sources[sources.length - 1];
+  return {
+    dirty: true,
+    detail: 'You have unsaved changes in ' + list + '.'
+  };
+}
+
+function hasUnsavedChanges() {
+  return _workspaceDirty || _teachingIsDirty();
+}
+
+function saveAllBeforeExit() {
+  return Promise.resolve().then(function() {
+    if (_workspaceDirty) {
+      if (!saveWorkspaceBlocks({ silent: true })) return false;
+    }
+    if (!_teachingIsDirty()) return true;
+    if (!window.TeachingPanel || typeof TeachingPanel.saveFile !== 'function') return true;
+    return Promise.resolve(TeachingPanel.saveFile()).then(function(ok) {
+      return ok !== false;
+    });
+  }).then(function(ok) {
+    if (ok) showSaveToast('Saved');
+    return ok;
+  }).catch(function(err) {
+    console.error('[WorkspaceManager] Save before exit failed:', err);
+    showSaveToast('Save failed', 'error');
+    return false;
+  });
+}
+
+window.restartAutosaveTimer = restartAutosaveTimer;
+window.startAutosaveTimer = startAutosaveTimer;
+window.getUnsavedCloseState = getUnsavedCloseState;
+window.saveAllBeforeExit = saveAllBeforeExit;
+window.hasUnsavedChanges = hasUnsavedChanges;
+window.markWorkspaceDirty = markWorkspaceDirty;
+window.isWorkspaceDirty = isWorkspaceDirty;
+window.showSaveToast = showSaveToast;
+window.isSignificantBlocklyEvent = isSignificantBlocklyEvent;
 
 // ── Block save/load ─────────────────────────────────────────────
 
@@ -195,46 +413,60 @@ function loadWorldScene() {
   }
 }
 
-function saveWorkspaceBlocks() {
+function saveWorkspaceBlocks(opts) {
+  opts = opts || {};
   var ws = getWorkspace ? getWorkspace() : null;
-  if (!ws || !_currentWorkspacePath) return;
+  if (!ws || !_currentWorkspacePath) return false;
 
-  var xml = Blockly.Xml.workspaceToDom(ws);
-  var xmlText = Blockly.Xml.domToText(xml);
+  try {
+    var xml = Blockly.Xml.workspaceToDom(ws);
+    var xmlText = Blockly.Xml.domToText(xml);
 
-  _ensureDir(_currentWorkspacePath);
-  _fs.writeFileSync(_getBlocksFile(_currentWorkspacePath), xmlText, 'utf8');
-  console.log('[WorkspaceManager] Saved blocks to:', _currentWorkspacePath);
+    _ensureDir(_currentWorkspacePath);
+    _fs.writeFileSync(_getBlocksFile(_currentWorkspacePath), xmlText, 'utf8');
+    console.log('[WorkspaceManager] Saved blocks to:', _currentWorkspacePath);
 
-  // Also snapshot World base poses when the scene has been used
-  saveWorldScene();
+    // Also snapshot World base poses when the scene has been used
+    saveWorldScene();
+    _setWorkspaceDirty(false);
+    if (!opts.silent) {
+      showSaveToast(opts.auto ? 'Workspace auto-saved' : 'Workspace saved');
+    }
+    return true;
+  } catch (e) {
+    console.error('[WorkspaceManager] Failed to save blocks:', e);
+    if (!opts.silent) showSaveToast('Save failed', 'error');
+    return false;
+  }
 }
 
 function loadWorkspaceBlocks() {
   var ws = getWorkspace ? getWorkspace() : null;
   if (!ws || !_currentWorkspacePath) return;
 
-  var filePath = _getBlocksFile(_currentWorkspacePath);
-  if (!_fs.existsSync(filePath)) {
-    console.log('[WorkspaceManager] No blocks file in:', _currentWorkspacePath);
-    // Still try world.json / clear poses for this workspace
+  withWorkspaceLoad(function() {
+    var filePath = _getBlocksFile(_currentWorkspacePath);
+    if (!_fs.existsSync(filePath)) {
+      console.log('[WorkspaceManager] No blocks file in:', _currentWorkspacePath);
+      // Still try world.json / clear poses for this workspace
+      loadWorldScene();
+      return;
+    }
+
+    try {
+      var xmlText = _fs.readFileSync(filePath, 'utf8');
+      var xmlDom = Blockly.utils.xml.textToDom(xmlText);
+      ws.clear();
+      Blockly.Xml.domToWorkspace(xmlDom, ws);
+      if (typeof updateCodePreview === 'function') updateCodePreview();
+      console.log('[WorkspaceManager] Loaded blocks from:', _currentWorkspacePath);
+    } catch (e) {
+      console.error('[WorkspaceManager] Failed to load blocks:', e);
+    }
+
+    // Restore World poses (applied when robots are synced into the scene)
     loadWorldScene();
-    return;
-  }
-
-  try {
-    var xmlText = _fs.readFileSync(filePath, 'utf8');
-    var xmlDom = Blockly.utils.xml.textToDom(xmlText);
-    ws.clear();
-    Blockly.Xml.domToWorkspace(xmlDom, ws);
-    if (typeof updateCodePreview === 'function') updateCodePreview();
-    console.log('[WorkspaceManager] Loaded blocks from:', _currentWorkspacePath);
-  } catch (e) {
-    console.error('[WorkspaceManager] Failed to load blocks:', e);
-  }
-
-  // Restore World poses (applied when robots are synced into the scene)
-  loadWorldScene();
+  });
 }
 
 // ── Saved functions (per-workspace, on disk) ────────────────────
@@ -433,8 +665,8 @@ function showWorkspaceDialog() {
  * Switch to a different workspace (save current, show dialog, reload).
  */
 async function switchWorkspace() {
-  // Save current workspace first
-  saveWorkspaceBlocks();
+  // Save current workspace first (no toast — switching is not an explicit Save)
+  saveWorkspaceBlocks({ silent: true });
 
   // Show dialog
   var wsPath = await showWorkspaceDialog();

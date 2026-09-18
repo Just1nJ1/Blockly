@@ -1,10 +1,11 @@
 /**
- * App preferences: UI font size + Blockly block scale.
- * Persisted in localStorage; applied on load and from Settings → Appearance.
+ * App preferences: UI font size + Blockly block scale + autosave.
+ * Persisted in localStorage; applied on load and from Settings.
  */
 (function() {
   var FONT_KEY = 'app-font-size';
   var BLOCK_KEY = 'app-block-scale';
+  var AUTOSAVE_KEY = 'app-autosave-interval';
 
   var FONT_MIN = 12;
   var FONT_MAX = 20;
@@ -13,6 +14,18 @@
   var BLOCK_MIN = 0.6;
   var BLOCK_MAX = 2.0;
   var BLOCK_DEFAULT = 1.0;
+
+  // Seconds. 0 = disabled. Default 30s.
+  var AUTOSAVE_DEFAULT = 30;
+  var AUTOSAVE_ALLOWED = [0, 10, 30, 60, 180, 300];
+  var AUTOSAVE_OPTIONS = [
+    { value: 0, label: 'Disable' },
+    { value: 10, label: '10 seconds' },
+    { value: 30, label: '30 seconds' },
+    { value: 60, label: '1 minute' },
+    { value: 180, label: '3 minutes' },
+    { value: 300, label: '5 minutes' }
+  ];
 
   function clamp(n, lo, hi) {
     return Math.min(hi, Math.max(lo, n));
@@ -71,6 +84,30 @@
     } catch (e) { /* workspace may not exist yet */ }
   }
 
+  function getAutosaveInterval() {
+    try {
+      var raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (raw === null || raw === undefined) return AUTOSAVE_DEFAULT;
+      var v = parseInt(raw, 10);
+      if (AUTOSAVE_ALLOWED.indexOf(v) !== -1) return v;
+    } catch (e) { /* ignore */ }
+    return AUTOSAVE_DEFAULT;
+  }
+
+  function setAutosaveInterval(seconds) {
+    var n = parseInt(seconds, 10);
+    if (AUTOSAVE_ALLOWED.indexOf(n) === -1) n = AUTOSAVE_DEFAULT;
+    try { localStorage.setItem(AUTOSAVE_KEY, String(n)); } catch (e) { /* ignore */ }
+    if (typeof window.restartAutosaveTimer === 'function') {
+      window.restartAutosaveTimer();
+    }
+    return n;
+  }
+
+  function getAutosaveIntervalMs() {
+    return getAutosaveInterval() * 1000;
+  }
+
   /** Apply stored prefs (call early + after Blockly inject). */
   function applyAll() {
     applyFontSize();
@@ -92,6 +129,11 @@
     setBlockScale: setBlockScale,
     applyBlockScale: applyBlockScale,
     applyAll: applyAll,
+    getAutosaveInterval: getAutosaveInterval,
+    setAutosaveInterval: setAutosaveInterval,
+    getAutosaveIntervalMs: getAutosaveIntervalMs,
+    AUTOSAVE_OPTIONS: AUTOSAVE_OPTIONS,
+    AUTOSAVE_DEFAULT: AUTOSAVE_DEFAULT,
     FONT_MIN: FONT_MIN,
     FONT_MAX: FONT_MAX,
     FONT_DEFAULT: FONT_DEFAULT,
