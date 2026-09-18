@@ -1719,6 +1719,16 @@
     buildEffectorButtons(select.value);
   }
 
+  function setEffectorHighlight(container, mode) {
+    if (!container) return;
+    var btns = container.querySelectorAll('.ctrl-eff-btn');
+    for (var i = 0; i < btns.length; i++) {
+      var m = parseInt(btns[i].dataset.mode, 10);
+      // Mode 0 (OFF) never stays highlighted; it only clears Open/Close.
+      btns[i].classList.toggle('active', mode !== 0 && m === mode);
+    }
+  }
+
   function buildEffectorButtons(type) {
     var container = document.getElementById('ctrl-effector-buttons');
     if (!container) return;
@@ -1731,8 +1741,11 @@
         var btn = document.createElement('button');
         btn.className = 'ctrl-btn ctrl-eff-btn';
         btn.textContent = btnDef.label;
+        btn.dataset.mode = String(btnDef.mode);
         btn.addEventListener('click', function() {
+          if (!_currentPort) return;
           sendEffectorCommand(btnDef.endpoint, btnDef.mode);
+          setEffectorHighlight(container, btnDef.mode);
         });
         container.appendChild(btn);
       })(buttons[i]);

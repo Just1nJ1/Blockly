@@ -1741,6 +1741,11 @@ button:disabled {
   color: #fff;
   border-color: var(--accent);
 }
+.ctrl-eff-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 
 /* Teaching effector column: action button + add button stacked */
 .teach-eff-col {
