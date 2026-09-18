@@ -10,6 +10,7 @@ arrives for a given extension, not at app startup.
 
 import atexit
 import collections
+import json
 import os
 import socket
 import subprocess
@@ -56,14 +57,73 @@ def _find_free_port():
         return s.getsockname()[1]
 
 
+def _ext_wants_camera_warmup(ext_dir):
+    """True if extension.json lists a camera permission."""
+    try:
+        path = os.path.join(ext_dir, 'extension.json')
+        with open(path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+        perms = manifest.get('permissions') or []
+        return 'camera' in perms
+    except Exception:
+        return False
+
+
 def register_ext(name, ext_dir, env_python, main_server_url):
     """Store launch config for lazy startup (called during load_extensions)."""
     _launch_configs[name] = {
         'ext_dir': ext_dir,
         'env_python': env_python,
         'main_server_url': main_server_url,
+        'camera_warmup': _ext_wants_camera_warmup(ext_dir),
     }
     _start_locks[name] = threading.Lock()
+
+
+def warmup_ext(name, path='warmup', timeout=300):
+    """
+    Ensure the extension subprocess is running and hit *path* (best-effort).
+    Used at app start so heavy work (e.g. camera probe) can finish early.
+    """
+    port = _ensure_running(name)
+    if port is None:
+        print(f'[ext_process] warmup {name}: failed to start', flush=True)
+        return False
+    url = f'http://127.0.0.1:{port}/{path.lstrip("/")}'
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+        print(f'[ext_process] warmup {name}/{path} OK', flush=True)
+        return True
+    except Exception as exc:
+        print(f'[ext_process] warmup {name}/{path} failed: {exc}', flush=True)
+        return False
+
+
+def schedule_warmups(names=None, delay_s=1.5):
+    """Background-warm camera extensions (or an explicit name list)."""
+    if names is not None:
+        targets = list(names)
+    else:
+        targets = [
+            n for n, cfg in _launch_configs.items()
+            if cfg.get('camera_warmup')
+        ]
+
+    def _run():
+        time.sleep(delay_s)
+        for name in targets:
+            try:
+                warmup_ext(name, 'warmup', timeout=300)
+            except Exception as exc:
+                print(f'[ext_process] schedule_warmups {name}: {exc}', flush=True)
+
+    if not targets:
+        print('[ext_process] no camera extensions to warm up', flush=True)
+        return
+    print(f'[ext_process] scheduling camera warmup for: {targets}', flush=True)
+    threading.Thread(target=_run, name='ext-warmup', daemon=True).start()
 
 
 def _ensure_running(name):
@@ -226,11 +286,18 @@ def _forward_request(name, port, subpath):
             continue
         headers[key] = value
 
+    # Camera enumeration / warmup can take minutes (fresh open per mode).
+    path_l = (subpath or '').lower()
+    if path_l in ('cameras', 'warmup') or path_l.startswith('cameras'):
+        timeout = 300
+    else:
+        timeout = 60
+
     req = urllib.request.Request(
         target, data=body, headers=headers, method=request.method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_headers = {k: v for k, v in resp.headers.items()
                             if k.lower() not in ('transfer-encoding',)}
             return Response(resp.read(), status=resp.status,
@@ -239,10 +306,12 @@ def _forward_request(name, port, subpath):
         resp_headers = {k: v for k, v in e.headers.items()
                         if k.lower() not in ('transfer-encoding',)}
         return Response(e.read(), status=e.code, headers=resp_headers)
-    except Exception:
+    except Exception as exc:
+        print(f'[ext_process] proxy {name}/{subpath} failed: {exc}', flush=True)
         return jsonify({
             'success': False,
             'error': f'Extension "{name}" is unavailable',
+            'detail': str(exc),
         }), 502
 
 

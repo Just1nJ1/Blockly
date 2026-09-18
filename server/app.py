@@ -1928,6 +1928,10 @@ def create_app(extensions_dirs=None, host='127.0.0.1', port=5080):
     if extensions_dirs:
         main_server_url = f'http://{host}:{port}'
         from .extensions import load_extensions
+        from . import ext_process
         for ext_dir in extensions_dirs:
             load_extensions(app, ext_dir, main_server_url=main_server_url)
+        # Start extension subprocesses early and let them pre-probe (cameras, etc.)
+        # so the first UI open is not blocked / 502-timed-out.
+        ext_process.schedule_warmups(delay_s=2.0)
     return app
