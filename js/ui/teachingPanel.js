@@ -1118,7 +1118,23 @@
       }
       ports.push({ port: opt.value, label: opt.textContent, model: model });
     }
+    ports.sort(function(a, b) {
+      var av = _isVirtualTeachPort(a.port) ? 1 : 0;
+      var bv = _isVirtualTeachPort(b.port) ? 1 : 0;
+      return av - bv;
+    });
     return ports;
+  }
+
+  function _isVirtualTeachPort(port) {
+    if (!port) return false;
+    if (window.ExtensionAPI && typeof ExtensionAPI.isVirtualPort === 'function') {
+      return ExtensionAPI.isVirtualPort(port);
+    }
+    if (window.RobotCatalog && typeof RobotCatalog.isVirtualPort === 'function') {
+      return RobotCatalog.isVirtualPort(port);
+    }
+    return /^Virtual/i.test(String(port));
   }
 
   function showPortMappingDialog(portKeys, portModelMap, onConfirm) {

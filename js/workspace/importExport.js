@@ -882,16 +882,12 @@ function showBlocklyImportMappingDialog(fileVars, workspace, portKeys, portModel
               }
             }
             if (!auto && expectedModel) {
-              for (let p = 0; p < availPorts.length; p++) {
-                const ap = availPorts[p];
-                if (ap.modelValue === expectedModel ||
-                    _modelDisplayName(ap.modelValue) === expectedLabel) {
-                  auto = ap.port;
-                  break;
-                }
-              }
+              auto = _pickHardwareImportPort(availPorts, function(ap) {
+                return ap.modelValue === expectedModel ||
+                  _modelDisplayName(ap.modelValue) === expectedLabel;
+              });
             }
-            if (!auto && availPorts.length > 0) auto = availPorts[0].port;
+            if (!auto) auto = _pickHardwareImportPort(availPorts);
             desired = auto || (needsAssign ? '' : '__keep__');
           }
           setSelectValue(desired);
@@ -1199,7 +1195,38 @@ function getBlocklyImportAvailablePorts() {
     }
   }
 
+  out.sort(function(a, b) {
+    var av = _isVirtualImportPort(a.port) ? 1 : 0;
+    var bv = _isVirtualImportPort(b.port) ? 1 : 0;
+    if (av !== bv) return av - bv;
+    return String(a.port || '').localeCompare(String(b.port || ''));
+  });
   return out;
+}
+
+function _isVirtualImportPort(port) {
+  if (!port) return false;
+  if (window.ExtensionAPI && typeof ExtensionAPI.isVirtualPort === 'function') {
+    return ExtensionAPI.isVirtualPort(port);
+  }
+  if (window.RobotCatalog && typeof RobotCatalog.isVirtualPort === 'function') {
+    return RobotCatalog.isVirtualPort(port);
+  }
+  return /^Virtual/i.test(String(port));
+}
+
+function _pickHardwareImportPort(availPorts, predicate) {
+  var i, ap;
+  for (i = 0; i < availPorts.length; i++) {
+    ap = availPorts[i];
+    if (_isVirtualImportPort(ap.port)) continue;
+    if (!predicate || predicate(ap)) return ap.port;
+  }
+  for (i = 0; i < availPorts.length; i++) {
+    ap = availPorts[i];
+    if (!predicate || predicate(ap)) return ap.port;
+  }
+  return null;
 }
 
 /**

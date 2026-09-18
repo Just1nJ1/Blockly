@@ -55,6 +55,93 @@
   var lastDetectedPorts = [];
   _seedFromCatalog();
 
+  // True only after the user picks a port themselves (programmatic change is not trusted).
+  var _userPickedPort = { command: false, control: false, teaching: false };
+
+  function isVirtualPortName(port) {
+    if (!port) return false;
+    if (window.RobotCatalog && typeof window.RobotCatalog.isVirtualPort === 'function') {
+      return window.RobotCatalog.isVirtualPort(port);
+    }
+    return /^Virtual/i.test(port);
+  }
+
+  function isVirtualPortEntry(entry) {
+    if (!entry) return false;
+    if (entry.virtual) return true;
+    return isVirtualPortName(entry.port);
+  }
+
+  function sortPortsHardwareFirst(ports) {
+    if (!ports || !ports.length) return ports || [];
+    return ports.slice().sort(function(a, b) {
+      var aDet = a.model === 'Detecting...' ? 1 : 0;
+      var bDet = b.model === 'Detecting...' ? 1 : 0;
+      if (aDet !== bDet) return aDet - bDet;
+      var aVir = isVirtualPortEntry(a) ? 1 : 0;
+      var bVir = isVirtualPortEntry(b) ? 1 : 0;
+      if (aVir !== bVir) return aVir - bVir;
+      return String(a.port || '').localeCompare(String(b.port || ''));
+    });
+  }
+
+  /** First usable real port, else first usable virtual. */
+  function pickDefaultPort(ports) {
+    if (!ports) return null;
+    var i, p;
+    for (i = 0; i < ports.length; i++) {
+      p = ports[i];
+      if (!p || !p.port || p.model === 'Detecting...') continue;
+      if (!isVirtualPortEntry(p)) return p.port;
+    }
+    for (i = 0; i < ports.length; i++) {
+      p = ports[i];
+      if (p && p.port && p.model !== 'Detecting...') return p.port;
+    }
+    return null;
+  }
+
+  function portStillAvailable(ports, port) {
+    if (!port || !ports) return false;
+    for (var i = 0; i < ports.length; i++) {
+      if (ports[i].port === port && ports[i].model !== 'Detecting...') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Keep the current value if the user chose it, or if it is already a real
+   * device. Switch away from an auto-selected virtual port when hardware appears.
+   */
+  function shouldKeepSelection(currentValue, ports, userPicked) {
+    if (!portStillAvailable(ports, currentValue)) return false;
+    if (userPicked) return true;
+    if (!isVirtualPortName(currentValue)) return true;
+    var preferred = pickDefaultPort(ports);
+    return !preferred || isVirtualPortName(preferred) || preferred === currentValue;
+  }
+
+  function selectPortValue(select, port) {
+    if (!select || !port) return false;
+    for (var i = 0; i < select.options.length; i++) {
+      if (select.options[i].value === port && !select.options[i].disabled) {
+        select.selectedIndex = i;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function watchUserPortPick(selectId, key) {
+    var el = document.getElementById(selectId);
+    if (!el) return;
+    el.addEventListener('change', function(e) {
+      if (e.isTrusted && el.value && el.value !== '__manual__') {
+        _userPickedPort[key] = true;
+      }
+    });
+  }
+
   function pollDevices() {
     var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
 
@@ -66,9 +153,10 @@
         var newPorts = [];
         var newMap = {};
         var newManualSet = new Set();
+        var sortedPorts = sortPortsHardwareFirst(data.ports);
 
-        for (var i = 0; i < data.ports.length; i++) {
-          var entry = data.ports[i];
+        for (var i = 0; i < sortedPorts.length; i++) {
+          var entry = sortedPorts[i];
           var port = entry.port;
           var model = entry.model;
           var label = port;
@@ -106,7 +194,7 @@
         window.detectedPorts = newPorts;
         window.portModelMap = newMap;
 
-        lastDetectedPorts = data.ports.slice();
+        lastDetectedPorts = sortedPorts;
 
         if (changed) {
           console.log('[DeviceDetector] Ports updated:', newPorts, 'Model map:', newMap);
@@ -200,26 +288,15 @@
     manualOpt.textContent = 'Connect manually...';
     select.appendChild(manualOpt);
 
-    // Restore previous selection if still available
-    var restored = false;
-    for (var j = 0; j < select.options.length; j++) {
-      if (select.options[j].value === currentValue && currentValue !== '' && currentValue !== '__manual__') {
-        select.selectedIndex = j;
-        restored = true;
-        break;
-      }
-    }
-
-    // If previous selection gone, select first real port and auto-connect
-    if (!restored) {
-      var hasRealPort = (ports && ports.length > 0);
-      if (hasRealPort) {
-        select.selectedIndex = 0;
-        // Auto-connect since programmatic selection doesn't fire 'change'
-        var autoPort = select.value;
-        if (autoPort && autoPort !== '' && autoPort !== '__manual__') {
-          connectToSelectedPort(autoPort);
-        }
+    // Restore previous selection if the user chose it or it is already hardware
+    var restored = shouldKeepSelection(currentValue, ports, _userPickedPort.command);
+    if (restored) {
+      selectPortValue(select, currentValue);
+    } else {
+      if (!portStillAvailable(ports, currentValue)) _userPickedPort.command = false;
+      var autoPort = pickDefaultPort(ports);
+      if (autoPort && selectPortValue(select, autoPort)) {
+        connectToSelectedPort(autoPort);
       }
     }
 
@@ -284,23 +361,18 @@
       select.appendChild(opt);
     }
 
-    // Restore previous selection
-    var restored = false;
-    for (var j = 0; j < select.options.length; j++) {
-      if (select.options[j].value === currentValue) {
-        select.selectedIndex = j;
-        restored = true;
-        break;
-      }
-    }
-    if (!restored && ports.length > 0) {
-      // Previous port is gone — notify control panel to clear its cache
+    var restored = shouldKeepSelection(currentValue, ports, _userPickedPort.control);
+    if (restored) {
+      selectPortValue(select, currentValue);
+    } else {
+      if (!portStillAvailable(ports, currentValue)) _userPickedPort.control = false;
       if (currentValue && typeof window.controlPanelOnDisconnected === 'function') {
         window.controlPanelOnDisconnected(currentValue);
       }
-      select.selectedIndex = 0;
-      // Trigger change so control panel picks up the new port
-      select.dispatchEvent(new Event('change'));
+      var autoPort = pickDefaultPort(ports);
+      if (autoPort && selectPortValue(select, autoPort)) {
+        select.dispatchEvent(new Event('change'));
+      }
     }
   }
 
@@ -339,23 +411,13 @@
       select.appendChild(opt);
     }
 
-    // Restore previous selection
-    var restored = false;
-    for (var j = 0; j < select.options.length; j++) {
-      if (select.options[j].value === currentValue && currentValue !== '') {
-        select.selectedIndex = j;
-        restored = true;
-        break;
-      }
-    }
-    if (!restored && ports.length > 0) {
-      // Select first real (non-detecting) port
-      for (var p = 0; p < select.options.length; p++) {
-        if (select.options[p].value && !select.options[p].disabled) {
-          select.selectedIndex = p;
-          break;
-        }
-      }
+    var restored = shouldKeepSelection(currentValue, ports, _userPickedPort.teaching);
+    if (restored) {
+      selectPortValue(select, currentValue);
+    } else {
+      if (!portStillAvailable(ports, currentValue)) _userPickedPort.teaching = false;
+      var autoPort = pickDefaultPort(ports);
+      if (autoPort) selectPortValue(select, autoPort);
     }
     // Always fire change so teaching panel picks up the port
     if (select.value) {
@@ -868,7 +930,9 @@
   }
 
   function revertSelection(select) {
-    // Try to select the first non-disabled, non-manual option
+    var preferred = pickDefaultPort(lastDetectedPorts);
+    if (preferred && selectPortValue(select, preferred)) return;
+    // Try any non-disabled, non-manual option
     for (var i = 0; i < select.options.length; i++) {
       if (!select.options[i].disabled && select.options[i].value !== '__manual__') {
         select.selectedIndex = i;
@@ -926,6 +990,10 @@
 
   function init() {
     loadRobotDefs(function() {
+      watchUserPortPick('command-port-select', 'command');
+      watchUserPortPick('ctrl-port-select', 'control');
+      watchUserPortPick('teach-port-select', 'teaching');
+
       // Populate UI with virtual devices immediately (before first poll)
       updateCommandPortSelect(lastDetectedPorts);
       updateControlPortSelect(lastDetectedPorts);

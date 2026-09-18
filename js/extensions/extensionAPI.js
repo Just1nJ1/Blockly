@@ -89,6 +89,31 @@ window.ExtensionAPI = {
     return resp.json();
   },
 
+  isVirtualPort: function(port) {
+    if (!port) return false;
+    if (window.RobotCatalog && typeof window.RobotCatalog.isVirtualPort === 'function') {
+      return window.RobotCatalog.isVirtualPort(port);
+    }
+    return /^Virtual/i.test(String(port));
+  },
+
+  /** First usable real port from a /detect-devices list, else first virtual. */
+  pickDefaultPort: function(ports) {
+    if (!ports || !ports.length) return null;
+    var i, p;
+    for (i = 0; i < ports.length; i++) {
+      p = ports[i];
+      if (!p || !p.port || p.model === 'Detecting...') continue;
+      if (p.connected === false) continue;
+      if (!p.virtual && !this.isVirtualPort(p.port)) return p.port;
+    }
+    for (i = 0; i < ports.length; i++) {
+      p = ports[i];
+      if (p && p.port && p.model !== 'Detecting...' && p.connected !== false) return p.port;
+    }
+    return null;
+  },
+
   // ── UI Helpers ──
 
   showNotification: function(message, type) {
