@@ -88,3 +88,17 @@
   min-height: 18px;
   text-align: center;
 }
+
+.sample-ext-hint {
+  margin: auto 0 0;
+  max-width: 420px;
+  padding-top: 24px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, #888);
+  text-align: center;
+}
+.sample-ext-hint strong {
+  color: var(--text-secondary, #666);
+  font-weight: 600;
+}
