@@ -12,7 +12,7 @@
   /* Code preview + console (light theme: light panel, dark text) */
   --bg-code: #f4f6f8;
   --bg-model: #1a1a1a;
-  --text-primary: #333;
+  --text-primary: #010d1d;
   --text-secondary: #555;
   --text-muted: #888;
   --text-faint: #999;
@@ -40,7 +40,7 @@
   --cmd-bg: #f5f5f5;
   --cmd-bar-bg: #e8e8e8;
   --cmd-border: #d0d0d0;
-  --cmd-text: #333;
+  --cmd-text: #010d1d;
   --cmd-placeholder: #999;
   --cmd-select-bg: #fff;
   --cmd-select-border: #ccc;
@@ -58,7 +58,7 @@
   --debug-header-border: #c5cae9;
   --debug-line-info: #5c6bc0;
   --debug-var-name: #1565C0;
-  --debug-var-value: #333;
+  --debug-var-value: #010d1d;
   --debug-callstack-text: #666;
   --debug-callstack-border: #e0e0e0;
   --debug-bg-tint: #e8e8e8;
