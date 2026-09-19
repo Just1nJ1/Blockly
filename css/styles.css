@@ -45,7 +45,7 @@
   --cmd-select-bg: #fff;
   --cmd-select-border: #ccc;
   --cmd-remove-bg: #ffebee;
-  --cmd-remove-text: #c62828;
+  --cmd-remove-text: #f63c3d;
   --cmd-remove-border: #ef9a9a;
   --tab-hover: #d5d5d5;
   --tab-active-bg: #fff;
@@ -401,8 +401,8 @@ body.platform-darwin .titlebar {
   line-height: 1;
 }
 #command-port-remove:hover {
-  background: #7c3a3a;
-  color: #fff;
+  background: rgba(246, 60, 61, 0.12);
+  color: #f63c3d;
 }
 #command-port-remove.visible {
   display: inline-block;
