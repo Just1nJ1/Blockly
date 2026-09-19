@@ -156,6 +156,20 @@ function initBlockly() {
   // Store workspace reference
   setWorkspace(workspace);
 
+  // Official Blockly minimap (default overlay: top-right of the workspace)
+  if (typeof PositionedMinimap === 'function') {
+    try {
+      if (window._blocklyMinimap && typeof window._blocklyMinimap.dispose === 'function') {
+        window._blocklyMinimap.dispose();
+      }
+      var minimap = new PositionedMinimap(workspace);
+      minimap.init();
+      window._blocklyMinimap = minimap;
+    } catch (eMinimap) {
+      console.warn('[Blockly] Minimap init failed:', eMinimap);
+    }
+  }
+
   // Re-apply scale in case inject startScale was ignored / prefs changed
   if (window.AppPreferences && typeof AppPreferences.applyBlockScale === 'function') {
     AppPreferences.applyBlockScale();

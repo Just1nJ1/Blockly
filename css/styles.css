@@ -772,6 +772,18 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+.blockly-minimap {
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+[data-theme="dark"] .blockly-minimap {
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.55);
+}
+[data-theme="dark"] .blockly-focus-region {
+  fill: #2a2a2a;
 }
 #workspace-area.hidden {
   display: none;
