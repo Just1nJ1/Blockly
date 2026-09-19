@@ -756,8 +756,8 @@ button:disabled {
 }
 .view-tab-btn.active {
   background: var(--tab-active-bg);
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: #1189d4;
+  border-bottom-color: #1189d4;
 }
 .panel-tab-btn.active {
   background: var(--bg-secondary);
@@ -1444,13 +1444,13 @@ button:disabled {
   display: block;
 }
 .ctrl-btn-home {
-  background: #2196F3;
+  background: #1189d4;
   color: #fff;
-  border-color: #1976D2;
+  border-color: #0e74b4;
 }
 .ctrl-btn-home:hover {
-  background: #1565C0;
-  border-color: #1565C0;
+  background: #0e74b4;
+  border-color: #0e74b4;
 }
 .ctrl-btn-zero {
   background: #f77021;
@@ -1479,7 +1479,7 @@ button:disabled {
   transition: color 0.15s;
 }
 .ctrl-mode-label.ctrl-mode-active {
-  color: var(--accent);
+  color: #1189d4;
   font-weight: 600;
 }
 .ctrl-toggle-track {
@@ -1492,7 +1492,7 @@ button:disabled {
   transition: background 0.2s;
 }
 .ctrl-toggle-track.toggled {
-  background: var(--accent);
+  background: #1189d4;
 }
 .ctrl-toggle-thumb {
   width: 16px;
@@ -1673,9 +1673,9 @@ button:disabled {
   border-color: var(--accent);
 }
 .ctrl-step-btn.active {
-  background: var(--accent);
+  background: #1189d4;
   color: #fff;
-  border-color: var(--accent);
+  border-color: #1189d4;
 }
 .ctrl-step-input {
   width: 40px;
@@ -1764,9 +1764,9 @@ button:disabled {
   border-color: var(--accent);
 }
 .ctrl-eff-btn.active {
-  background: var(--accent);
+  background: #1189d4;
   color: #fff;
-  border-color: var(--accent);
+  border-color: #1189d4;
 }
 
 /* Teaching effector column: action button + add button stacked */
