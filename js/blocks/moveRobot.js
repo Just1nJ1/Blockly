@@ -545,7 +545,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#5CA65C');
+      this.setColour('#32a54e');
       this.setTooltip('Wait for a specified number of seconds.');
     }
   };

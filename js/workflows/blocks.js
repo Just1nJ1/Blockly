@@ -6,7 +6,7 @@
 (function() {
   'use strict';
 
-  var COLOUR = '#5B8C5A';
+  var COLOUR = '#32a54e';
 
   // "+" icon — load from shared UI icon file when possible
   function getPlusIconUri() {

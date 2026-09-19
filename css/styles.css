@@ -643,7 +643,7 @@ button:disabled {
 }
 .console-input-row.active {
   background: var(--bg-header);
-  box-shadow: inset 0 0 0 1px var(--accent, #4CAF50);
+  box-shadow: inset 0 0 0 1px var(--accent, #32a54e);
 }
 .console-prompt {
   color: var(--output-stdin, var(--output-result));
@@ -1612,7 +1612,7 @@ button:disabled {
 }
 #ctrl-axis-rows .ctrl-btn-plus,
 #teach-axis-rows .ctrl-btn-plus {
-  color: #4CAF50;
+  color: #32a54e;
 }
 #ctrl-axis-rows .ctrl-btn-minus,
 #teach-axis-rows .ctrl-btn-minus {
@@ -1642,7 +1642,7 @@ button:disabled {
   border-color: var(--accent);
 }
 .ctrl-btn-plus {
-  color: #4CAF50;
+  color: #32a54e;
 }
 .ctrl-btn-minus {
   color: #f63c3d;
@@ -1791,9 +1791,9 @@ button:disabled {
   box-sizing: border-box;
 }
 .teach-eff-add-btn:hover {
-  background: #4CAF50;
+  background: #32a54e;
   color: #fff;
-  border-color: #388E3C;
+  border-color: #288a41;
 }
 
 /* ── Workspace open / switch dialog ── */
@@ -1851,10 +1851,10 @@ button:disabled {
   background: var(--accent-hover);
 }
 .ws-dialog-btn-new {
-  background: #4CAF50;
+  background: #32a54e;
 }
 .ws-dialog-btn-new:hover {
-  background: #43A047;
+  background: #288a41;
 }
 .ws-dialog-recent-label {
   font-size: 13px;
@@ -3505,10 +3505,12 @@ button:disabled {
 
 /* Currently executing row during playback */
 .teach-row-active td {
-  background: #C8E6C9 !important;
+  background: #32a54e !important;
+  color: #fff;
 }
 [data-theme="dark"] .teach-row-active td {
-  background: #1b5e20 !important;
+  background: #288a41 !important;
+  color: #fff;
 }
 
 .teach-empty-msg {

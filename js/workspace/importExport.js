@@ -945,8 +945,8 @@ function showBlocklyImportMappingDialog(fileVars, workspace, portKeys, portModel
   const confirmBtn = document.createElement('button');
   confirmBtn.textContent = 'Import';
   confirmBtn.style.cssText =
-    'padding:6px 16px;border:1px solid #388E3C;border-radius:4px;' +
-    'background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;font-weight:500;';
+    'padding:6px 16px;border:1px solid #288a41;border-radius:4px;' +
+    'background:#32a54e;color:#fff;cursor:pointer;font-size:13px;font-weight:500;';
   confirmBtn.addEventListener('click', function() {
     const varChoices = Object.create(null);
     for (let r = 0; r < varRows.length; r++) {

@@ -62,7 +62,7 @@
     st.progressFill.style.width = (frac * 100) + '%';
 
     if (st.phase === 'move') {
-      st.progressFill.style.background = '#4CAF50';
+      st.progressFill.style.background = '#32a54e';
       st.progressLabel.textContent = 'Action ' + st.moveDisplay + '  ' + elSec + 's / ' + durSec + 's';
     } else if (st.phase === 'interval') {
       st.progressFill.style.background = '#FF9800';

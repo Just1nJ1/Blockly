@@ -69,7 +69,7 @@
     progressFill.style.width = (frac * 100) + '%';
 
     if (phase === 'move') {
-      progressFill.style.background = '#4CAF50';
+      progressFill.style.background = '#32a54e';
       progressLabel.textContent = 'Step ' + phaseDisplay + '  ' + elSec + 's / ' + durSec + 's';
     } else if (phase === 'interval') {
       progressFill.style.background = '#FF9800';

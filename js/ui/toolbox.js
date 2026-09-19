@@ -26,7 +26,7 @@ function getToolboxConfig() {
       {
         kind: 'category',
         name: 'Loops',
-        colour: '#5CA65C',
+        colour: '#32a54e',
         contents: [
           { kind: 'block', type: 'controls_repeat_ext' },
           { kind: 'block', type: 'controls_whileUntil' },
@@ -175,7 +175,7 @@ function getToolboxConfig() {
       {
         kind: 'category',
         name: 'Workflows',
-        colour: '#5B8C5A',
+        colour: '#32a54e',
         contents: [],
       },
       {
@@ -230,7 +230,7 @@ function refreshWorkflowsToolbox() {
     cats.push({
       kind: 'category',
       name: 'Workflows',
-      colour: '#5B8C5A',
+      colour: '#32a54e',
       contents: contents
     });
   }
