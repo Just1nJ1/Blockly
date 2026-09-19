@@ -282,6 +282,7 @@
       if (!_currentModel) _currentModel = defaultModelName();
       console.log('[TeachingPanel] Port selected:', _currentPort, 'Model:', _currentModel);
       buildAxisRows();
+      applyEffectorUi(_currentPort);
       startStatusPolling();
     });
   }
@@ -366,8 +367,29 @@
   function setupEffectorSelect() {
     var select = document.getElementById('teach-effector-select');
     if (!select) return;
-    select.addEventListener('change', function() { buildEffectorButtons(select.value); });
-    buildEffectorButtons(select.value);
+    select.addEventListener('change', function() {
+      if (window.EffectorState && _currentPort) {
+        window.EffectorState.set(_currentPort, { type: select.value, mode: 0 });
+      } else {
+        buildEffectorButtons(select.value);
+      }
+    });
+    if (window.EffectorState) {
+      window.EffectorState.subscribe(function(port) {
+        if (port === _currentPort) applyEffectorUi(port);
+      });
+    }
+    applyEffectorUi(_currentPort);
+  }
+
+  function applyEffectorUi(port) {
+    var state = (window.EffectorState && port)
+      ? window.EffectorState.get(port)
+      : { type: 'none', mode: 0 };
+    var select = document.getElementById('teach-effector-select');
+    if (select && select.value !== state.type) select.value = state.type;
+    buildEffectorButtons(state.type);
+    setEffectorHighlight(document.getElementById('teach-effector-buttons'), state.mode);
   }
 
   function setEffectorHighlight(container, mode) {
@@ -401,7 +423,11 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ port: _currentPort, mode: def.mode })
           }).catch(function() {});
-          setEffectorHighlight(container, def.mode);
+          if (window.EffectorState) {
+            window.EffectorState.set(_currentPort, { mode: def.mode });
+          } else {
+            setEffectorHighlight(container, def.mode);
+          }
         });
 
         var addBtn = document.createElement('button');
@@ -1570,6 +1596,7 @@
       _currentPort = port;
       _currentModel = model;
       buildAxisRows();
+      applyEffectorUi(port);
       startStatusPolling();
     }
   };
@@ -1577,6 +1604,7 @@
   window.teachingPanelOnDisconnected = function() {
     _currentPort = null;
     _currentModel = null;
+    applyEffectorUi(null);
     stopStatusPolling();
   };
 

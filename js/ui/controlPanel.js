@@ -334,6 +334,7 @@
       updatePortSelectColor(port);
       updateSettingsButtonState();
       buildAxisRows();
+      applyEffectorUi(port);
       // Ensure firmware versions are loaded when switching among connected ports
       ensureFirmwareVersions(port);
     });
@@ -395,6 +396,7 @@
     updateSettingsButtonState();
 
     buildAxisRows();
+    applyEffectorUi(port);
     _lastStatusTs = 0;  // reset so we pick up cached status immediately
     refreshStatus(true);  // force query on first connect (no cached status yet)
     startStatusPolling();
@@ -1713,10 +1715,29 @@
     if (!select) return;
 
     select.addEventListener('change', function() {
-      buildEffectorButtons(select.value);
+      if (window.EffectorState && _currentPort) {
+        window.EffectorState.set(_currentPort, { type: select.value, mode: 0 });
+      } else {
+        buildEffectorButtons(select.value);
+      }
     });
 
-    buildEffectorButtons(select.value);
+    if (window.EffectorState) {
+      window.EffectorState.subscribe(function(port) {
+        if (port === _currentPort) applyEffectorUi(port);
+      });
+    }
+    applyEffectorUi(_currentPort);
+  }
+
+  function applyEffectorUi(port) {
+    var state = (window.EffectorState && port)
+      ? window.EffectorState.get(port)
+      : { type: 'none', mode: 0 };
+    var select = document.getElementById('ctrl-effector-select');
+    if (select && select.value !== state.type) select.value = state.type;
+    buildEffectorButtons(state.type);
+    setEffectorHighlight(document.getElementById('ctrl-effector-buttons'), state.mode);
   }
 
   function setEffectorHighlight(container, mode) {
@@ -1745,7 +1766,11 @@
         btn.addEventListener('click', function() {
           if (!_currentPort) return;
           sendEffectorCommand(btnDef.endpoint, btnDef.mode);
-          setEffectorHighlight(container, btnDef.mode);
+          if (window.EffectorState) {
+            window.EffectorState.set(_currentPort, { mode: btnDef.mode });
+          } else {
+            setEffectorHighlight(container, btnDef.mode);
+          }
         });
         container.appendChild(btn);
       })(buttons[i]);
