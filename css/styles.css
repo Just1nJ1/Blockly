@@ -1453,13 +1453,13 @@ button:disabled {
   border-color: #1565C0;
 }
 .ctrl-btn-zero {
-  background: #FFC107;
-  color: #333;
-  border-color: #FFA000;
+  background: #f77021;
+  color: #fff;
+  border-color: #d45c1b;
 }
 .ctrl-btn-zero:hover {
-  background: #FFB300;
-  border-color: #FF8F00;
+  background: #d45c1b;
+  border-color: #d45c1b;
 }
 
 /* Mode toggle switch */
@@ -2592,12 +2592,12 @@ button:disabled {
   border: 1px solid transparent;
 }
 .ctrl-modal-btn-save {
-  background: #E67E22;
+  background: #f77021;
   color: #fff;
-  border-color: #D35400;
+  border-color: #d45c1b;
 }
 .ctrl-modal-btn-save:hover {
-  background: #D35400;
+  background: #d45c1b;
 }
 .ctrl-modal-btn-cancel {
   background: var(--bg-header);

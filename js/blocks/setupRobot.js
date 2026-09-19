@@ -42,7 +42,7 @@ function initSetupRobotBlock() {
 
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Initialize a robot arm connection. Generates import + constructor call.');
       this.setHelpUrl('');
     },

@@ -112,7 +112,7 @@ function getToolboxConfig() {
       {
         kind: 'category',
         name: 'Robot',
-        colour: '#E67E22',
+        colour: '#f77021',
         contents: [
           { kind: 'block', type: 'setup_robot' },
           { kind: 'block', type: 'robot_homing' },
