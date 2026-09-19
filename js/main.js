@@ -75,6 +75,7 @@ async function ensureBlocklyReady() {
 
   // Initialize Blockly once
   if (!_blocklyInitialized) {
+    if (typeof beginWorkspaceLoad === 'function') beginWorkspaceLoad();
     initBlockly();
     loadWorkspaceBlocks();
     initSavedFunctions();
@@ -87,6 +88,7 @@ async function ensureBlocklyReady() {
         if (typeof refreshWorkflowBlocks === 'function' && typeof getWorkspace === 'function') {
           refreshWorkflowBlocks(getWorkspace());
         }
+        if (typeof endWorkspaceLoad === 'function') endWorkspaceLoad(200);
       });
     }
     _blocklyInitialized = true;
