@@ -520,12 +520,12 @@ body.platform-darwin .titlebar {
 }
 /* Danger actions: same chrome, red icon/text only */
 .toolbar-btn-danger {
-  color: #e53935;
+  color: #f63c3d;
 }
 .toolbar-btn-danger:hover {
-  background: rgba(229, 57, 53, 0.08);
-  border-color: rgba(229, 57, 53, 0.35);
-  color: #c62828;
+  background: rgba(246, 60, 61, 0.08);
+  border-color: rgba(246, 60, 61, 0.35);
+  color: #f63c3d;
 }
 
 /* Default button style (outside toolbar) */
@@ -1616,7 +1616,7 @@ button:disabled {
 }
 #ctrl-axis-rows .ctrl-btn-minus,
 #teach-axis-rows .ctrl-btn-minus {
-  color: #f44336;
+  color: #f63c3d;
 }
 
 /* Fallback for any other .ctrl-btn usage */
@@ -1645,7 +1645,7 @@ button:disabled {
   color: #4CAF50;
 }
 .ctrl-btn-minus {
-  color: #f44336;
+  color: #f63c3d;
 }
 
 /* Step row */
@@ -3500,7 +3500,7 @@ button:disabled {
 
 .teach-row-btn:hover { background: var(--bg-tertiary); }
 .teach-row-btn:disabled { opacity: 0.3; cursor: default; }
-.teach-row-btn-del { color: #e53935; }
+.teach-row-btn-del { color: #f63c3d; }
 .teach-row-btn-del:hover { background: #ffebee; }
 
 /* Currently executing row during playback */
