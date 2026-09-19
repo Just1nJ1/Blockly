@@ -505,11 +505,14 @@ def scan_devices():
                 and reg['port'] not in _virtual_ports):
             mgr.unregister_port(reg['port'])
 
-    # Virtual ports first so they stay visible even with real hardware
+    # Real hardware first so clients default to a physical port when one exists.
+    # Virtual ports stay in the list (after hardware) so they remain selectable.
     def _sort_key(r):
+        if r.get('model') == 'Detecting...':
+            return (2, r['port'])
         if r.get('virtual'):
-            return (0, r['port'])
-        return (1, r['port'])
+            return (1, r['port'])
+        return (0, r['port'])
 
     results.sort(key=_sort_key)
     return {'ports': results}

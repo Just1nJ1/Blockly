@@ -92,7 +92,8 @@
       'command', 'blockly', 'teaching', 'settings',
       'save', 'run', 'step', 'stop', 'continue', 'sel',
       'clear', 'export', 'import', 'estop',
-      'up', 'down', 'delay', 'blocks', 'chevron-down', 'plus'
+      'up', 'down', 'delay', 'blocks', 'chevron-down', 'plus',
+      'home', 'zero-pos', 'capture'
     ]
   };
 })();

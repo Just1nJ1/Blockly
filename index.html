@@ -185,8 +185,14 @@
                 </select>
               </div>
               <div class="ctrl-action-row">
-                <button class="ctrl-action-btn ctrl-btn-home" id="teach-home-btn">Home</button>
-                <button class="ctrl-action-btn ctrl-btn-zero" id="teach-zero-btn">Zero Pos</button>
+                <button class="ctrl-action-btn ctrl-btn-home" id="teach-home-btn">
+                  <svg class="ctrl-action-icon" viewBox="0 0 64 64" aria-hidden="true"><use href="#icon-home"></use></svg>
+                  Home
+                </button>
+                <button class="ctrl-action-btn ctrl-btn-zero" id="teach-zero-btn">
+                  <svg class="ctrl-action-icon" viewBox="0 0 64 64" aria-hidden="true"><use href="#icon-zero-pos"></use></svg>
+                  Zero Pos
+                </button>
               </div>
               <div class="ctrl-mode-toggle">
                 <span class="ctrl-mode-label teach-mode-label ctrl-mode-active" data-mode="joint">Joint</span>
@@ -197,7 +203,10 @@
               </div>
               <div id="teach-axis-rows"></div>
               <div class="ctrl-action-row">
-                <button class="ctrl-action-btn" id="teach-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">Capture Position</button>
+                <button class="ctrl-action-btn" id="teach-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">
+                  <svg class="ctrl-action-icon" viewBox="0 0 64 64" aria-hidden="true"><use href="#icon-capture"></use></svg>
+                  Capture Position
+                </button>
               </div>
               <div class="ctrl-step-row">
                 <span class="ctrl-joint-label">Step</span>
@@ -310,7 +319,7 @@
             toolbar …………… full width (Save / Run / Stop)
             main-container … row: left column | right panel
               left-column … view tabs + Blockly / World content
-              output-panel … Code / Functions / Control (full height)
+              output-panel … Control / Code / Functions (full height)
         -->
         <div id="main-container">
           <div id="left-column">
@@ -380,35 +389,13 @@
           <!-- Right panel: full height under toolbar (beside Blockly/World) -->
           <div id="output-panel">
             <div id="output-tabs">
-              <button class="panel-tab-btn active" data-panel="code-output">Code</button>
+              <button class="panel-tab-btn active" data-panel="control-panel">Control</button>
+              <button class="panel-tab-btn" data-panel="code-output">Code</button>
               <button class="panel-tab-btn" data-panel="saved-functions">Functions</button>
-              <button class="panel-tab-btn" data-panel="control-panel">Control</button>
             </div>
 
-            <!-- Tab 1: Code & Output (default) -->
-            <div id="panel-content-code-output" class="panel-tab-content active">
-              <div id="output-header">Generated Python Code</div>
-              <div id="code-preview"></div>
-              <div id="output-header">Console</div>
-              <div id="output-content" class="console-root"></div>
-              <!-- Debug panel: variables + call stack (shown during debug sessions) -->
-              <div id="debug-panel">
-                <div id="debug-panel-header">
-                  <span>Variables</span>
-                  <span class="debug-line-info" id="debug-line-info"></span>
-                </div>
-                <div id="debug-variables"></div>
-                <div id="debug-callstack"></div>
-              </div>
-            </div>
-
-            <!-- Tab 2: Functions (saved function library) -->
-            <div id="panel-content-saved-functions" class="panel-tab-content">
-              <div id="saved-functions-list"></div>
-            </div>
-
-            <!-- Tab 3: Control Panel -->
-            <div id="panel-content-control-panel" class="panel-tab-content">
+            <!-- Tab 1: Control Panel (default) -->
+            <div id="panel-content-control-panel" class="panel-tab-content active">
               <div class="ctrl-panel">
                 <!-- Port selector -->
                 <div class="ctrl-port-row">
@@ -425,8 +412,14 @@
 
                 <!-- Home / Zero buttons -->
                 <div class="ctrl-action-row">
-                  <button class="ctrl-action-btn ctrl-btn-home" id="ctrl-home-btn">Home</button>
-                  <button class="ctrl-action-btn ctrl-btn-zero" id="ctrl-zero-btn">Zero Pos</button>
+                  <button class="ctrl-action-btn ctrl-btn-home" id="ctrl-home-btn">
+                    <svg class="ctrl-action-icon" viewBox="0 0 64 64" aria-hidden="true"><use href="#icon-home"></use></svg>
+                    Home
+                  </button>
+                  <button class="ctrl-action-btn ctrl-btn-zero" id="ctrl-zero-btn">
+                    <svg class="ctrl-action-icon" viewBox="0 0 64 64" aria-hidden="true"><use href="#icon-zero-pos"></use></svg>
+                    Zero Pos
+                  </button>
                 </div>
 
                 <!-- Mode toggle: Joint / Coordinate -->
@@ -443,7 +436,10 @@
 
                 <!-- Capture position button -->
                 <div class="ctrl-action-row">
-                  <button class="ctrl-action-btn" id="ctrl-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">Capture Position</button>
+                  <button class="ctrl-action-btn" id="ctrl-capture-btn" style="background:#4CAF50;color:#fff;border-color:#388E3C;">
+                    <svg class="ctrl-action-icon" viewBox="0 0 64 64" aria-hidden="true"><use href="#icon-capture"></use></svg>
+                    Capture Position
+                  </button>
                 </div>
 
                 <!-- Step size -->
@@ -472,6 +468,28 @@
                 </div>
                 <div id="ctrl-effector-buttons"></div>
               </div>
+            </div>
+
+            <!-- Tab 2: Code & Output -->
+            <div id="panel-content-code-output" class="panel-tab-content">
+              <div id="output-header">Generated Python Code</div>
+              <div id="code-preview"></div>
+              <div id="output-header">Console</div>
+              <div id="output-content" class="console-root"></div>
+              <!-- Debug panel: variables + call stack (shown during debug sessions) -->
+              <div id="debug-panel">
+                <div id="debug-panel-header">
+                  <span>Variables</span>
+                  <span class="debug-line-info" id="debug-line-info"></span>
+                </div>
+                <div id="debug-variables"></div>
+                <div id="debug-callstack"></div>
+              </div>
+            </div>
+
+            <!-- Tab 3: Functions (saved function library) -->
+            <div id="panel-content-saved-functions" class="panel-tab-content">
+              <div id="saved-functions-list"></div>
             </div>
           </div>
         </div>
@@ -522,6 +540,7 @@
   <script src="./node_modules/blockly/blocks_compressed.js"></script>
   <script src="./node_modules/blockly/python_compressed.js"></script>
   <script src="./node_modules/blockly/msg/en.js"></script>
+  <script src="./node_modules/@blockly/workspace-minimap/dist/index.js"></script>
 
   <!-- Configuration -->
   <script src="js/config.js"></script>
@@ -555,6 +574,7 @@
   <script src="js/ui/toolbox.js"></script>
   <script src="js/ui/sidebar.js"></script>
   <script src="js/ui/commandTab.js"></script>
+  <script src="js/ui/effectorState.js"></script>
   <script src="js/ui/controlPanel.js"></script>
   <script src="js/ui/teachingPanel.js"></script>
 

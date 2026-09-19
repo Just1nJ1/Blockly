@@ -334,6 +334,7 @@
       updatePortSelectColor(port);
       updateSettingsButtonState();
       buildAxisRows();
+      applyEffectorUi(port);
       // Ensure firmware versions are loaded when switching among connected ports
       ensureFirmwareVersions(port);
     });
@@ -395,6 +396,7 @@
     updateSettingsButtonState();
 
     buildAxisRows();
+    applyEffectorUi(port);
     _lastStatusTs = 0;  // reset so we pick up cached status immediately
     refreshStatus(true);  // force query on first connect (no cached status yet)
     startStatusPolling();
@@ -1713,10 +1715,39 @@
     if (!select) return;
 
     select.addEventListener('change', function() {
-      buildEffectorButtons(select.value);
+      if (window.EffectorState && _currentPort) {
+        window.EffectorState.set(_currentPort, { type: select.value, mode: 0 });
+      } else {
+        buildEffectorButtons(select.value);
+      }
     });
 
-    buildEffectorButtons(select.value);
+    if (window.EffectorState) {
+      window.EffectorState.subscribe(function(port) {
+        if (port === _currentPort) applyEffectorUi(port);
+      });
+    }
+    applyEffectorUi(_currentPort);
+  }
+
+  function applyEffectorUi(port) {
+    var state = (window.EffectorState && port)
+      ? window.EffectorState.get(port)
+      : { type: 'none', mode: 0 };
+    var select = document.getElementById('ctrl-effector-select');
+    if (select && select.value !== state.type) select.value = state.type;
+    buildEffectorButtons(state.type);
+    setEffectorHighlight(document.getElementById('ctrl-effector-buttons'), state.mode);
+  }
+
+  function setEffectorHighlight(container, mode) {
+    if (!container) return;
+    var btns = container.querySelectorAll('.ctrl-eff-btn');
+    for (var i = 0; i < btns.length; i++) {
+      var m = parseInt(btns[i].dataset.mode, 10);
+      // Mode 0 (OFF) never stays highlighted; it only clears Open/Close.
+      btns[i].classList.toggle('active', mode !== 0 && m === mode);
+    }
   }
 
   function buildEffectorButtons(type) {
@@ -1731,8 +1762,15 @@
         var btn = document.createElement('button');
         btn.className = 'ctrl-btn ctrl-eff-btn';
         btn.textContent = btnDef.label;
+        btn.dataset.mode = String(btnDef.mode);
         btn.addEventListener('click', function() {
+          if (!_currentPort) return;
           sendEffectorCommand(btnDef.endpoint, btnDef.mode);
+          if (window.EffectorState) {
+            window.EffectorState.set(_currentPort, { mode: btnDef.mode });
+          } else {
+            setEffectorHighlight(container, btnDef.mode);
+          }
         });
         container.appendChild(btn);
       })(buttons[i]);

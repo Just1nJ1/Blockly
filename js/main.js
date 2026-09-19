@@ -10,6 +10,44 @@
  */
 
 var _blocklyInitialized = false;
+var _appliedWorkspaceInset = false;
+
+/**
+ * Blockly's minimap focus-region update divides by content size. On first
+ * inject / hidden workspace those metrics are 0 and it writes translate(NaN,NaN).
+ */
+function attachBlocklyMinimap(workspace) {
+  if (typeof PositionedMinimap !== 'function' || !workspace) return;
+  try {
+    if (window._blocklyMinimap && typeof window._blocklyMinimap.dispose === 'function') {
+      window._blocklyMinimap.dispose();
+    }
+    var minimap = new PositionedMinimap(workspace);
+    minimap.init();
+    var fr = minimap.focusRegion;
+    if (fr && typeof fr.update === 'function') {
+      var origUpdate = fr.update.bind(fr);
+      fr.update = function() {
+        try {
+          var mm = minimap.minimapWorkspace;
+          if (!mm) return;
+          var primaryM = workspace.getMetricsManager().getContentMetrics(true);
+          var miniM = mm.getMetricsManager().getContentMetrics(true);
+          if (!primaryM || !miniM ||
+              !primaryM.width || !miniM.width ||
+              !isFinite(primaryM.width) || !isFinite(miniM.width) ||
+              !isFinite(primaryM.height) || !isFinite(miniM.height)) {
+            return;
+          }
+          origUpdate();
+        } catch (eUp) { /* empty layout */ }
+      };
+    }
+    window._blocklyMinimap = minimap;
+  } catch (eMinimap) {
+    console.warn('[Blockly] Minimap init failed:', eMinimap);
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   // Prefetch robot catalog from server (falls back to embedded defaults)
@@ -75,6 +113,7 @@ async function ensureBlocklyReady() {
 
   // Initialize Blockly once
   if (!_blocklyInitialized) {
+    if (typeof beginWorkspaceLoad === 'function') beginWorkspaceLoad();
     initBlockly();
     loadWorkspaceBlocks();
     initSavedFunctions();
@@ -87,6 +126,7 @@ async function ensureBlocklyReady() {
         if (typeof refreshWorkflowBlocks === 'function' && typeof getWorkspace === 'function') {
           refreshWorkflowBlocks(getWorkspace());
         }
+        if (typeof endWorkspaceLoad === 'function') endWorkspaceLoad(200);
       });
     }
     _blocklyInitialized = true;
@@ -103,7 +143,12 @@ async function ensureBlocklyReady() {
       Blockly.svgResize(ws);
       try {
         if (typeof ws.setScale === 'function') ws.setScale(sc);
-        if (typeof ws.scroll === 'function') ws.scroll(sx, sy);
+        if (typeof insetWorkspaceOnOpen === 'function' && !_appliedWorkspaceInset) {
+          insetWorkspaceOnOpen(ws);
+          _appliedWorkspaceInset = true;
+        } else if (typeof ws.scroll === 'function') {
+          ws.scroll(sx, sy);
+        }
       } catch (e) { /* ignore */ }
       // Apply theme overrides to Blockly's inline styles
       if (typeof applyBlocklyThemeOverrides === 'function') {
@@ -147,6 +192,9 @@ function initBlockly() {
 
   // Store workspace reference
   setWorkspace(workspace);
+
+  // Official Blockly minimap (default overlay: top-right of the workspace)
+  attachBlocklyMinimap(workspace);
 
   // Re-apply scale in case inject startScale was ignored / prefs changed
   if (window.AppPreferences && typeof AppPreferences.applyBlockScale === 'function') {

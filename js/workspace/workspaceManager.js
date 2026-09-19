@@ -23,6 +23,9 @@ var _currentWorkspacePath = null;  // full folder path
 var _currentWorkspaceName = null;  // folder basename (display name)
 var _workspaceDirty = false;
 var _suppressDirty = false;
+var _loadQuietUntil = 0;
+var _loadQuietTimer = null;
+var _savedBlocksXml = null;
 var _autosaveTimer = null;
 var _saveToastTimer = null;
 
@@ -137,7 +140,9 @@ function isWorkspaceDirty() {
 
 function markWorkspaceDirty() {
   if (_suppressDirty) return;
+  if (Date.now() < _loadQuietUntil) return;
   if (_workspaceDirty) return;
+  if (_savedBlocksXml != null && _currentBlocksXml() === _savedBlocksXml) return;
   _workspaceDirty = true;
   _updateWorkspaceChrome();
   startAutosaveTimer();
@@ -146,21 +151,53 @@ function markWorkspaceDirty() {
 function _setWorkspaceDirty(dirty) {
   var wasDirty = _workspaceDirty;
   _workspaceDirty = !!dirty;
+  if (!_workspaceDirty) captureSavedBlocksSnapshot();
   _updateWorkspaceChrome();
   if (_workspaceDirty && !wasDirty) startAutosaveTimer();
   if (!_workspaceDirty && !_canAutosave()) stopAutosaveTimer();
 }
 
-function withWorkspaceLoad(fn) {
+function _currentBlocksXml() {
+  try {
+    var ws = getWorkspace ? getWorkspace() : null;
+    if (!ws || typeof Blockly === 'undefined' || !Blockly.Xml) return null;
+    return Blockly.Xml.domToText(Blockly.Xml.workspaceToDom(ws));
+  } catch (e) {
+    return null;
+  }
+}
+
+function captureSavedBlocksSnapshot() {
+  _savedBlocksXml = _currentBlocksXml();
+}
+
+/** Ignore Blockly churn from inject / XML load / color + workflow refresh. */
+function beginWorkspaceLoad() {
   _suppressDirty = true;
+  if (_loadQuietTimer) {
+    clearTimeout(_loadQuietTimer);
+    _loadQuietTimer = null;
+  }
+}
+
+function endWorkspaceLoad(quietMs) {
+  var ms = quietMs == null ? 400 : quietMs;
+  _suppressDirty = true;
+  _loadQuietUntil = Date.now() + ms;
+  if (_loadQuietTimer) clearTimeout(_loadQuietTimer);
+  _loadQuietTimer = setTimeout(function() {
+    _loadQuietTimer = null;
+    _suppressDirty = false;
+    _setWorkspaceDirty(false);
+  }, ms);
+}
+
+function withWorkspaceLoad(fn) {
+  beginWorkspaceLoad();
   try {
     fn();
   } finally {
-    // Blockly may flush FINISHED_LOADING / create events on the next tick
-    setTimeout(function() {
-      _suppressDirty = false;
-      _setWorkspaceDirty(false);
-    }, 0);
+    endWorkspaceLoad(400);
   }
 }
 
@@ -169,6 +206,11 @@ function isSignificantBlocklyEvent(event) {
   if (event.isUiEvent) return false;
   if (event.recordUndo === false) return false;
   var t = event.type;
+  var el = event.element;
+  if (el === 'colour' || el === 'color' || el === 'style' || el === 'collapsed' ||
+      el === 'comment' || el === 'inline') {
+    return false;
+  }
   if (typeof Blockly !== 'undefined' && Blockly.Events) {
     if (t === Blockly.Events.FINISHED_LOADING) return false;
     if (t === Blockly.Events.VIEWPORT_CHANGE) return false;
@@ -331,6 +373,8 @@ function saveAllBeforeExit() {
   });
 }
 
+window.beginWorkspaceLoad = beginWorkspaceLoad;
+window.endWorkspaceLoad = endWorkspaceLoad;
 window.restartAutosaveTimer = restartAutosaveTimer;
 window.startAutosaveTimer = startAutosaveTimer;
 window.getUnsavedCloseState = getUnsavedCloseState;
@@ -340,6 +384,8 @@ window.markWorkspaceDirty = markWorkspaceDirty;
 window.isWorkspaceDirty = isWorkspaceDirty;
 window.showSaveToast = showSaveToast;
 window.isSignificantBlocklyEvent = isSignificantBlocklyEvent;
+window.beginWorkspaceLoad = beginWorkspaceLoad;
+window.endWorkspaceLoad = endWorkspaceLoad;
 
 // ── Block save/load ─────────────────────────────────────────────
 
@@ -467,6 +513,32 @@ function loadWorkspaceBlocks() {
     // Restore World poses (applied when robots are synced into the scene)
     loadWorldScene();
   });
+}
+
+/** Scroll so the top-left block sits inset from the view corner (does not move blocks). */
+function insetWorkspaceOnOpen(ws) {
+  ws = ws || (typeof getWorkspace === 'function' ? getWorkspace() : null);
+  if (!ws || typeof ws.scroll !== 'function') return;
+  var PAD_X = 96;
+  var PAD_Y = 80;
+  var scale = ws.scale || 1;
+  var minX = 0;
+  var minY = 0;
+  try {
+    var tops = ws.getTopBlocks(false) || [];
+    if (tops.length) {
+      minX = Infinity;
+      minY = Infinity;
+      for (var i = 0; i < tops.length; i++) {
+        var xy = tops[i].getRelativeToSurfaceXY();
+        if (xy.x < minX) minX = xy.x;
+        if (xy.y < minY) minY = xy.y;
+      }
+    }
+  } catch (e) { /* keep origin */ }
+  try {
+    ws.scroll(PAD_X - minX * scale, PAD_Y - minY * scale);
+  } catch (e2) { /* ignore */ }
 }
 
 // ── Saved functions (per-workspace, on disk) ────────────────────
@@ -697,6 +769,12 @@ async function switchWorkspace() {
   if (ws) {
     ws.clear();
     loadWorkspaceBlocks();
+    setTimeout(function() {
+      try {
+        if (typeof Blockly !== 'undefined' && Blockly.svgResize) Blockly.svgResize(ws);
+      } catch (eR) { /* ignore */ }
+      insetWorkspaceOnOpen(ws);
+    }, 60);
   } else {
     loadWorldScene();
   }

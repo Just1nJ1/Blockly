@@ -282,6 +282,7 @@
       if (!_currentModel) _currentModel = defaultModelName();
       console.log('[TeachingPanel] Port selected:', _currentPort, 'Model:', _currentModel);
       buildAxisRows();
+      applyEffectorUi(_currentPort);
       startStatusPolling();
     });
   }
@@ -366,8 +367,39 @@
   function setupEffectorSelect() {
     var select = document.getElementById('teach-effector-select');
     if (!select) return;
-    select.addEventListener('change', function() { buildEffectorButtons(select.value); });
-    buildEffectorButtons(select.value);
+    select.addEventListener('change', function() {
+      if (window.EffectorState && _currentPort) {
+        window.EffectorState.set(_currentPort, { type: select.value, mode: 0 });
+      } else {
+        buildEffectorButtons(select.value);
+      }
+    });
+    if (window.EffectorState) {
+      window.EffectorState.subscribe(function(port) {
+        if (port === _currentPort) applyEffectorUi(port);
+      });
+    }
+    applyEffectorUi(_currentPort);
+  }
+
+  function applyEffectorUi(port) {
+    var state = (window.EffectorState && port)
+      ? window.EffectorState.get(port)
+      : { type: 'none', mode: 0 };
+    var select = document.getElementById('teach-effector-select');
+    if (select && select.value !== state.type) select.value = state.type;
+    buildEffectorButtons(state.type);
+    setEffectorHighlight(document.getElementById('teach-effector-buttons'), state.mode);
+  }
+
+  function setEffectorHighlight(container, mode) {
+    if (!container) return;
+    var btns = container.querySelectorAll('.ctrl-eff-btn');
+    for (var i = 0; i < btns.length; i++) {
+      var m = parseInt(btns[i].dataset.mode, 10);
+      // Mode 0 (OFF) never stays highlighted; it only clears Open/Close.
+      btns[i].classList.toggle('active', mode !== 0 && m === mode);
+    }
   }
 
   function buildEffectorButtons(type) {
@@ -383,6 +415,7 @@
         var btn = document.createElement('button');
         btn.className = 'ctrl-eff-btn';
         btn.textContent = def.label;
+        btn.dataset.mode = String(def.mode);
         btn.addEventListener('click', function() {
           if (!_currentPort) return;
           fetch(getServerUrl() + def.endpoint, {
@@ -390,6 +423,11 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ port: _currentPort, mode: def.mode })
           }).catch(function() {});
+          if (window.EffectorState) {
+            window.EffectorState.set(_currentPort, { mode: def.mode });
+          } else {
+            setEffectorHighlight(container, def.mode);
+          }
         });
 
         var addBtn = document.createElement('button');
@@ -1106,7 +1144,23 @@
       }
       ports.push({ port: opt.value, label: opt.textContent, model: model });
     }
+    ports.sort(function(a, b) {
+      var av = _isVirtualTeachPort(a.port) ? 1 : 0;
+      var bv = _isVirtualTeachPort(b.port) ? 1 : 0;
+      return av - bv;
+    });
     return ports;
+  }
+
+  function _isVirtualTeachPort(port) {
+    if (!port) return false;
+    if (window.ExtensionAPI && typeof ExtensionAPI.isVirtualPort === 'function') {
+      return ExtensionAPI.isVirtualPort(port);
+    }
+    if (window.RobotCatalog && typeof RobotCatalog.isVirtualPort === 'function') {
+      return RobotCatalog.isVirtualPort(port);
+    }
+    return /^Virtual/i.test(String(port));
   }
 
   function showPortMappingDialog(portKeys, portModelMap, onConfirm) {
@@ -1542,6 +1596,7 @@
       _currentPort = port;
       _currentModel = model;
       buildAxisRows();
+      applyEffectorUi(port);
       startStatusPolling();
     }
   };
@@ -1549,6 +1604,7 @@
   window.teachingPanelOnDisconnected = function() {
     _currentPort = null;
     _currentModel = null;
+    applyEffectorUi(null);
     stopStatusPolling();
   };
 

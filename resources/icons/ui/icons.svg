@@ -22,4 +22,22 @@
   <symbol id="icon-blocks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
   <symbol id="icon-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" fill="#5B8C5A" stroke="none"/><path d="M12 7v10M7 12h10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="icon-home" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M55.53 42.11 A27 27 0 1 1 57.50 32"/>
+    <path d="M51.8 30.6 L63.8 30.6 L57.8 38.5 Z" fill="currentColor" stroke="currentColor" stroke-width="1"/>
+    <path d="M23 22.5 V41.5"/>
+    <path d="M38 22.5 V41.5"/>
+    <path d="M23 32 H38"/>
+  </symbol>
+  <symbol id="icon-zero-pos" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4">
+    <circle cx="32" cy="32" r="21.5"/>
+    <circle cx="32" cy="32" r="5.3" fill="currentColor" stroke="none"/>
+  </symbol>
+  <symbol id="icon-capture" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+    <path d="M12 25 V18 C12 14 15 12 19 12 H26"/>
+    <path d="M38 12 H45 C49 12 52 14 52 18 V25"/>
+    <path d="M52 39 V46 C52 50 49 52 45 52 H38"/>
+    <path d="M26 52 H19 C15 52 12 50 12 46 V39"/>
+    <circle cx="32" cy="32" r="5.3" fill="currentColor" stroke="none"/>
+  </symbol>
 </svg>
