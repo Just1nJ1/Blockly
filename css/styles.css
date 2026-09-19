@@ -340,7 +340,7 @@ body.platform-darwin .titlebar {
   display: flex;
   align-items: center;
   padding: 6px 12px;
-  background: var(--cmd-bar-bg);
+  background: #f3f6f8;
   border-bottom: 1px solid var(--cmd-border);
   gap: 8px;
   box-sizing: border-box;
@@ -411,7 +411,7 @@ body.platform-darwin .titlebar {
 /* Shared primary toolbar height (Blockly + Teaching) */
 #toolbar,
 .teach-toolbar {
-  background: var(--bg-tertiary);
+  background: #f3f6f8;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-primary);
   display: flex;
@@ -1344,6 +1344,7 @@ button:disabled {
 #panel-content-control-panel {
   min-width: 0;
   overflow: hidden;
+  background: #fafbfc;
 }
 .ctrl-panel {
   padding: 10px;
@@ -1354,6 +1355,7 @@ button:disabled {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+  background: #fafbfc;
 }
 .ctrl-port-row {
   display: flex;
@@ -1597,7 +1599,7 @@ button:disabled {
   line-height: 30px;
   text-align: center;
   border-radius: 0;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1629,7 +1631,7 @@ button:disabled {
   line-height: 28px;
   text-align: center;
   border-radius: 0;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1662,7 +1664,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   border-radius: 4px;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1752,7 +1754,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   border-radius: 4px;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -3289,6 +3291,33 @@ button:disabled {
   background: #252526 !important;
 }
 
+[data-theme="dark"] #toolbar,
+[data-theme="dark"] .teach-toolbar,
+[data-theme="dark"] #command-toolbar {
+  background: var(--bg-tertiary);
+}
+[data-theme="dark"] #command-toolbar {
+  background: var(--cmd-bar-bg);
+}
+[data-theme="dark"] #panel-content-control-panel,
+[data-theme="dark"] .ctrl-panel,
+[data-theme="dark"] .teach-ctrl-panel {
+  background: var(--bg-secondary);
+}
+[data-theme="dark"] #ctrl-axis-rows .ctrl-btn,
+[data-theme="dark"] #teach-axis-rows .ctrl-btn,
+[data-theme="dark"] .ctrl-btn,
+[data-theme="dark"] .ctrl-step-btn,
+[data-theme="dark"] .ctrl-eff-btn {
+  background: var(--bg-header);
+}
+[data-theme="dark"] .teach-table th {
+  background: var(--bg-header);
+}
+[data-theme="dark"] .teach-table td {
+  background: var(--bg-primary);
+}
+
 /* Command view light mode input */
 #command-input-bar {
   background: var(--cmd-bar-bg);
@@ -3326,7 +3355,7 @@ button:disabled {
   max-width: var(--ctrl-side-width, 300px);
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--bg-secondary);
+  background: #fafbfc;
   /* No extra outer padding — .ctrl-panel already pads (same as Blockly) */
   padding: 0;
   flex-shrink: 0;
@@ -3387,7 +3416,7 @@ button:disabled {
 }
 
 .teach-table th {
-  background: var(--bg-header);
+  background: #ebeff2;
   border: 1px solid var(--border-primary);
   /* Match Blockly/World / Code/Functions/Control tab bar height */
   height: 40px;
@@ -3406,7 +3435,7 @@ button:disabled {
   border: 1px solid var(--border-primary);
   padding: 4px 6px;
   text-align: center;
-  background: var(--bg-primary);
+  background: #fcfcfc;
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -3426,7 +3455,7 @@ button:disabled {
   background: var(--bg-secondary);
 }
 .teach-row-selected td {
-  background: #E3F2FD !important;
+  background: #e1eff7 !important;
   border-color: #90CAF9 !important;
 }
 [data-theme="dark"] .teach-row-selected td {
