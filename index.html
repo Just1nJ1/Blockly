@@ -310,7 +310,7 @@
             toolbar …………… full width (Save / Run / Stop)
             main-container … row: left column | right panel
               left-column … view tabs + Blockly / World content
-              output-panel … Code / Functions / Control (full height)
+              output-panel … Control / Code / Functions (full height)
         -->
         <div id="main-container">
           <div id="left-column">
@@ -380,35 +380,13 @@
           <!-- Right panel: full height under toolbar (beside Blockly/World) -->
           <div id="output-panel">
             <div id="output-tabs">
-              <button class="panel-tab-btn active" data-panel="code-output">Code</button>
+              <button class="panel-tab-btn active" data-panel="control-panel">Control</button>
+              <button class="panel-tab-btn" data-panel="code-output">Code</button>
               <button class="panel-tab-btn" data-panel="saved-functions">Functions</button>
-              <button class="panel-tab-btn" data-panel="control-panel">Control</button>
             </div>
 
-            <!-- Tab 1: Code & Output (default) -->
-            <div id="panel-content-code-output" class="panel-tab-content active">
-              <div id="output-header">Generated Python Code</div>
-              <div id="code-preview"></div>
-              <div id="output-header">Console</div>
-              <div id="output-content" class="console-root"></div>
-              <!-- Debug panel: variables + call stack (shown during debug sessions) -->
-              <div id="debug-panel">
-                <div id="debug-panel-header">
-                  <span>Variables</span>
-                  <span class="debug-line-info" id="debug-line-info"></span>
-                </div>
-                <div id="debug-variables"></div>
-                <div id="debug-callstack"></div>
-              </div>
-            </div>
-
-            <!-- Tab 2: Functions (saved function library) -->
-            <div id="panel-content-saved-functions" class="panel-tab-content">
-              <div id="saved-functions-list"></div>
-            </div>
-
-            <!-- Tab 3: Control Panel -->
-            <div id="panel-content-control-panel" class="panel-tab-content">
+            <!-- Tab 1: Control Panel (default) -->
+            <div id="panel-content-control-panel" class="panel-tab-content active">
               <div class="ctrl-panel">
                 <!-- Port selector -->
                 <div class="ctrl-port-row">
@@ -472,6 +450,28 @@
                 </div>
                 <div id="ctrl-effector-buttons"></div>
               </div>
+            </div>
+
+            <!-- Tab 2: Code & Output -->
+            <div id="panel-content-code-output" class="panel-tab-content">
+              <div id="output-header">Generated Python Code</div>
+              <div id="code-preview"></div>
+              <div id="output-header">Console</div>
+              <div id="output-content" class="console-root"></div>
+              <!-- Debug panel: variables + call stack (shown during debug sessions) -->
+              <div id="debug-panel">
+                <div id="debug-panel-header">
+                  <span>Variables</span>
+                  <span class="debug-line-info" id="debug-line-info"></span>
+                </div>
+                <div id="debug-variables"></div>
+                <div id="debug-callstack"></div>
+              </div>
+            </div>
+
+            <!-- Tab 3: Functions (saved function library) -->
+            <div id="panel-content-saved-functions" class="panel-tab-content">
+              <div id="saved-functions-list"></div>
             </div>
           </div>
         </div>
