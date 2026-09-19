@@ -515,6 +515,32 @@ function loadWorkspaceBlocks() {
   });
 }
 
+/** Scroll so the top-left block sits inset from the view corner (does not move blocks). */
+function insetWorkspaceOnOpen(ws) {
+  ws = ws || (typeof getWorkspace === 'function' ? getWorkspace() : null);
+  if (!ws || typeof ws.scroll !== 'function') return;
+  var PAD_X = 96;
+  var PAD_Y = 80;
+  var scale = ws.scale || 1;
+  var minX = 0;
+  var minY = 0;
+  try {
+    var tops = ws.getTopBlocks(false) || [];
+    if (tops.length) {
+      minX = Infinity;
+      minY = Infinity;
+      for (var i = 0; i < tops.length; i++) {
+        var xy = tops[i].getRelativeToSurfaceXY();
+        if (xy.x < minX) minX = xy.x;
+        if (xy.y < minY) minY = xy.y;
+      }
+    }
+  } catch (e) { /* keep origin */ }
+  try {
+    ws.scroll(PAD_X - minX * scale, PAD_Y - minY * scale);
+  } catch (e2) { /* ignore */ }
+}
+
 // ── Saved functions (per-workspace, on disk) ────────────────────
 
 /**
@@ -743,6 +769,12 @@ async function switchWorkspace() {
   if (ws) {
     ws.clear();
     loadWorkspaceBlocks();
+    setTimeout(function() {
+      try {
+        if (typeof Blockly !== 'undefined' && Blockly.svgResize) Blockly.svgResize(ws);
+      } catch (eR) { /* ignore */ }
+      insetWorkspaceOnOpen(ws);
+    }, 60);
   } else {
     loadWorldScene();
   }

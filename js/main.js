@@ -10,6 +10,7 @@
  */
 
 var _blocklyInitialized = false;
+var _appliedWorkspaceInset = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   // Prefetch robot catalog from server (falls back to embedded defaults)
@@ -105,7 +106,12 @@ async function ensureBlocklyReady() {
       Blockly.svgResize(ws);
       try {
         if (typeof ws.setScale === 'function') ws.setScale(sc);
-        if (typeof ws.scroll === 'function') ws.scroll(sx, sy);
+        if (typeof insetWorkspaceOnOpen === 'function' && !_appliedWorkspaceInset) {
+          insetWorkspaceOnOpen(ws);
+          _appliedWorkspaceInset = true;
+        } else if (typeof ws.scroll === 'function') {
+          ws.scroll(sx, sy);
+        }
       } catch (e) { /* ignore */ }
       // Apply theme overrides to Blockly's inline styles
       if (typeof applyBlocklyThemeOverrides === 'function') {
