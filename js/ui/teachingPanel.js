@@ -1289,7 +1289,7 @@
 
     var confirmBtn = document.createElement('button');
     confirmBtn.textContent = 'Import';
-    confirmBtn.style.cssText = 'padding:6px 16px;border:1px solid #388E3C;border-radius:4px;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;font-weight:500;';
+    confirmBtn.style.cssText = 'padding:6px 16px;border:1px solid #288a41;border-radius:4px;background:#32a54e;color:#fff;cursor:pointer;font-size:13px;font-weight:500;';
     confirmBtn.addEventListener('click', function() {
       var mapping = {};
       for (var key in selects) {

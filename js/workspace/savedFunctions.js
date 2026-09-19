@@ -90,7 +90,7 @@ function _showConflictDialog(funcName, existingNames) {
 
     // Warning icon + title
     var title = document.createElement('div');
-    title.style.cssText = 'font-size:16px;font-weight:600;color:#e65100;margin-bottom:12px;';
+    title.style.cssText = 'font-size:16px;font-weight:600;color:#f77021;margin-bottom:12px;';
     title.textContent = '\u26A0\uFE0F Function "' + funcName + '" already exists';
     dialog.appendChild(title);
 
@@ -168,7 +168,7 @@ function _showConflictDialog(funcName, existingNames) {
     section2.style.cssText = 'margin-bottom:12px;padding:12px;background:#fff3e0;border-radius:6px;';
 
     var label2 = document.createElement('div');
-    label2.style.cssText = 'font-size:13px;font-weight:500;color:#e65100;margin-bottom:6px;';
+    label2.style.cssText = 'font-size:13px;font-weight:500;color:#f77021;margin-bottom:6px;';
     label2.textContent = 'Rename the existing function in workspace:';
     section2.appendChild(label2);
 
@@ -183,7 +183,7 @@ function _showConflictDialog(funcName, existingNames) {
 
     var btn2 = document.createElement('button');
     btn2.textContent = 'Rename existing';
-    btn2.style.cssText = 'padding:6px 14px;background:#e65100;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;';
+    btn2.style.cssText = 'padding:6px 14px;background:#f77021;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;';
 
     var error2 = document.createElement('div');
     error2.style.cssText = errorStyle;

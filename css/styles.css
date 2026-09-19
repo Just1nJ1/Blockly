@@ -12,7 +12,7 @@
   /* Code preview + console (light theme: light panel, dark text) */
   --bg-code: #f4f6f8;
   --bg-model: #1a1a1a;
-  --text-primary: #333;
+  --text-primary: #010d1d;
   --text-secondary: #555;
   --text-muted: #888;
   --text-faint: #999;
@@ -31,8 +31,8 @@
   --output-result-bg: #e3f2fd;
   --output-stdin: #2e7d32;
   --output-system: #78909c;
-  --sidebar-bg: #263238;
-  --sidebar-text: #90a4ae;
+  --sidebar-bg: #1e3e54;
+  --sidebar-text: #c6dbe9;
   --sidebar-hover: #37474f;
   --sidebar-hover-text: #eceff1;
   --sidebar-active: #455a64;
@@ -40,12 +40,12 @@
   --cmd-bg: #f5f5f5;
   --cmd-bar-bg: #e8e8e8;
   --cmd-border: #d0d0d0;
-  --cmd-text: #333;
+  --cmd-text: #010d1d;
   --cmd-placeholder: #999;
   --cmd-select-bg: #fff;
   --cmd-select-border: #ccc;
   --cmd-remove-bg: #ffebee;
-  --cmd-remove-text: #c62828;
+  --cmd-remove-text: #f63c3d;
   --cmd-remove-border: #ef9a9a;
   --tab-hover: #d5d5d5;
   --tab-active-bg: #fff;
@@ -58,7 +58,7 @@
   --debug-header-border: #c5cae9;
   --debug-line-info: #5c6bc0;
   --debug-var-name: #1565C0;
-  --debug-var-value: #333;
+  --debug-var-value: #010d1d;
   --debug-callstack-text: #666;
   --debug-callstack-border: #e0e0e0;
   --debug-bg-tint: #e8e8e8;
@@ -340,7 +340,7 @@ body.platform-darwin .titlebar {
   display: flex;
   align-items: center;
   padding: 6px 12px;
-  background: var(--cmd-bar-bg);
+  background: #f3f6f8;
   border-bottom: 1px solid var(--cmd-border);
   gap: 8px;
   box-sizing: border-box;
@@ -401,8 +401,8 @@ body.platform-darwin .titlebar {
   line-height: 1;
 }
 #command-port-remove:hover {
-  background: #7c3a3a;
-  color: #fff;
+  background: rgba(246, 60, 61, 0.12);
+  color: #f63c3d;
 }
 #command-port-remove.visible {
   display: inline-block;
@@ -411,7 +411,7 @@ body.platform-darwin .titlebar {
 /* Shared primary toolbar height (Blockly + Teaching) */
 #toolbar,
 .teach-toolbar {
-  background: var(--bg-tertiary);
+  background: #f3f6f8;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-primary);
   display: flex;
@@ -520,12 +520,12 @@ body.platform-darwin .titlebar {
 }
 /* Danger actions: same chrome, red icon/text only */
 .toolbar-btn-danger {
-  color: #e53935;
+  color: #f63c3d;
 }
 .toolbar-btn-danger:hover {
-  background: rgba(229, 57, 53, 0.08);
-  border-color: rgba(229, 57, 53, 0.35);
-  color: #c62828;
+  background: rgba(246, 60, 61, 0.08);
+  border-color: rgba(246, 60, 61, 0.35);
+  color: #f63c3d;
 }
 
 /* Default button style (outside toolbar) */
@@ -643,7 +643,7 @@ button:disabled {
 }
 .console-input-row.active {
   background: var(--bg-header);
-  box-shadow: inset 0 0 0 1px var(--accent, #4CAF50);
+  box-shadow: inset 0 0 0 1px var(--accent, #32a54e);
 }
 .console-prompt {
   color: var(--output-stdin, var(--output-result));
@@ -756,8 +756,8 @@ button:disabled {
 }
 .view-tab-btn.active {
   background: var(--tab-active-bg);
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: #1189d4;
+  border-bottom-color: #1189d4;
 }
 .panel-tab-btn.active {
   background: var(--bg-secondary);
@@ -1344,6 +1344,7 @@ button:disabled {
 #panel-content-control-panel {
   min-width: 0;
   overflow: hidden;
+  background: #fafbfc;
 }
 .ctrl-panel {
   padding: 10px;
@@ -1354,6 +1355,7 @@ button:disabled {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+  background: #fafbfc;
 }
 .ctrl-port-row {
   display: flex;
@@ -1444,22 +1446,22 @@ button:disabled {
   display: block;
 }
 .ctrl-btn-home {
-  background: #2196F3;
+  background: #1189d4;
   color: #fff;
-  border-color: #1976D2;
+  border-color: #0e74b4;
 }
 .ctrl-btn-home:hover {
-  background: #1565C0;
-  border-color: #1565C0;
+  background: #0e74b4;
+  border-color: #0e74b4;
 }
 .ctrl-btn-zero {
-  background: #FFC107;
-  color: #333;
-  border-color: #FFA000;
+  background: #f77021;
+  color: #fff;
+  border-color: #d45c1b;
 }
 .ctrl-btn-zero:hover {
-  background: #FFB300;
-  border-color: #FF8F00;
+  background: #d45c1b;
+  border-color: #d45c1b;
 }
 
 /* Mode toggle switch */
@@ -1479,7 +1481,7 @@ button:disabled {
   transition: color 0.15s;
 }
 .ctrl-mode-label.ctrl-mode-active {
-  color: var(--accent);
+  color: #1189d4;
   font-weight: 600;
 }
 .ctrl-toggle-track {
@@ -1492,7 +1494,7 @@ button:disabled {
   transition: background 0.2s;
 }
 .ctrl-toggle-track.toggled {
-  background: var(--accent);
+  background: #1189d4;
 }
 .ctrl-toggle-thumb {
   width: 16px;
@@ -1597,7 +1599,7 @@ button:disabled {
   line-height: 30px;
   text-align: center;
   border-radius: 0;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1612,11 +1614,11 @@ button:disabled {
 }
 #ctrl-axis-rows .ctrl-btn-plus,
 #teach-axis-rows .ctrl-btn-plus {
-  color: #4CAF50;
+  color: #32a54e;
 }
 #ctrl-axis-rows .ctrl-btn-minus,
 #teach-axis-rows .ctrl-btn-minus {
-  color: #f44336;
+  color: #f63c3d;
 }
 
 /* Fallback for any other .ctrl-btn usage */
@@ -1629,7 +1631,7 @@ button:disabled {
   line-height: 28px;
   text-align: center;
   border-radius: 0;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1642,10 +1644,10 @@ button:disabled {
   border-color: var(--accent);
 }
 .ctrl-btn-plus {
-  color: #4CAF50;
+  color: #32a54e;
 }
 .ctrl-btn-minus {
-  color: #f44336;
+  color: #f63c3d;
 }
 
 /* Step row */
@@ -1662,7 +1664,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   border-radius: 4px;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1673,9 +1675,9 @@ button:disabled {
   border-color: var(--accent);
 }
 .ctrl-step-btn.active {
-  background: var(--accent);
+  background: #1189d4;
   color: #fff;
-  border-color: var(--accent);
+  border-color: #1189d4;
 }
 .ctrl-step-input {
   width: 40px;
@@ -1752,7 +1754,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   border-radius: 4px;
-  background: var(--bg-header);
+  background: #ebeef0;
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   cursor: pointer;
@@ -1764,9 +1766,9 @@ button:disabled {
   border-color: var(--accent);
 }
 .ctrl-eff-btn.active {
-  background: var(--accent);
+  background: #1189d4;
   color: #fff;
-  border-color: var(--accent);
+  border-color: #1189d4;
 }
 
 /* Teaching effector column: action button + add button stacked */
@@ -1791,9 +1793,9 @@ button:disabled {
   box-sizing: border-box;
 }
 .teach-eff-add-btn:hover {
-  background: #4CAF50;
+  background: #32a54e;
   color: #fff;
-  border-color: #388E3C;
+  border-color: #288a41;
 }
 
 /* ── Workspace open / switch dialog ── */
@@ -1851,10 +1853,10 @@ button:disabled {
   background: var(--accent-hover);
 }
 .ws-dialog-btn-new {
-  background: #4CAF50;
+  background: #32a54e;
 }
 .ws-dialog-btn-new:hover {
-  background: #43A047;
+  background: #288a41;
 }
 .ws-dialog-recent-label {
   font-size: 13px;
@@ -2592,12 +2594,12 @@ button:disabled {
   border: 1px solid transparent;
 }
 .ctrl-modal-btn-save {
-  background: #E67E22;
+  background: #f77021;
   color: #fff;
-  border-color: #D35400;
+  border-color: #d45c1b;
 }
 .ctrl-modal-btn-save:hover {
-  background: #D35400;
+  background: #d45c1b;
 }
 .ctrl-modal-btn-cancel {
   background: var(--bg-header);
@@ -3289,6 +3291,33 @@ button:disabled {
   background: #252526 !important;
 }
 
+[data-theme="dark"] #toolbar,
+[data-theme="dark"] .teach-toolbar,
+[data-theme="dark"] #command-toolbar {
+  background: var(--bg-tertiary);
+}
+[data-theme="dark"] #command-toolbar {
+  background: var(--cmd-bar-bg);
+}
+[data-theme="dark"] #panel-content-control-panel,
+[data-theme="dark"] .ctrl-panel,
+[data-theme="dark"] .teach-ctrl-panel {
+  background: var(--bg-secondary);
+}
+[data-theme="dark"] #ctrl-axis-rows .ctrl-btn,
+[data-theme="dark"] #teach-axis-rows .ctrl-btn,
+[data-theme="dark"] .ctrl-btn,
+[data-theme="dark"] .ctrl-step-btn,
+[data-theme="dark"] .ctrl-eff-btn {
+  background: var(--bg-header);
+}
+[data-theme="dark"] .teach-table th {
+  background: var(--bg-header);
+}
+[data-theme="dark"] .teach-table td {
+  background: var(--bg-primary);
+}
+
 /* Command view light mode input */
 #command-input-bar {
   background: var(--cmd-bar-bg);
@@ -3326,7 +3355,7 @@ button:disabled {
   max-width: var(--ctrl-side-width, 300px);
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--bg-secondary);
+  background: #fafbfc;
   /* No extra outer padding — .ctrl-panel already pads (same as Blockly) */
   padding: 0;
   flex-shrink: 0;
@@ -3387,7 +3416,7 @@ button:disabled {
 }
 
 .teach-table th {
-  background: var(--bg-header);
+  background: #ebeff2;
   border: 1px solid var(--border-primary);
   /* Match Blockly/World / Code/Functions/Control tab bar height */
   height: 40px;
@@ -3406,7 +3435,7 @@ button:disabled {
   border: 1px solid var(--border-primary);
   padding: 4px 6px;
   text-align: center;
-  background: var(--bg-primary);
+  background: #fcfcfc;
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -3426,7 +3455,7 @@ button:disabled {
   background: var(--bg-secondary);
 }
 .teach-row-selected td {
-  background: #E3F2FD !important;
+  background: #e1eff7 !important;
   border-color: #90CAF9 !important;
 }
 [data-theme="dark"] .teach-row-selected td {
@@ -3500,15 +3529,17 @@ button:disabled {
 
 .teach-row-btn:hover { background: var(--bg-tertiary); }
 .teach-row-btn:disabled { opacity: 0.3; cursor: default; }
-.teach-row-btn-del { color: #e53935; }
+.teach-row-btn-del { color: #f63c3d; }
 .teach-row-btn-del:hover { background: #ffebee; }
 
 /* Currently executing row during playback */
 .teach-row-active td {
-  background: #C8E6C9 !important;
+  background: #32a54e !important;
+  color: #fff;
 }
 [data-theme="dark"] .teach-row-active td {
-  background: #1b5e20 !important;
+  background: #288a41 !important;
+  color: #fff;
 }
 
 .teach-empty-msg {

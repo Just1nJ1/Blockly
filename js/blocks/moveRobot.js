@@ -441,7 +441,7 @@ function initMoveRobotBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Move robot to Cartesian coordinates. Accepts variables or numbers.');
     }
   };
@@ -471,7 +471,7 @@ function initMoveRobotBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Move robot to joint angles. Accepts variables or numbers.');
     }
   };
@@ -492,7 +492,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Home the robot arm (move all axes to home position).');
     }
   };
@@ -507,7 +507,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Move robot to zero position (all angles = 0).');
     }
   };
@@ -527,7 +527,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Set robot movement speed (0-100).');
     }
   };
@@ -545,7 +545,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#5CA65C');
+      this.setColour('#32a54e');
       this.setTooltip('Wait for a specified number of seconds.');
     }
   };
@@ -565,7 +565,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Send a raw G-code command to the robot.');
     }
   };
@@ -579,7 +579,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Wait until the robot finishes moving and is idle.');
     }
   };
@@ -599,7 +599,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Control the suction cup: Suction (1), Blowing (2), Off (0).');
     }
   };
@@ -619,7 +619,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Control the gripper: Open (1), Close (2), Stop (0).');
     }
   };
@@ -639,7 +639,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip('Control the three-finger soft gripper: Open (1), Close (2), Stop (0).');
     }
   };
@@ -670,7 +670,7 @@ function initRobotCommandBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E67E22');
+      this.setColour('#f77021');
       this.setTooltip(
         'Move the 7th axis (conveyor belt / external rail). ' +
         'Calls writeExpand(motion, position, d).'
@@ -683,13 +683,13 @@ function initRobotCommandBlocks() {
  * Color palette for robot variables. Each robot gets a distinct color.
  */
 var ROBOT_COLORS = [
-  '#E67E22',  // orange (default)
+  '#f77021',  // orange (default)
   '#27AE60',  // green
   '#8E44AD',  // purple
   '#2980B9',  // blue
   '#C0392B',  // red
   '#16A085',  // teal
-  '#D35400',  // dark orange
+  '#d45c1b',  // dark orange
   '#2C3E50',  // dark blue
 ];
 

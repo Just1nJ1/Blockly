@@ -273,14 +273,14 @@
 
   function getBlockColorForPort(port) {
     var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
-    if (!workspace) return '#E67E22';
+    if (!workspace) return '#f77021';
     var setupBlocks = workspace.getBlocksByType('setup_robot', false);
     for (var i = 0; i < setupBlocks.length; i++) {
       if (setupBlocks[i].getFieldValue('PORT') === port) {
-        return setupBlocks[i].getColour() || '#E67E22';
+        return setupBlocks[i].getColour() || '#f77021';
       }
     }
-    return '#E67E22';
+    return '#f77021';
   }
 
   function updatePortSelectColor(port) {

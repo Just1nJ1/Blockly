@@ -676,7 +676,7 @@ function initLocalVariablesIcon() {
       while (this.svgRoot.firstChild) this.svgRoot.removeChild(this.svgRoot.firstChild);
       this.svgRoot.setAttribute('style', 'display: inline;');
       Blockly.utils.dom.createSvgElement(Blockly.utils.Svg.CIRCLE,
-        { cx:'10', cy:'10', r:'9', fill:'#4CAF50', stroke:'#2E7D32', 'stroke-width':'1' }, this.svgRoot);
+        { cx:'10', cy:'10', r:'9', fill:'#32a54e', stroke:'#288a41', 'stroke-width':'1' }, this.svgRoot);
       var t = Blockly.utils.dom.createSvgElement(Blockly.utils.Svg.TEXT,
         { x:'10', y:'14', 'text-anchor':'middle', 'font-size':'12', 'font-weight':'bold', fill:'#fff' }, this.svgRoot);
       t.textContent = 'V';

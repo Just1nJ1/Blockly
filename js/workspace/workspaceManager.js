@@ -504,6 +504,7 @@ function loadWorkspaceBlocks() {
       var xmlDom = Blockly.utils.xml.textToDom(xmlText);
       ws.clear();
       Blockly.Xml.domToWorkspace(xmlDom, ws);
+      if (typeof applyLoopBlockColours === 'function') applyLoopBlockColours(ws);
       if (typeof updateCodePreview === 'function') updateCodePreview();
       console.log('[WorkspaceManager] Loaded blocks from:', _currentWorkspacePath);
     } catch (e) {
