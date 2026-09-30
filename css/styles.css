@@ -567,6 +567,60 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
 }
+#content-stage.split-h {
+  flex-direction: row;
+}
+#content-stage.split-v {
+  flex-direction: column;
+}
+#stage-splitter {
+  display: none;
+  flex-shrink: 0;
+  background: var(--border-primary);
+  z-index: 4;
+  touch-action: none;
+}
+#content-stage.split-h #stage-splitter {
+  display: block;
+  width: 6px;
+  cursor: col-resize;
+}
+#content-stage.split-v #stage-splitter {
+  display: block;
+  height: 6px;
+  width: auto;
+  cursor: row-resize;
+}
+#stage-splitter:hover,
+body.stage-splitting #stage-splitter {
+  background: #1189d4;
+}
+body.stage-splitting {
+  user-select: none;
+}
+body.stage-splitting-h {
+  cursor: col-resize;
+}
+body.stage-splitting-v {
+  cursor: row-resize;
+}
+#content-stage.split-h #workspace-area,
+#content-stage.split-h #model-area,
+#content-stage.split-v #workspace-area,
+#content-stage.split-v #model-area {
+  display: flex !important;
+  visibility: visible;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#content-stage.split-h #model-area,
+#content-stage.split-v #model-area {
+  flex: 1;
+}
+#content-stage.split-v #model-area #viewer-panel {
+  width: 220px;
+}
 #blocklyDiv {
   flex: 1;
   min-height: 0;
@@ -713,6 +767,7 @@ button:disabled {
 
 /* Secondary tab bars: Blockly/World (left) and Code/Functions/Control (right)
    share the same gray bar height and button metrics. */
+#view-tabs-bar,
 #view-tabs,
 #output-tabs {
   display: flex;
@@ -722,6 +777,54 @@ button:disabled {
   border-bottom: 1px solid var(--border-primary);
   min-height: 40px;
   box-sizing: border-box;
+}
+#view-tabs-bar {
+  border-bottom: 1px solid var(--border-primary);
+}
+#view-tabs {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+#view-layout-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+.view-layout-btn {
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.view-layout-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.view-layout-btn:hover {
+  background: var(--tab-hover);
+  color: var(--text-primary);
+}
+.view-layout-btn.active {
+  background: var(--tab-active-bg);
+  color: #1189d4;
+}
+.view-tab-btn[data-view="world"] {
+  cursor: grab;
+}
+.view-tab-btn[data-view="world"].tab-dragging {
+  cursor: grabbing;
+  opacity: 0.7;
 }
 .view-tab-btn,
 .panel-tab-btn {
@@ -818,6 +921,7 @@ button:disabled {
   flex: 1;
   position: relative;
   overflow: hidden;
+  isolation: isolate;
 }
 #world-canvas canvas {
   width: 100% !important;
@@ -3621,4 +3725,32 @@ button:disabled {
 }
 [data-theme="dark"] .ctrl-modal-btn-discard:hover {
   background: rgba(239, 83, 80, 0.16);
+}
+
+/* World pop-out window: only the 3D viewer */
+body.world-popout .titlebar,
+body.world-popout #sidebar,
+body.world-popout #command-view,
+body.world-popout #teaching-view,
+body.world-popout #toolbar,
+body.world-popout #view-tabs-bar,
+body.world-popout #output-panel,
+body.world-popout #workspace-area,
+body.world-popout #stage-splitter {
+  display: none !important;
+}
+body.world-popout #app-body,
+body.world-popout #app-content,
+body.world-popout #left-column,
+body.world-popout #content-stage {
+  flex: 1;
+  min-height: 0;
+}
+body.world-popout #blockly-view {
+  display: flex !important;
+}
+body.world-popout #model-area {
+  flex: 1 !important;
+  visibility: visible !important;
+  display: flex !important;
 }

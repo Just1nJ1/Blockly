@@ -16,6 +16,11 @@
         document.body.classList.add('platform-darwin');
       }
     } catch (e) { /* browser preview */ }
+    try {
+      if (/(?:^|[?&])worldPopout=1(?:&|$)/.test(location.search || '')) {
+        document.body.classList.add('world-popout');
+      }
+    } catch (e2) { /* ignore */ }
   </script>
   <div id="app">
     <!-- macOS custom title bar: logo sits to the right of traffic lights -->
@@ -324,9 +329,22 @@
         <div id="main-container">
           <div id="left-column">
             <!-- Blockly / World tabs sit only above the left content -->
-            <div id="view-tabs">
-              <button class="view-tab-btn active" data-view="workspace">Blockly</button>
-              <!-- World tab is added dynamically -->
+            <div id="view-tabs-bar">
+              <div id="view-tabs">
+                <button class="view-tab-btn active" data-view="workspace">Blockly</button>
+                <!-- World tab is added dynamically -->
+              </div>
+              <div id="view-layout-actions">
+                <button type="button" id="view-split-h" class="view-layout-btn" title="Split Blockly and World side by side">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5h8v14H3V5zm10 0h8v14h-8V5zM4.5 6.5v11h5v-11h-5zm10 0v11h5v-11h-5z"/></svg>
+                </button>
+                <button type="button" id="view-split-v" class="view-layout-btn" title="Split Blockly and World stacked">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5h18v6H3V5zm0 8h18v6H3v-6zM4.5 6.5v3h15v-3h-15zm0 8v3h15v-3h-15z"/></svg>
+                </button>
+                <button type="button" id="view-popout" class="view-layout-btn" title="Open World in a new window">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 5h9v2H7v10h10v-7h2v9H5V5zm8 0h6v6h-2V8.4l-7.3 7.3-1.4-1.4L15.6 7H13V5z"/></svg>
+                </button>
+              </div>
             </div>
 
             <div id="content-stage">
@@ -334,6 +352,8 @@
               <div id="workspace-area">
                 <div id="blocklyDiv"></div>
               </div>
+
+              <div id="stage-splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
 
               <!-- Model mode: 3D viewer + viewer controls (still left of Control panel) -->
               <div id="model-area">
@@ -606,5 +626,6 @@
   <script src="js/robotViewer/worldViewer.js"></script>
   <script src="js/robotViewer/worldAnimation.js"></script>
   <script src="js/robotViewer/viewTabs.js"></script>
+  <script src="js/robotViewer/viewSplit.js"></script>
 </body>
 </html>

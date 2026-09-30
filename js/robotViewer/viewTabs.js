@@ -606,13 +606,16 @@
     if (worldProgressCreated) return;
     worldProgressCreated = true;
 
-    worldProgressEl = document.createElement('div');
-    worldProgressEl.className = 'anim-progress';
-    worldProgressEl.innerHTML =
-      '<div class="anim-progress-label"></div>' +
-      '<div class="anim-progress-track"><div class="anim-progress-fill"></div></div>';
-    worldProgressEl.style.display = 'none';
-    worldCanvas.appendChild(worldProgressEl);
+    worldProgressEl = worldCanvas && worldCanvas.querySelector('.anim-progress');
+    if (!worldProgressEl) {
+      worldProgressEl = document.createElement('div');
+      worldProgressEl.className = 'anim-progress';
+      worldProgressEl.innerHTML =
+        '<div class="anim-progress-label"></div>' +
+        '<div class="anim-progress-track"><div class="anim-progress-fill"></div></div>';
+      worldProgressEl.style.display = 'none';
+      if (worldCanvas) worldCanvas.appendChild(worldProgressEl);
+    }
 
     var WA = window.WorldAnimation;
     if (WA) {
@@ -634,6 +637,10 @@
 
     ensureWorldProgressBar();
 
+    var sceneReady = (typeof WV.ensureScene === 'function')
+      ? WV.ensureScene()
+      : Promise.resolve();
+
     // Sync scene to current vars (add / remove / reload model on change)
     var syncPromise = (typeof WV.syncRobots === 'function')
       ? WV.syncRobots(currentRobotVars)
@@ -646,7 +653,7 @@
         })
       : Promise.resolve();
 
-    Promise.all([syncPromise, ikWarm]).then(function() {
+    Promise.all([sceneReady, syncPromise, ikWarm]).then(function() {
       // Sync progress elements (in case WorldAnimation was loaded after creation)
       if (worldProgressEl) {
         WA.setProgressElements(
@@ -664,6 +671,7 @@
 
       updatePlaybackButtons();
       console.log('[WorldViewer] World mode ready with', currentRobotVars.length, 'robots');
+      setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 50);
     });
   }
 
@@ -688,15 +696,22 @@
     }
     currentRobotVars = uniqueVars;
 
+    var splitNow = window.ViewSplit && window.ViewSplit.isSplit();
+    var blocklyView = document.getElementById('blockly-view');
+    var blocklyActive = !!(blocklyView && blocklyView.classList.contains('active'));
+    var worldShouldShow = blocklyActive && (splitNow || currentMode === 'world');
+
     // Keep world scene membership / mesh family in sync with code changes
     // (e.g. Mirobot → MT4, or a robot var removed entirely).
     // New robots are visible/selected in the checklist by default.
     var WV = window.WorldViewer;
-    if (WV && typeof WV.syncRobots === 'function' && WV.isInitialized()) {
+    if (worldShouldShow && WV && !WV.isInitialized()) {
+      enterWorldMode();
+    } else if (WV && typeof WV.syncRobots === 'function' && WV.isInitialized()) {
       WV.syncRobots(uniqueVars).then(function() {
-        if (currentMode === 'world') updateWorldRobotList();
+        if (currentMode === 'world' || splitNow) updateWorldRobotList();
       });
-    } else if (currentMode === 'world') {
+    } else if (currentMode === 'world' || splitNow) {
       updateWorldRobotList();
     }
 
@@ -705,12 +720,21 @@
 
     var activeBtn = viewTabs.querySelector('.view-tab-btn.active');
     var activeView = activeBtn ? activeBtn.dataset.view : 'workspace';
+    var isSplit = window.ViewSplit && window.ViewSplit.isSplit();
+    var isPoppedMain = window.ViewSplit && window.ViewSplit.isPoppedOut();
+    if (document.body.classList.contains('world-popout')) {
+      activeView = 'world';
+    } else if (isSplit) {
+      activeView = 'split';
+    } else if (isPoppedMain) {
+      activeView = 'workspace';
+    }
 
     // Individual model tabs are no longer shown — map any leftover state to World
     if (activeView.indexOf('var:') === 0 || currentMode === 'individual') {
       activeView = 'world';
     }
-    if (activeView !== 'workspace' && activeView !== 'world') {
+    if (activeView !== 'workspace' && activeView !== 'world' && activeView !== 'split') {
       activeView = 'workspace';
     }
 
@@ -718,29 +742,32 @@
 
     // Blockly tab (always first)
     var blocklyBtn = document.createElement('button');
-    blocklyBtn.className = 'view-tab-btn' + (activeView === 'workspace' ? ' active' : '');
+    blocklyBtn.className = 'view-tab-btn' + (activeView === 'workspace' || activeView === 'split' ? ' active' : '');
     blocklyBtn.dataset.view = 'workspace';
     blocklyBtn.textContent = 'Blockly';
     viewTabs.appendChild(blocklyBtn);
 
     // World tab always shown (0, 1, or many robots — all listed when present)
     var worldBtn = document.createElement('button');
-    worldBtn.className = 'view-tab-btn' + (activeView === 'world' ? ' active' : '');
+    worldBtn.className = 'view-tab-btn' + (activeView === 'world' || activeView === 'split' ? ' active' : '');
     worldBtn.dataset.view = 'world';
     worldBtn.textContent = 'World';
+    worldBtn.title = 'World view — drag out to open in a new window';
     viewTabs.appendChild(worldBtn);
 
     attachViewTabHandlers();
 
     // Keep canvas/mode aligned with the active tab after rebuilds
-    var newActive = viewTabs.querySelector('.view-tab-btn.active');
-    if (newActive) {
-      var want = newActive.dataset.view;
-      var needSwitch = false;
-      if (want === 'workspace' && currentMode !== 'workspace') needSwitch = true;
-      else if (want === 'world' && currentMode !== 'world') needSwitch = true;
-      if (needSwitch) {
-        handleViewTabClick(newActive);
+    if (!isSplit && !isPoppedMain) {
+      var newActive = viewTabs.querySelector('.view-tab-btn.active');
+      if (newActive) {
+        var want = newActive.dataset.view;
+        var needSwitch = false;
+        if (want === 'workspace' && currentMode !== 'workspace') needSwitch = true;
+        else if (want === 'world' && currentMode !== 'world') needSwitch = true;
+        if (needSwitch) {
+          handleViewTabClick(newActive);
+        }
       }
     }
 
@@ -787,19 +814,16 @@
     console.log('[RobotViewer] State initialised for variable:', variableName);
   }
 
-  function handleViewTabClick(btn) {
-    var view = btn.dataset.view;
+  function markActiveTab(view) {
+    document.querySelectorAll('.view-tab-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.view === view);
+    });
+  }
 
-    document.querySelectorAll('.view-tab-btn').forEach(function(b) { b.classList.remove('active'); });
-    btn.classList.add('active');
-
+  function showExclusive(view) {
     ensureRA();
-
-    // ── Leave previous mode ──
-    leaveCurrentMode();
-
     if (view === 'workspace') {
-      // ── Workspace (Blockly) ──
+      if (currentMode !== 'workspace') leaveCurrentMode();
       currentMode = 'workspace';
       currentVariableName = null;
       workspaceArea.style.display = 'flex';
@@ -807,12 +831,10 @@
       modelArea.classList.remove('visible');
       hideAllCanvases();
       showWorldRobotsSection(false);
-      console.log('[View] Switched to Blockly workspace');
       updatePlaybackButtons();
       restoreBlocklyView();
-
     } else if (view === 'world') {
-      // ── World view ──
+      if (currentMode !== 'world') leaveCurrentMode();
       currentMode = 'world';
       currentVariableName = null;
       workspaceArea.style.display = 'none';
@@ -820,13 +842,55 @@
       modelArea.classList.add('visible');
       showWorldCanvas();
       showWorldRobotsSection(true);
-      console.log('[View] Switched to World view');
-
       enterWorldMode();
+      setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 80);
+    }
+  }
 
-      setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 100);
+  function showSplit() {
+    ensureRA();
+    if (currentMode === 'workspace') saveBlocklyView();
+    else if (currentMode === 'individual') leaveCurrentMode();
+    currentMode = 'world';
+    currentVariableName = null;
+    workspaceArea.style.display = 'flex';
+    workspaceArea.classList.remove('hidden');
+    modelArea.classList.add('visible');
+    showWorldCanvas();
+    showWorldRobotsSection(true);
+    enterWorldMode();
+    restoreBlocklyView();
+    setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 80);
+    document.querySelectorAll('.view-tab-btn').forEach(function(b) {
+      b.classList.add('active');
+    });
+  }
 
-    } else if (view.indexOf('var:') === 0) {
+  function handleViewTabClick(btn) {
+    var view = btn.dataset.view;
+
+    if (window.ViewSplit && window.ViewSplit.onTabClick(view)) {
+      if (window.ViewSplit.isSplit()) {
+        document.querySelectorAll('.view-tab-btn').forEach(function(b) {
+          b.classList.add('active');
+        });
+      } else if (window.ViewSplit.isPoppedOut()) {
+        markActiveTab('workspace');
+      }
+      return;
+    }
+
+    markActiveTab(view);
+
+    if (view === 'workspace' || view === 'world') {
+      showExclusive(view);
+      return;
+    }
+
+    ensureRA();
+    leaveCurrentMode();
+
+    if (view.indexOf('var:') === 0) {
       // ── Individual variable view ──
       currentMode = 'individual';
       workspaceArea.style.display = 'none';
@@ -951,6 +1015,14 @@
       window.scheduleRecordedMovesRefresh(100);
     }
   }, 500);
+
+  window.ViewTabs = {
+    showExclusive: showExclusive,
+    showSplit: showSplit,
+    resizeBlockly: restoreBlocklyView,
+    ensureWorldScene: enterWorldMode,
+    getMode: function() { return currentMode; }
+  };
 
   console.log('[Init] View tabs ready (Blockly + World). Individual model tabs hidden.');
 })();

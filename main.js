@@ -557,6 +557,58 @@ async function requestAppClose(fromQuit) {
   cancelAppClose();
 }
 
+let worldPopout = null;
+
+function attachRendererBoot(win) {
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.executeJavaScript(
+      `if (typeof setServerPort === 'function') { setServerPort(${serverPort}); }`
+    ).catch(() => {});
+  });
+}
+
+ipcMain.handle('world:open-popout', async () => {
+  if (worldPopout && !worldPopout.isDestroyed()) {
+    worldPopout.focus();
+    return { ok: true, reused: true };
+  }
+  worldPopout = new BrowserWindow({
+    width: 960,
+    height: 720,
+    title: 'World',
+    icon: path.join(__dirname, 'resources', 'icons', 'icon.png'),
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  attachRendererBoot(worldPopout);
+  await worldPopout.loadFile('index.html', { query: { worldPopout: '1' } });
+  worldPopout.on('closed', () => {
+    worldPopout = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('world:popout-closed');
+    }
+  });
+  return { ok: true };
+});
+
+ipcMain.handle('world:focus-popout', () => {
+  if (worldPopout && !worldPopout.isDestroyed()) {
+    worldPopout.focus();
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('world:close-popout', () => {
+  if (worldPopout && !worldPopout.isDestroyed()) {
+    worldPopout.close();
+  }
+  return true;
+});
+
 function createWindow() {
   const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
@@ -631,6 +683,9 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    if (worldPopout && !worldPopout.isDestroyed()) {
+      worldPopout.close();
+    }
     killPythonTree();
   });
 

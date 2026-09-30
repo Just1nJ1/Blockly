@@ -33,9 +33,21 @@ function initSidebar() {
     }
 
     if (targetTab === 'blockly') {
-      ensureBlocklyReady();
+      var ready = ensureBlocklyReady();
       if (typeof window.controlPanelCheckAndRefresh === 'function') {
         window.controlPanelCheckAndRefresh();
+      }
+      function afterBlocklyVisible() {
+        if (window.ViewSplit && typeof window.ViewSplit.refresh === 'function') {
+          window.ViewSplit.refresh();
+        } else if (window.ViewTabs && typeof window.ViewTabs.resizeBlockly === 'function') {
+          window.ViewTabs.resizeBlockly();
+        }
+        window.dispatchEvent(new Event('resize'));
+      }
+      afterBlocklyVisible();
+      if (ready && typeof ready.then === 'function') {
+        ready.then(afterBlocklyVisible).catch(afterBlocklyVisible);
       }
     }
 
