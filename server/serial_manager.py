@@ -183,6 +183,7 @@ _STATUS_RE = re.compile(
     r'Cartesian coordinate\(XYZ RxRyRz\):([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),'
     r'Pump PWM:([\d.-]+),Valve PWM:([\d.-]+),Motion_MODE:([\d.-]+)>'
 )
+_FW_ERROR_RE = re.compile(r'^Error,(E\d+)\s*,\s*(.+)$', re.IGNORECASE)
 
 
 def _extract_version(raw):
@@ -233,6 +234,7 @@ class PortConnection:
         # Cached status from auto-report ($40=1) or explicit ? query
         self._last_status = None
         self._last_status_ts = 0
+        self._last_alert = None
 
         # When True, the next status line should be recorded in history
         # (set when sending explicit ? query from command tab)
@@ -398,6 +400,9 @@ class PortConnection:
         except Exception:
             pass
 
+        if direction == 'rx':
+            self._note_firmware_error(text)
+
         if self._silent_depth > 0:
             return
         with self._history_lock:
@@ -411,6 +416,18 @@ class PortConnection:
                 entry['source'] = source
             self._history.append(entry)
             self._next_id += 1
+
+    def _note_firmware_error(self, text):
+        line = (text or '').strip()
+        m = _FW_ERROR_RE.match(line)
+        if not m:
+            return
+        self._last_alert = {
+            'code': m.group(1).upper(),
+            'message': m.group(2).strip(),
+            'text': line,
+            'ts': time.time(),
+        }
 
     def get_history(self, since=0):
         with self._history_lock:

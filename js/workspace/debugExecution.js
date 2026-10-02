@@ -329,6 +329,13 @@ function _setDebugMode(active) {
   if (debugBtn) debugBtn.disabled = active;
   var runSelectedBtn = document.getElementById('runSelectedBtn');
   if (runSelectedBtn) runSelectedBtn.disabled = active;
+  var copyBtn = document.getElementById('copyBtn');
+  var pasteBtn = document.getElementById('pasteBtn');
+  if (copyBtn) copyBtn.disabled = active;
+  if (pasteBtn) pasteBtn.disabled = active;
+  if (!active && typeof window.updateClipboardButtons === 'function') {
+    window.updateClipboardButtons();
+  }
 
   // Keep file-ops in place; disable while stepping so the program cannot change mid-debug
   if (clearBtn) clearBtn.disabled = active;

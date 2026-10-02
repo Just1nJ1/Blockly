@@ -9,8 +9,92 @@ on:
   repository_dispatch:
     types: [sdk-release]
 
+# Release assets are not Actions artifacts / Packages storage.
+# Docs:
+#   https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases
+#     (2 GiB per file; no total size or bandwidth cap)
+#   https://docs.github.com/en/billing/concepts/product-billing/github-actions
+#     (Actions artifacts share billed storage with GitHub Packages)
+permissions:
+  contents: write
+
+# Serialize publishes that target the same rolling release (this-repo `dev`,
+# or a given SDK tag) so overlapping runs cannot delete each other's assets.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sdk_version || 'dev' }}
+  cancel-in-progress: false
+
 jobs:
+  # Create/reuse the destination GitHub Release first so matrix jobs can
+  # attach installers directly with `gh release upload` (no artifact store).
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      dest: ${{ steps.meta.outputs.dest }}
+      tag: ${{ steps.meta.outputs.tag }}
+      repo: ${{ steps.meta.outputs.repo }}
+    steps:
+      - name: Set destination
+        id: meta
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ] || { [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; }; then
+            echo "dest=sdk" >> "$GITHUB_OUTPUT"
+            echo "repo=wlkata/WLKATA-Python-SDK-wlkatapython" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+              TAG="${{ github.event.client_payload.sdk_version }}"
+              if [ -z "$TAG" ]; then
+                echo "repository_dispatch missing client_payload.sdk_version"
+                exit 1
+              fi
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            else
+              if [ -z "${SDK_TOKEN:-}" ]; then
+                echo "Missing secret SDK_REPO_PAT"
+                exit 1
+              fi
+              TAG=$(GH_TOKEN="$SDK_TOKEN" gh release view \
+                --repo wlkata/WLKATA-Python-SDK-wlkatapython \
+                --json tagName -q .tagName)
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "dest=this" >> "$GITHUB_OUTPUT"
+            echo "repo=${{ github.repository }}" >> "$GITHUB_OUTPUT"
+            echo "tag=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.meta.outputs.dest == 'this'
+
+      - name: Recreate this-repo dev release
+        if: steps.meta.outputs.dest == 'this'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release delete dev --yes || true
+          git tag -f dev
+          git push -f origin dev
+          gh release create dev \
+            --title "Dev Build (${GITHUB_SHA::7})" \
+            --notes "Automated build from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}." \
+            --prerelease
+
+      - name: Confirm SDK release exists
+        if: steps.meta.outputs.dest == 'sdk'
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_PAT }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_REPO: ${{ steps.meta.outputs.repo }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO"
+
   build-blockly:
+    needs: prepare-release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -193,95 +277,21 @@ jobs:
           security delete-keychain "$KEYCHAIN_PATH" || true
         fi
 
-    - name: Upload blockly artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: ${{ matrix.artifact_name }}
-        path: |
-          dist/*.dmg
-          dist/*.exe
-          dist/*.zip
-          dist/*.AppImage
-          dist/*.deb
-
-  # Dev release on this repo for every push to main (internal testing)
-  release-dev:
-    if: github.event_name == 'push' && github.ref_type == 'branch'
-    needs: [build-blockly]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: Download all artifacts
-      uses: actions/download-artifact@v8
-      with:
-        path: release-assets/
-
-    - name: Flatten release assets
-      run: |
-        mkdir -p dist
-        find release-assets/ -type f | while read f; do
-          cp "$f" dist/
-        done
-        echo "Release contents:"
-        ls -la dist/
-
-    - name: Create or update dev release
-      run: |
-        gh release delete dev --yes || true
-        git tag -f dev
-        git push -f origin dev
-        gh release create dev dist/* \
-          --title "Dev Build (${GITHUB_SHA::7})" \
-          --notes "Automated dev build from \`main\` at ${GITHUB_SHA::7}" \
-          --prerelease
+    - name: Upload installers to GitHub Release
+      shell: bash
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Publish to SDK repo for tag pushes and SDK dispatches (not manual runs)
-  release-to-sdk:
-    if: github.event_name == 'repository_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag')
-    needs: [build-blockly]
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v8
-      with:
-        path: release-assets/
-
-    - name: Flatten release assets
+        GH_TOKEN: ${{ needs.prepare-release.outputs.dest == 'sdk' && secrets.SDK_REPO_PAT || secrets.GITHUB_TOKEN }}
+        RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        RELEASE_REPO: ${{ needs.prepare-release.outputs.repo }}
       run: |
-        mkdir -p dist
-        find release-assets/ -type f | while read f; do
-          cp "$f" dist/
-        done
-        echo "Release contents:"
-        ls -la dist/
-
-    - name: Determine SDK release tag
-      id: tag
-      run: |
-        if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-          echo "tag=${{ github.event.client_payload.sdk_version }}" >> "$GITHUB_OUTPUT"
-        else
-          # Blockly tag push: upload to the latest SDK release
-          LATEST=$(gh release view --repo wlkata/WLKATA-Python-SDK-wlkatapython --json tagName -q .tagName)
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        shopt -s nullglob
+        files=(dist/*.dmg dist/*.exe dist/*.zip dist/*.AppImage dist/*.deb)
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "No installer files in dist/"
+          ls -la dist/ || true
+          exit 1
         fi
-      env:
-        GH_TOKEN: ${{ secrets.SDK_REPO_PAT }}
-
-    - name: Upload assets to SDK release
-      run: |
-        for file in dist/*; do
-          echo "Uploading $file to SDK release ${{ steps.tag.outputs.tag }}"
-          gh release upload "${{ steps.tag.outputs.tag }}" "$file" \
-            --repo wlkata/WLKATA-Python-SDK-wlkatapython \
-            --clobber
-        done
-      env:
-        GH_TOKEN: ${{ secrets.SDK_REPO_PAT }}
+        echo "Uploading to ${RELEASE_REPO}@${RELEASE_TAG}:"
+        printf '  %s\n' "${files[@]}"
+        gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$RELEASE_REPO" --clobber

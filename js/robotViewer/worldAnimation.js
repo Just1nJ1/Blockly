@@ -33,6 +33,7 @@
   var progressLabel = null;
   var progressFill = null;
   var progressRafId = null;
+  var onProgress = null;
 
   // Current animation state
   var phase = null;
@@ -57,27 +58,50 @@
 
   // ── Progress bar (mirrors animation.js pattern) ──
 
+  function emitProgress(override) {
+    var state = override || {
+      visible: !!(progressEl && progressEl.style.display !== 'none'),
+      label: progressLabel ? String(progressLabel.textContent || '') : '',
+      width: progressFill ? String(progressFill.style.width || '0%') : '0%',
+      color: progressFill ? String(progressFill.style.background || '') : ''
+    };
+    if (typeof onProgress !== 'function') return;
+    try {
+      onProgress(state);
+    } catch (e) { /* ignore */ }
+  }
+
   function tickProgress() {
-    if (!phase || !phaseStart || !progressFill || !progressLabel) return;
+    if (!phase || !phaseStart) return;
     var now = Date.now();
     var elapsed = now - phaseStart;
     var dur = phaseDuration || 1;
     var frac = Math.min(elapsed / dur, 1);
     var elSec = (elapsed / 1000).toFixed(1);
     var durSec = (dur / 1000).toFixed(1);
-
-    progressFill.style.width = (frac * 100) + '%';
+    var width = (frac * 100) + '%';
+    var color = '#32a54e';
+    var text = '';
 
     if (phase === 'move') {
-      progressFill.style.background = '#32a54e';
-      progressLabel.textContent = 'Step ' + phaseDisplay + '  ' + elSec + 's / ' + durSec + 's';
+      color = '#32a54e';
+      text = 'Step ' + phaseDisplay + '  ' + elSec + 's / ' + durSec + 's';
     } else if (phase === 'interval') {
-      progressFill.style.background = '#FF9800';
-      progressLabel.textContent = 'Interval  ' + elSec + 's / ' + durSec + 's';
+      color = '#FF9800';
+      text = 'Interval  ' + elSec + 's / ' + durSec + 's';
     } else if (phase === 'stay') {
-      progressFill.style.background = '#2196F3';
-      progressLabel.textContent = 'Reset  ' + elSec + 's / ' + durSec + 's';
+      color = '#2196F3';
+      text = 'Reset  ' + elSec + 's / ' + durSec + 's';
     }
+
+    if (progressFill) {
+      progressFill.style.width = width;
+      progressFill.style.background = color;
+    }
+    if (progressLabel) progressLabel.textContent = text;
+    if (progressEl) progressEl.style.display = '';
+
+    emitProgress({ visible: true, label: text, width: width, color: color });
 
     if (frac < 1) {
       progressRafId = requestAnimationFrame(tickProgress);
@@ -91,6 +115,7 @@
     phaseDuration = duration;
     phaseDisplay = display || '';
     if (progressEl) progressEl.style.display = '';
+    emitProgress();
     progressRafId = requestAnimationFrame(tickProgress);
   }
 
@@ -99,6 +124,7 @@
     phase = null;
     if (progressFill) progressFill.style.width = '0%';
     if (progressLabel) progressLabel.textContent = '';
+    emitProgress();
   }
 
   // ── Joint interpolation for world robots ──
@@ -279,6 +305,7 @@
       }
       if (progressLabel) progressLabel.textContent = 'No robots selected';
       running = false;
+      emitProgress();
       return;
     }
 
@@ -294,6 +321,7 @@
     if (schedule.length === 0) {
       if (progressEl) progressEl.style.display = 'none';
       running = false;
+      emitProgress();
       return;
     }
 
@@ -306,6 +334,7 @@
       progressLabel.textContent = 'Preparing IK…';
     }
     if (progressEl) progressEl.style.display = '';
+    emitProgress();
 
     // Capture generation so a newer start/stop can cancel this prepare
     var prepareGen = (startAnimation._gen = (startAnimation._gen || 0) + 1);
@@ -328,6 +357,7 @@
       console.error('[WorldAnimation] start failed:', err);
       running = false;
       if (progressLabel) progressLabel.textContent = 'IK prepare failed';
+      emitProgress();
     });
   }
 
@@ -350,6 +380,7 @@
         }
         if (progressLabel) progressLabel.textContent = 'Done';
         running = false;
+        emitProgress();
         return;
       }
       startPhase('stay', C.STAY_DUR);
@@ -464,6 +495,7 @@
       }
     }
     if (progressEl) progressEl.style.display = 'none';
+    emitProgress();
   }
 
   /**
@@ -488,6 +520,7 @@
       progressFill.style.background = '#FF9800';
     }
     if (progressEl) progressEl.style.display = '';
+    emitProgress();
   }
 
   /**
@@ -575,6 +608,10 @@
     progressFill = fill;
   }
 
+  function setOnProgress(fn) {
+    onProgress = typeof fn === 'function' ? fn : null;
+  }
+
   function setLoop(enabled) {
     loopEnabled = enabled;
     // Restart from joint home
@@ -607,6 +644,7 @@
     pause: pauseAnimation,
     resume: resumeAnimation,
     setProgressElements: setProgressElements,
+    setOnProgress: setOnProgress,
     isPaused: isPaused,
     setLoop: setLoop,
     isLoopEnabled: isLoopEnabled,

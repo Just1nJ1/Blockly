@@ -425,8 +425,37 @@
     }
   }
 
-  // Port picker: combo box with a text input, a toggle arrow to expand/fold
-  // the dropdown, and typing filters the list items.
+  // Remember last manual-connect method + typed values for this session.
+  var _lastManualMethod = 'serial';
+  var _lastManualValues = { serial: '', wifi: '', bluetooth: '' };
+
+  var MANUAL_METHODS = [
+    { id: 'serial', label: 'Serial', placeholder: 'Serial port (e.g. /dev/cu.usbserial-2130)' },
+    { id: 'wifi', label: 'WiFi', placeholder: 'IP address (e.g. 192.168.1.100 or 192.168.1.100:7676)' },
+    { id: 'bluetooth', label: 'Bluetooth', placeholder: 'Bluetooth serial path (e.g. /dev/cu.DeviceName)' }
+  ];
+
+  function isWifiEndpointValue(value) {
+    if (!value || typeof value !== 'string') return false;
+    var m = value.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?::(\d{1,5}))?$/);
+    if (!m) return false;
+    for (var i = 1; i <= 4; i++) {
+      if (parseInt(m[i], 10) > 255) return false;
+    }
+    if (m[5]) {
+      var p = parseInt(m[5], 10);
+      if (p < 1 || p > 65535) return false;
+    }
+    return true;
+  }
+
+  function looksBluetoothPort(p) {
+    var blob = ((p.device || '') + ' ' + (p.description || '') + ' ' + (p.hwid || '')).toLowerCase();
+    return blob.indexOf('bluetooth') !== -1;
+  }
+
+  // Port picker: method pills (Serial / WiFi / Bluetooth) then a matching
+  // input. Serial and Bluetooth keep a dropdown of matching ports.
   function showPortPrompt() {
     return new Promise(function(resolve) {
       var serverUrl = (typeof getServerUrl === 'function') ? getServerUrl() : 'http://127.0.0.1:5080';
@@ -434,29 +463,54 @@
       var highlightIdx = -1;
       var isOpen = false;
       var loaded = false;
+      var method = _lastManualMethod || 'serial';
+      var methodBtns = [];
 
       var detectedSet = new Set();
       for (var d = 0; d < lastDetectedPorts.length; d++) {
         detectedSet.add(lastDetectedPorts[d].port);
       }
 
+      function methodInfo(id) {
+        for (var i = 0; i < MANUAL_METHODS.length; i++) {
+          if (MANUAL_METHODS[i].id === id) return MANUAL_METHODS[i];
+        }
+        return MANUAL_METHODS[0];
+      }
+
+      function portsForMethod() {
+        if (method === 'wifi') return [];
+        if (method === 'bluetooth') return allPorts.filter(looksBluetoothPort);
+        return allPorts.filter(function(p) { return !looksBluetoothPort(p); });
+      }
+
       function cleanup() { if (overlay.parentNode) document.body.removeChild(overlay); }
       function cancel() { cleanup(); resolve(null); }
 
-      // After user picks a port, probe it for model detection
       function submit(val) {
         val = val && val.trim();
         if (!val) return;
+        if (method === 'wifi') {
+          if (!isWifiEndpointValue(val)) {
+            showProbeError('Enter an IPv4 address, for example 192.168.1.100 or 192.168.1.100:7676.');
+            return;
+          }
+        } else if (isWifiEndpointValue(val)) {
+          showProbeError('That looks like a WiFi address. Choose WiFi above, then connect.');
+          return;
+        }
+        _lastManualMethod = method;
+        _lastManualValues[method] = val;
         probeAndResolve(val);
       }
 
       // ── Probe port / WiFi IP and resolve (or show model picker) ──
       function probeAndResolve(port) {
-        // Disable the dialog and show probing state
         input.disabled = true;
         arrow.disabled = true;
         connectBtn.disabled = true;
         connectBtn.textContent = 'Probing...';
+        setMethodButtonsEnabled(false);
         closeDropdown();
         clearProbeError();
 
@@ -469,7 +523,6 @@
         .then(function(data) {
           var canonical = (data && data.port) ? data.port : port;
 
-          // WiFi host unreachable / connection refused — warn and stay on dialog
           if (data && data.unreachable) {
             showProbeError(
               data.error ||
@@ -486,7 +539,6 @@
             return;
           }
 
-          // Link opened (or serial path exists) but model unknown — ask user
           showModelPicker(canonical, data && data.error);
         })
         .catch(function(err) {
@@ -500,7 +552,12 @@
         arrow.disabled = false;
         connectBtn.disabled = false;
         connectBtn.textContent = 'Connect';
+        setMethodButtonsEnabled(true);
         input.focus();
+      }
+
+      function setMethodButtonsEnabled(on) {
+        methodBtns.forEach(function(b) { b.disabled = !on; });
       }
 
       function clearProbeError() {
@@ -513,7 +570,6 @@
         var err = document.createElement('div');
         err.className = 'port-picker-error';
         err.textContent = message;
-        // Insert below the combo
         var comboEl = body.querySelector('.port-picker-combo');
         if (comboEl && comboEl.nextSibling) {
           body.insertBefore(err, comboEl.nextSibling);
@@ -523,7 +579,6 @@
       }
 
       function showModelPicker(port, hint) {
-        // Replace dialog body with model selection buttons
         body.innerHTML = '';
         var msg = document.createElement('div');
         msg.className = 'port-picker-probe-msg';
@@ -553,10 +608,33 @@
 
         body.appendChild(btnGroup);
 
-        // Update footer
         connectBtn.style.display = 'none';
         cancelBtn.textContent = 'Cancel';
         cancelBtn.onclick = cancel;
+      }
+
+      function applyMethodUi() {
+        var info = methodInfo(method);
+        input.placeholder = info.placeholder;
+        var showList = method === 'serial' || method === 'bluetooth';
+        arrow.style.display = showList ? '' : 'none';
+        combo.classList.toggle('port-picker-combo-plain', !showList);
+        methodBtns.forEach(function(btn) {
+          btn.classList.toggle('port-picker-method-active', btn.dataset.method === method);
+        });
+        if (!showList) closeDropdown();
+      }
+
+      function setMethod(next) {
+        if (next === method) return;
+        _lastManualValues[method] = input.value;
+        method = next;
+        _lastManualMethod = next;
+        input.value = _lastManualValues[next] || '';
+        clearProbeError();
+        applyMethodUi();
+        if (isOpen) renderDropdown();
+        input.focus();
       }
 
       // ── Overlay + dialog ──
@@ -567,7 +645,6 @@
       var dialog = document.createElement('div');
       dialog.className = 'port-picker-dialog';
 
-      // Header
       var header = document.createElement('div');
       header.className = 'port-picker-header';
       header.innerHTML = '<span>Manual Connection</span>';
@@ -578,21 +655,34 @@
       header.appendChild(closeBtn);
       dialog.appendChild(header);
 
-      // Body
       var body = document.createElement('div');
       body.className = 'port-picker-body';
 
-      // Combo box wrapper
+      var methodsRow = document.createElement('div');
+      methodsRow.className = 'port-picker-methods';
+      MANUAL_METHODS.forEach(function(m) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'port-picker-method';
+        btn.dataset.method = m.id;
+        btn.textContent = m.label;
+        btn.addEventListener('click', function() { setMethod(m.id); });
+        methodsRow.appendChild(btn);
+        methodBtns.push(btn);
+      });
+      body.appendChild(methodsRow);
+
       var combo = document.createElement('div');
       combo.className = 'port-picker-combo';
 
       var input = document.createElement('input');
       input.type = 'text';
       input.className = 'port-picker-input';
-      input.placeholder = 'Serial port or WiFi IP/TCP (e.g. 192.168.1.100 or 192.168.1.100:7676)';
+      input.value = _lastManualValues[method] || '';
       combo.appendChild(input);
 
       var arrow = document.createElement('button');
+      arrow.type = 'button';
       arrow.className = 'port-picker-arrow';
       arrow.innerHTML = '&#9662;';
       arrow.setAttribute('tabindex', '-1');
@@ -607,7 +697,6 @@
 
       dialog.appendChild(body);
 
-      // Footer
       var footer = document.createElement('div');
       footer.className = 'port-picker-footer';
       var cancelBtn = document.createElement('button');
@@ -624,10 +713,16 @@
 
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
+      applyMethodUi();
       input.focus();
 
       // ── Open / close ──
+      function methodHasDropdown() {
+        return method === 'serial' || method === 'bluetooth';
+      }
+
       function openDropdown() {
+        if (!methodHasDropdown()) return;
         if (isOpen) return;
         isOpen = true;
         dropdown.style.display = '';
@@ -644,11 +739,12 @@
       }
 
       function toggleDropdown() {
+        if (!methodHasDropdown()) return;
         if (isOpen) closeDropdown(); else openDropdown();
       }
 
       arrow.addEventListener('mousedown', function(e) {
-        e.preventDefault(); // keep focus on input
+        e.preventDefault();
         toggleDropdown();
       });
 
@@ -658,19 +754,24 @@
         dropdown.innerHTML = '';
         highlightIdx = -1;
 
+        if (!methodHasDropdown()) return;
+
         if (!loaded) {
           dropdown.innerHTML = '<div class="port-picker-empty">Loading...</div>';
           return;
         }
 
-        var matched = allPorts.filter(function(p) {
+        var source = portsForMethod();
+        var matched = source.filter(function(p) {
           if (!filter) return true;
           return p.device.toLowerCase().indexOf(filter) !== -1 ||
                  (p.description && p.description.toLowerCase().indexOf(filter) !== -1);
         });
 
-        if (allPorts.length === 0) {
-          dropdown.innerHTML = '<div class="port-picker-empty">No additional ports found.</div>';
+        if (source.length === 0) {
+          dropdown.innerHTML = method === 'bluetooth'
+            ? '<div class="port-picker-empty">No Bluetooth ports found. You can type a path.</div>'
+            : '<div class="port-picker-empty">No additional serial ports found.</div>';
           return;
         }
 
@@ -684,7 +785,7 @@
             var item = document.createElement('div');
             item.className = 'port-picker-item';
             item.addEventListener('mousedown', function(e) {
-              e.preventDefault(); // prevent blur before click fires
+              e.preventDefault();
             });
             item.addEventListener('click', function() {
               input.value = port.device;
@@ -722,16 +823,19 @@
 
       // ── Input events ──
       input.addEventListener('input', function() {
-        openDropdown();
-        renderDropdown();
+        if (methodHasDropdown()) {
+          openDropdown();
+          renderDropdown();
+        }
       });
 
       input.addEventListener('focus', function() {
-        if (loaded && allPorts.length > 0) openDropdown();
+        if (methodHasDropdown() && loaded && portsForMethod().length > 0) openDropdown();
       });
 
       input.addEventListener('keydown', function(e) {
         if (e.key === 'ArrowDown') {
+          if (!methodHasDropdown()) return;
           e.preventDefault();
           if (!isOpen) { openDropdown(); return; }
           var items = dropdown.querySelectorAll('.port-picker-item');
@@ -741,6 +845,7 @@
             items[highlightIdx].scrollIntoView({ block: 'nearest' });
           }
         } else if (e.key === 'ArrowUp') {
+          if (!methodHasDropdown()) return;
           e.preventDefault();
           if (!isOpen) { openDropdown(); return; }
           var items2 = dropdown.querySelectorAll('.port-picker-item');

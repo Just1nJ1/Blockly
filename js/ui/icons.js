@@ -91,6 +91,7 @@
     NAMES: [
       'command', 'blockly', 'teaching', 'settings',
       'save', 'run', 'step', 'stop', 'continue', 'sel',
+      'copy', 'paste',
       'clear', 'export', 'import', 'estop',
       'up', 'down', 'delay', 'blocks', 'chevron-down', 'plus',
       'home', 'zero-pos', 'capture'

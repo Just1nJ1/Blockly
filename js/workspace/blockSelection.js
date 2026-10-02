@@ -119,6 +119,7 @@
       clearSelection();
       findBlocksInRect(ws, selRect);
       console.log('[Selection] Selected', _selectedBlocks.length, 'blocks');
+      updateClipboardButtons();
       _enableDragOverlay();
       if (e && (e.metaKey || e.ctrlKey) && _overlay && _selectedBlocks.length < 2) {
         _overlay.style.pointerEvents = 'auto';
@@ -191,7 +192,11 @@
         if (e.key === 'Delete' || e.key === 'Backspace') {
           e.preventDefault();
           deleteSelectedBlocks(ws);
-        } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        }
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        if (getBlocksToCopy().length > 0) {
           e.preventDefault();
           copySelectedBlocks(ws);
         }
@@ -440,6 +445,7 @@
     }
 
     _trackNativeSelection();
+    updateClipboardButtons();
     console.log('[Selection] Block area selection initialized');
   }
 
@@ -497,6 +503,7 @@
       _selectedBlocks.push(block);
       highlightBlock(block, true);
     }
+    updateClipboardButtons();
   }
 
   function getOwnBlockRect(block) {
@@ -581,6 +588,7 @@
     _selectedBlocks = [];
     hideSelectionToolbar();
     hideSelectionContextMenu();
+    updateClipboardButtons();
   }
 
   // ── Bulk robot variable for multi-selection ─────────────────
@@ -873,11 +881,34 @@
 
   var _clipboard = [];  // array of XML strings
 
+  function isStepMode() {
+    var toolbar = document.getElementById('toolbar');
+    return !!(toolbar && toolbar.classList.contains('step-mode'));
+  }
+
+  function getBlocksToCopy() {
+    return getBlocksToRun();
+  }
+
+  function updateClipboardButtons() {
+    var copyBtn = document.getElementById('copyBtn');
+    var pasteBtn = document.getElementById('pasteBtn');
+    var debug = isStepMode();
+    if (copyBtn) copyBtn.disabled = debug || getBlocksToCopy().length === 0;
+    if (pasteBtn) pasteBtn.disabled = debug || _clipboard.length === 0;
+  }
+
   function copySelectedBlocks(ws) {
+    if (isStepMode()) return;
+    ws = ws || ((typeof getWorkspace === 'function') ? getWorkspace() : null);
+    if (!ws) return;
+    var blocks = getBlocksToCopy();
+    if (!blocks.length) return;
+
     _clipboard = [];
-    for (var i = 0; i < _selectedBlocks.length; i++) {
-      var block = _selectedBlocks[i];
-      if (block.isDisposed()) continue;
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      if (!block || block.isDisposed()) continue;
 
       // Temporarily disconnect the next block so we only copy THIS block
       // (and its value inputs), not the entire stack below it.
@@ -896,9 +927,13 @@
       }
     }
     console.log('[Selection] Copied', _clipboard.length, 'blocks to clipboard');
+    updateClipboardButtons();
   }
 
   function pasteBlocks(ws) {
+    if (isStepMode()) return;
+    ws = ws || ((typeof getWorkspace === 'function') ? getWorkspace() : null);
+    if (!ws) return;
     if (_clipboard.length === 0) return;
 
     clearSelection();
@@ -941,6 +976,7 @@
     }
 
     console.log('[Selection] Pasted', pastedBlocks.length, 'blocks');
+    updateClipboardButtons();
   }
 
   function _isInOrIsFunction(block) {
@@ -969,6 +1005,7 @@
           _lastNativeSelected = ws.getBlockById(event.newElementId);
         }
         // Don't clear on deselect — keep the last one
+        updateClipboardButtons();
       }
     });
   }
@@ -1145,8 +1182,19 @@
     }
   }
 
+  function copyWorkspaceBlocks() {
+    copySelectedBlocks();
+  }
+
+  function pasteWorkspaceBlocks() {
+    pasteBlocks();
+  }
+
   // Expose
   window.clearBlockSelection = clearSelection;
   window.initBlockSelection = initBlockSelection;
   window.runSelectedBlocks = runSelectedBlocks;
+  window.copyWorkspaceBlocks = copyWorkspaceBlocks;
+  window.pasteWorkspaceBlocks = pasteWorkspaceBlocks;
+  window.updateClipboardButtons = updateClipboardButtons;
 })();

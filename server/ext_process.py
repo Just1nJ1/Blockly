@@ -229,8 +229,12 @@ def _forward_request(name, port, subpath):
     req = urllib.request.Request(
         target, data=body, headers=headers, method=request.method,
     )
+    # First camera list/start can include OpenCV warmup well past 30s;
+    # a short timeout becomes "Could not list cameras" in the UI.
+    slow = subpath in ("cameras", "start") or str(subpath).startswith("cameras")
+    timeout = 90 if slow else 30
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_headers = {k: v for k, v in resp.headers.items()
                             if k.lower() not in ('transfer-encoding',)}
             return Response(resp.read(), status=resp.status,

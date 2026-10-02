@@ -567,6 +567,60 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
 }
+#content-stage.split-h {
+  flex-direction: row;
+}
+#content-stage.split-v {
+  flex-direction: column;
+}
+#stage-splitter {
+  display: none;
+  flex-shrink: 0;
+  background: var(--border-primary);
+  z-index: 4;
+  touch-action: none;
+}
+#content-stage.split-h #stage-splitter {
+  display: block;
+  width: 6px;
+  cursor: col-resize;
+}
+#content-stage.split-v #stage-splitter {
+  display: block;
+  height: 6px;
+  width: auto;
+  cursor: row-resize;
+}
+#stage-splitter:hover,
+body.stage-splitting #stage-splitter {
+  background: #1189d4;
+}
+body.stage-splitting {
+  user-select: none;
+}
+body.stage-splitting-h {
+  cursor: col-resize;
+}
+body.stage-splitting-v {
+  cursor: row-resize;
+}
+#content-stage.split-h #workspace-area,
+#content-stage.split-h #model-area,
+#content-stage.split-v #workspace-area,
+#content-stage.split-v #model-area {
+  display: flex !important;
+  visibility: visible;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#content-stage.split-h #model-area,
+#content-stage.split-v #model-area {
+  flex: 1;
+}
+#content-stage.split-v #model-area #viewer-panel {
+  width: 220px;
+}
 #blocklyDiv {
   flex: 1;
   min-height: 0;
@@ -713,6 +767,7 @@ button:disabled {
 
 /* Secondary tab bars: Blockly/World (left) and Code/Functions/Control (right)
    share the same gray bar height and button metrics. */
+#view-tabs-bar,
 #view-tabs,
 #output-tabs {
   display: flex;
@@ -722,6 +777,54 @@ button:disabled {
   border-bottom: 1px solid var(--border-primary);
   min-height: 40px;
   box-sizing: border-box;
+}
+#view-tabs-bar {
+  border-bottom: 1px solid var(--border-primary);
+}
+#view-tabs {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+#view-layout-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+.view-layout-btn {
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.view-layout-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.view-layout-btn:hover {
+  background: var(--tab-hover);
+  color: var(--text-primary);
+}
+.view-layout-btn.active {
+  background: var(--tab-active-bg);
+  color: #1189d4;
+}
+.view-tab-btn[data-view="world"] {
+  cursor: grab;
+}
+.view-tab-btn[data-view="world"].tab-dragging {
+  cursor: grabbing;
+  opacity: 0.7;
 }
 .view-tab-btn,
 .panel-tab-btn {
@@ -818,6 +921,7 @@ button:disabled {
   flex: 1;
   position: relative;
   overflow: hidden;
+  isolation: isolate;
 }
 #world-canvas canvas {
   width: 100% !important;
@@ -1348,14 +1452,54 @@ button:disabled {
 }
 .ctrl-panel {
   padding: 10px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
   background: #fafbfc;
+  display: flex;
+  flex-direction: column;
+}
+.ctrl-panel-lockable {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.ctrl-panel-lockable-body {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.ctrl-homing-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(250, 251, 252, 0.88);
+  cursor: not-allowed;
+}
+.ctrl-homing-lock[hidden] {
+  display: none !important;
+}
+.ctrl-panel-lockable:has(.ctrl-homing-lock:not([hidden])) .ctrl-panel-lockable-body {
+  pointer-events: none;
+}
+.ctrl-homing-lock-msg {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #fff8e6;
+  border: 1px solid #e6b84d;
+  color: #8a5a00;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: center;
 }
 .ctrl-port-row {
   display: flex;
@@ -1368,6 +1512,7 @@ button:disabled {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 /* Port label: compact so the <select> keeps most of the rail width */
 .ctrl-port-row > .ctrl-joint-label {
@@ -2790,10 +2935,44 @@ button:disabled {
   padding: 12px 16px;
   flex-shrink: 0;
 }
+.port-picker-methods {
+  display: flex;
+  width: 100%;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+.port-picker-method {
+  flex: 1;
+  padding: 8px 6px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--bg-header);
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+}
+.port-picker-method:hover:not(.port-picker-method-active):not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.port-picker-method-active {
+  background: var(--accent);
+  color: #fff;
+}
+.port-picker-method:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .port-picker-combo {
   position: relative;
   display: flex;
   align-items: center;
+}
+.port-picker-combo-plain .port-picker-input {
+  padding-right: 10px;
 }
 .port-picker-input {
   width: 100%;
@@ -3304,6 +3483,14 @@ button:disabled {
 [data-theme="dark"] .teach-ctrl-panel {
   background: var(--bg-secondary);
 }
+[data-theme="dark"] .ctrl-homing-lock {
+  background: rgba(30, 30, 32, 0.86);
+}
+[data-theme="dark"] .ctrl-homing-lock-msg {
+  background: #3d2e12;
+  border-color: #b8860b;
+  color: #f5d48a;
+}
 [data-theme="dark"] #ctrl-axis-rows .ctrl-btn,
 [data-theme="dark"] #teach-axis-rows .ctrl-btn,
 [data-theme="dark"] .ctrl-btn,
@@ -3588,6 +3775,50 @@ button:disabled {
   color: #fff;
 }
 
+/* ── Robot firmware warning (E118 out of workspace) ── */
+.robot-alert-host {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 20000;
+  pointer-events: none;
+}
+.robot-alert {
+  pointer-events: auto;
+  min-width: 220px;
+  max-width: 360px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #fff8e6;
+  border: 1px solid #e6b84d;
+  color: #8a5a00;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.robot-alert.robot-alert-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.robot-alert-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+.robot-alert-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0.9;
+}
+[data-theme="dark"] .robot-alert {
+  background: #3d2e12;
+  border-color: #b8860b;
+  color: #f5d48a;
+}
+
 /* ── Unsaved-changes quit dialog ── */
 .unsaved-exit-overlay {
   z-index: 20001;
@@ -3621,4 +3852,32 @@ button:disabled {
 }
 [data-theme="dark"] .ctrl-modal-btn-discard:hover {
   background: rgba(239, 83, 80, 0.16);
+}
+
+/* World pop-out window: only the 3D viewer */
+body.world-popout .titlebar,
+body.world-popout #sidebar,
+body.world-popout #command-view,
+body.world-popout #teaching-view,
+body.world-popout #toolbar,
+body.world-popout #view-tabs-bar,
+body.world-popout #output-panel,
+body.world-popout #workspace-area,
+body.world-popout #stage-splitter {
+  display: none !important;
+}
+body.world-popout #app-body,
+body.world-popout #app-content,
+body.world-popout #left-column,
+body.world-popout #content-stage {
+  flex: 1;
+  min-height: 0;
+}
+body.world-popout #blockly-view {
+  display: flex !important;
+}
+body.world-popout #model-area {
+  flex: 1 !important;
+  visibility: visible !important;
+  display: flex !important;
 }

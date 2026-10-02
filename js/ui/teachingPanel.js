@@ -49,6 +49,7 @@
   var _actionList = [];
   var _selectedIdx = -1;
   var _playing = false;
+  var _stepRunning = false;
 
   // Teaching "document" (like Blockly workspace, but a single .json file)
   var _filePath = null;           // absolute path, or null when Untitled
@@ -72,6 +73,15 @@
   function getServerUrl() {
     return (typeof window.getServerUrl === 'function')
       ? window.getServerUrl() : 'http://127.0.0.1:5080';
+  }
+
+  function isHomingPort(port) {
+    return !!(window.controlPanelIsHoming && window.controlPanelIsHoming(port));
+  }
+
+  function syncHomingLockUi() {
+    var lock = document.getElementById('teach-homing-lock');
+    if (lock) lock.hidden = !isHomingPort(_currentPort);
   }
 
   function defaultModelName() {
@@ -184,7 +194,7 @@
 
   function jog(sdkParam, step) {
     console.log('[TeachingPanel] Jog', sdkParam, step, 'port:', _currentPort);
-    if (!_currentPort) return;
+    if (!_currentPort || isHomingPort(_currentPort)) return;
     fetch(getServerUrl() + '/cmd/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -193,7 +203,7 @@
   }
 
   function moveToAbsolute(sdkParam, value) {
-    if (!_currentPort) return;
+    if (!_currentPort || isHomingPort(_currentPort)) return;
     fetch(getServerUrl() + '/cmd/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -202,6 +212,21 @@
   }
 
   // ── Status Polling ──
+
+  function applyStatusValues(data) {
+    var container = document.getElementById('teach-axis-rows');
+    if (!container || !data) return;
+    var rows = container.querySelectorAll('.ctrl-joint-row');
+    var source = (_currentMode === 'joint') ? data.angles : data.coordinates;
+    if (!source) return;
+    rows.forEach(function(row) {
+      var key = row.dataset.statusKey;
+      var input = row.querySelector('.ctrl-joint-value');
+      if (key && input && source[key] !== undefined && document.activeElement !== input) {
+        input.value = parseFloat(source[key]).toFixed(2);
+      }
+    });
+  }
 
   function refreshStatus() {
     if (!_currentPort) return;
@@ -213,18 +238,14 @@
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (!data.success) return;
-      var container = document.getElementById('teach-axis-rows');
-      if (!container) return;
-      var rows = container.querySelectorAll('.ctrl-joint-row');
-      var source = (_currentMode === 'joint') ? data.angles : data.coordinates;
-      if (!source) return;
-      rows.forEach(function(row) {
-        var key = row.dataset.statusKey;
-        var input = row.querySelector('.ctrl-joint-value');
-        if (key && input && source[key] !== undefined && document.activeElement !== input) {
-          input.value = parseFloat(source[key]).toFixed(2);
-        }
-      });
+      if (data.alert && typeof window.considerRobotAlert === 'function') {
+        window.considerRobotAlert(_currentPort, data.alert);
+      }
+      if (typeof window.controlPanelOnStatus === 'function') {
+        window.controlPanelOnStatus(_currentPort, data);
+      }
+      if (isHomingPort(_currentPort)) return;
+      applyStatusValues(data);
     })
     .catch(function() {});
   }
@@ -242,6 +263,7 @@
   // ── Mode Toggle ──
 
   function setMode(mode) {
+    if (isHomingPort(_currentPort)) return;
     _currentMode = mode;
     var track = document.getElementById('teach-mode-switch');
     var labels = document.querySelectorAll('.teach-mode-label');
@@ -283,6 +305,7 @@
       console.log('[TeachingPanel] Port selected:', _currentPort, 'Model:', _currentModel);
       buildAxisRows();
       applyEffectorUi(_currentPort);
+      syncHomingLockUi();
       startStatusPolling();
     });
   }
@@ -323,17 +346,21 @@
     if (homeBtn) {
       homeBtn.addEventListener('click', function() {
         console.log('[TeachingPanel] Home clicked, port:', _currentPort);
-        if (!_currentPort) return;
-        fetch(getServerUrl() + '/cmd/home', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ port: _currentPort })
-        }).catch(function() {});
+        if (!_currentPort || isHomingPort(_currentPort)) return;
+        if (typeof window.controlPanelRequestHoming === 'function') {
+          window.controlPanelRequestHoming(_currentPort);
+        } else {
+          fetch(getServerUrl() + '/cmd/home', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port: _currentPort })
+          }).catch(function() {});
+        }
       });
     }
     if (zeroBtn) {
       zeroBtn.addEventListener('click', function() {
-        if (!_currentPort) return;
+        if (!_currentPort || isHomingPort(_currentPort)) return;
         fetch(getServerUrl() + '/cmd/zero', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -417,7 +444,7 @@
         btn.textContent = def.label;
         btn.dataset.mode = String(def.mode);
         btn.addEventListener('click', function() {
-          if (!_currentPort) return;
+          if (!_currentPort || isHomingPort(_currentPort)) return;
           fetch(getServerUrl() + def.endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -474,15 +501,16 @@
 
   function updateToolbarButtons() {
     var hasSelection = _selectedIdx >= 0 && _selectedIdx < _actionList.length;
+    var busy = _playing || _stepRunning;
     var runStepBtn = document.getElementById('teach-run-step-btn');
     var upBtn = document.getElementById('teach-move-up-btn');
     var downBtn = document.getElementById('teach-move-down-btn');
     var delBtn = document.getElementById('teach-delete-btn');
 
-    if (runStepBtn) runStepBtn.disabled = !hasSelection;
-    if (upBtn) upBtn.disabled = !hasSelection || _selectedIdx === 0;
-    if (downBtn) downBtn.disabled = !hasSelection || _selectedIdx >= _actionList.length - 1;
-    if (delBtn) delBtn.disabled = !hasSelection;
+    if (runStepBtn) runStepBtn.disabled = !hasSelection || busy;
+    if (upBtn) upBtn.disabled = !hasSelection || _selectedIdx === 0 || busy;
+    if (downBtn) downBtn.disabled = !hasSelection || _selectedIdx >= _actionList.length - 1 || busy;
+    if (delBtn) delBtn.disabled = !hasSelection || busy;
   }
 
   // ── Action List Table ──
@@ -672,6 +700,20 @@
     renderTable();
   }
 
+  function insertActionAfterSelection(action) {
+    var insertAt = (_selectedIdx >= 0 && _selectedIdx < _actionList.length)
+      ? _selectedIdx + 1
+      : _actionList.length;
+    _actionList.splice(insertAt, 0, action);
+    _selectedIdx = insertAt;
+    setDirty(true);
+    renderTable();
+    var row = document.getElementById('teach-row-' + insertAt);
+    if (row && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
   // ── Capture Position ──
 
   function setupCaptureButton() {
@@ -679,7 +721,7 @@
     if (!btn) return;
 
     btn.addEventListener('click', function() {
-      if (!_currentPort) return;
+      if (!_currentPort || isHomingPort(_currentPort)) return;
 
       var container = document.getElementById('teach-axis-rows');
       if (!container) return;
@@ -697,21 +739,13 @@
         if (values[AXIS_KEYS[i]] === undefined) values[AXIS_KEYS[i]] = 0;
       }
 
-      _actionList.push({
+      insertActionAfterSelection({
         port: _currentPort,
         model: _currentModel || 'Mirobot',
         mode: _currentMode,
         motionMode: '0',
         values: values
       });
-
-      _selectedIdx = _actionList.length - 1;
-      setDirty(true);
-      renderTable();
-
-      // Scroll to bottom
-      var wrap = document.querySelector('.teach-table-wrap');
-      if (wrap) wrap.scrollTop = wrap.scrollHeight;
     });
   }
 
@@ -747,19 +781,52 @@
     });
   }
 
+  function setPlaybackButtons(busy) {
+    var playBtn = document.getElementById('teach-play-btn');
+    var stopBtn = document.getElementById('teach-stop-btn');
+    if (playBtn) playBtn.disabled = busy;
+    if (stopBtn) stopBtn.disabled = !busy;
+    updateToolbarButtons();
+  }
+
   function playSingle(idx) {
     var action = _actionList[idx];
-    if (!action) return;
+    if (!action || _playing || _stepRunning) return;
+    _stepRunning = true;
+    _stopRequested = false;
+    setPlaybackButtons(true);
     highlightRow(idx);
+
+    function finish(advance) {
+      clearHighlight(idx);
+      _stepRunning = false;
+      setPlaybackButtons(false);
+      if (advance && idx + 1 < _actionList.length) {
+        selectRow(idx + 1);
+      }
+    }
 
     executeAction(action)
     .then(function(r) { return r.json(); })
-    .then(function() { clearHighlight(idx); })
-    .catch(function() { clearHighlight(idx); });
+    .then(function(data) {
+      if (_stopRequested) { finish(false); return; }
+      if (!data || !data.success) { finish(false); return; }
+      // Effector/delay actions don't need to wait for idle
+      if (action.type === 'effector' || action.type === 'delay') {
+        finish(true);
+        return;
+      }
+      waitIdle(action.port, function() {
+        finish(!_stopRequested);
+      });
+    })
+    .catch(function() {
+      finish(false);
+    });
   }
 
   function playAll() {
-    if (_playing || _actionList.length === 0) return;
+    if (_playing || _stepRunning || _actionList.length === 0) return;
     _playing = true;
     _stopRequested = false;
 
@@ -767,6 +834,7 @@
     var stopBtn = document.getElementById('teach-stop-btn');
     if (playBtn) playBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = false;
+    updateToolbarButtons();
 
     function runStep(idx) {
       if (_stopRequested || idx >= _actionList.length) {
@@ -774,6 +842,7 @@
         if (playBtn) playBtn.disabled = false;
         if (stopBtn) stopBtn.disabled = true;
         clearAllHighlights();
+        updateToolbarButtons();
         return;
       }
 
@@ -1581,6 +1650,7 @@
     labels.forEach(function(lbl) {
       lbl.addEventListener('click', function() { setMode(lbl.dataset.mode); });
     });
+    syncHomingLockUi();
   }
 
   // Run init when DOM is ready
@@ -1591,12 +1661,19 @@
   }
 
   // Expose for device detector + toolbar (filename switcher)
+  window.teachingPanelSyncHomingLock = syncHomingLockUi;
+  window.teachingPanelApplyStatus = function(port, data) {
+    if (port !== _currentPort) return;
+    applyStatusValues(data);
+  };
+
   window.teachingPanelOnConnected = function(port, model) {
     if (!_currentPort) {
       _currentPort = port;
       _currentModel = model;
       buildAxisRows();
       applyEffectorUi(port);
+      syncHomingLockUi();
       startStatusPolling();
     }
   };
@@ -1606,6 +1683,7 @@
     _currentModel = null;
     applyEffectorUi(null);
     stopStatusPolling();
+    syncHomingLockUi();
   };
 
   window.TeachingPanel = {

@@ -656,6 +656,8 @@ def cmd_last_status():
             'mode': conn._last_status.get('mode', 0),
             'ts': conn._last_status_ts,
         }
+        if conn._last_alert:
+            result['alert'] = conn._last_alert
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})

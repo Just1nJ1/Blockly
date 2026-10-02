@@ -169,7 +169,7 @@
   // ── Jog ──
 
   function jog(sdkParam, step) {
-    if (!_currentPort) return;
+    if (!_currentPort || isHoming(_currentPort)) return;
 
     // Notify debugger BEFORE jogging (captures before-jog position on first click)
     var notifyPromise = Promise.resolve();
@@ -200,7 +200,7 @@
   // ── Move to absolute position ──
 
   function moveToAbsolute(sdkParam, value) {
-    if (!_currentPort) return;
+    if (!_currentPort || isHoming(_currentPort)) return;
 
     // Same teach hook as jog so typing a value in Control updates the move block
     var notifyPromise = Promise.resolve();
@@ -231,6 +231,7 @@
   // ── Mode toggle ──
 
   function setMode(mode) {
+    if (isHoming(_currentPort)) return;
     _currentMode = mode;
     var track = document.getElementById('ctrl-mode-switch');
     var labels = document.querySelectorAll('.ctrl-mode-label');
@@ -335,6 +336,7 @@
       updateSettingsButtonState();
       buildAxisRows();
       applyEffectorUi(port);
+      syncHomingLockUi();
       // Ensure firmware versions are loaded when switching among connected ports
       ensureFirmwareVersions(port);
     });
@@ -397,6 +399,7 @@
 
     buildAxisRows();
     applyEffectorUi(port);
+    syncHomingLockUi();
     _lastStatusTs = 0;  // reset so we pick up cached status immediately
     refreshStatus(true);  // force query on first connect (no cached status yet)
     startStatusPolling();
@@ -607,6 +610,8 @@
   var _pollTimer = null;
   var _refreshing = false;
   var _lastStatusTs = 0;  // track timestamp to avoid redundant UI updates
+  var _homingByPort = {};  // port -> { baselineTs, sawBusy, startedAt, querying }
+  var _homingTimer = null;
 
   function refreshStatus(forceQuery) {
     if (!_currentPort || _refreshing) return;
@@ -627,9 +632,16 @@
       _refreshing = false;
       if (!data.success) return;
 
+      if (data.alert && typeof window.considerRobotAlert === 'function') {
+        window.considerRobotAlert(_currentPort, data.alert);
+      }
+
       // Skip UI update if timestamp hasn't changed (no new status)
       if (!forceQuery && data.ts && data.ts === _lastStatusTs) return;
       if (data.ts) _lastStatusTs = data.ts;
+
+      considerHomingStatus(_currentPort, data);
+      if (isHoming(_currentPort)) return;
 
       if (data.model && data.model !== _currentModel) {
         _currentModel = data.model;
@@ -674,6 +686,156 @@
   function markStale() {
     // After a command, the robot will auto-report when movement finishes.
     // Nothing to do — the poll loop picks it up from the cache.
+  }
+
+  function isHoming(port) {
+    return !!(port && _homingByPort[port]);
+  }
+
+  function syncHomingLockUi() {
+    var lock = document.getElementById('ctrl-homing-lock');
+    if (lock) lock.hidden = !isHoming(_currentPort);
+    if (typeof window.teachingPanelSyncHomingLock === 'function') {
+      window.teachingPanelSyncHomingLock();
+    }
+  }
+
+  function applyHomingPose(port, data) {
+    if (!data || !data.success) return;
+    if (port === _currentPort) {
+      if (data.ts) _lastStatusTs = data.ts;
+      if (data.model && data.model !== _currentModel) {
+        _currentModel = data.model;
+        buildAxisRows();
+      }
+      updateValues(data);
+      if (typeof window.debugOnRobotStatus === 'function') {
+        try { window.debugOnRobotStatus(data); } catch (eTeach) { /* ignore */ }
+      }
+    }
+    if (typeof window.teachingPanelApplyStatus === 'function') {
+      window.teachingPanelApplyStatus(port, data);
+    }
+  }
+
+  function endHoming(port, queried) {
+    if (!port || !_homingByPort[port]) return;
+    delete _homingByPort[port];
+    syncHomingLockUi();
+    if (!Object.keys(_homingByPort).length) stopHomingWatch();
+    if (queried && queried.success) {
+      applyHomingPose(port, queried);
+      return;
+    }
+    if (port === _currentPort) {
+      _lastStatusTs = 0;
+      setTimeout(function() { refreshStatus(false); }, 0);
+    }
+  }
+
+  function beginHoming(port, baselineTs) {
+    if (!port) return;
+    _homingByPort[port] = {
+      baselineTs: baselineTs || 0,
+      sawBusy: false,
+      startedAt: Date.now(),
+      querying: false
+    };
+    syncHomingLockUi();
+    startHomingWatch();
+  }
+
+  function isIdleLike(state) {
+    var s = String(state || '').toLowerCase();
+    return s.indexOf('idle') !== -1 || s.indexOf('alarm') !== -1;
+  }
+
+  function considerHomingStatus(port, data) {
+    var h = port && _homingByPort[port];
+    if (!h || h.querying || !data || !data.success) return;
+    var idleLike = isIdleLike(data.state);
+    if (!idleLike) h.sawBusy = true;
+    var fresh = !!(data.ts && data.ts !== h.baselineTs);
+    if (!fresh || !idleLike) return;
+    if (h.sawBusy || h.baselineTs || (Date.now() - h.startedAt > 2500)) {
+      queryPoseAfterHoming(port);
+    }
+  }
+
+  function queryPoseAfterHoming(port) {
+    var h = port && _homingByPort[port];
+    if (!h || h.querying) return;
+    h.querying = true;
+    fetch(getServerUrl() + '/cmd/get-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: port, silent: true })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!_homingByPort[port]) return;
+      endHoming(port, data);
+    })
+    .catch(function() {
+      if (_homingByPort[port]) endHoming(port);
+    });
+  }
+
+  function startHomingWatch() {
+    if (_homingTimer) return;
+    _homingTimer = setInterval(pollHomingPorts, STATUS_POLL_INTERVAL);
+  }
+
+  function stopHomingWatch() {
+    if (_homingTimer) {
+      clearInterval(_homingTimer);
+      _homingTimer = null;
+    }
+  }
+
+  function pollHomingPorts() {
+    var ports = Object.keys(_homingByPort);
+    if (!ports.length) {
+      stopHomingWatch();
+      return;
+    }
+    ports.forEach(function(port) {
+      fetch(getServerUrl() + '/cmd/last-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: port })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) { considerHomingStatus(port, data); })
+      .catch(function() {});
+    });
+  }
+
+  function requestHoming(port) {
+    if (!port || isHoming(port)) return;
+    beginHoming(port, 0);
+    fetch(getServerUrl() + '/cmd/last-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: port })
+    })
+    .then(function(r) { return r.json(); })
+    .catch(function() { return {}; })
+    .then(function(status) {
+      var h = _homingByPort[port];
+      if (!h) return null;
+      h.baselineTs = (status && status.success && status.ts) ? status.ts : 0;
+      return fetch(getServerUrl() + '/cmd/home', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: port })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data || !data.success) endHoming(port);
+      });
+    })
+    .catch(function() { endHoming(port); });
   }
 
   function checkAndRefresh() {
@@ -1572,23 +1734,14 @@
 
     if (homeBtn) {
       homeBtn.addEventListener('click', function() {
-        if (!_currentPort) return;
-        fetch(getServerUrl() + '/cmd/home', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ port: _currentPort })
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          if (data.success) markStale();
-        })
-        .catch(function() {});
+        if (!_currentPort || isHoming(_currentPort)) return;
+        requestHoming(_currentPort);
       });
     }
 
     if (zeroBtn) {
       zeroBtn.addEventListener('click', function() {
-        if (!_currentPort) return;
+        if (!_currentPort || isHoming(_currentPort)) return;
         fetch(getServerUrl() + '/cmd/zero', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1610,6 +1763,7 @@
     if (!btn) return;
 
     btn.addEventListener('click', function() {
+      if (isHoming(_currentPort)) return;
       var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
       if (!workspace) return;
 
@@ -1764,7 +1918,7 @@
         btn.textContent = btnDef.label;
         btn.dataset.mode = String(btnDef.mode);
         btn.addEventListener('click', function() {
-          if (!_currentPort) return;
+          if (!_currentPort || isHoming(_currentPort)) return;
           sendEffectorCommand(btnDef.endpoint, btnDef.mode);
           if (window.EffectorState) {
             window.EffectorState.set(_currentPort, { mode: btnDef.mode });
@@ -1778,7 +1932,7 @@
   }
 
   function sendEffectorCommand(endpoint, mode) {
-    if (!_currentPort) return;
+    if (!_currentPort || isHoming(_currentPort)) return;
 
     fetch(getServerUrl() + endpoint, {
       method: 'POST',
@@ -1809,6 +1963,7 @@
     if (port) {
       delete _portFirmwareVersions[port];
       delete _pendingUpdates[port];
+      endHoming(port);
     }
 
     _currentPort = null;
@@ -1841,6 +1996,9 @@
   window.controlPanelOnDisconnected = onDisconnected;
   window.controlPanelMarkStale = markStale;
   window.controlPanelCheckAndRefresh = checkAndRefresh;
+  window.controlPanelRequestHoming = requestHoming;
+  window.controlPanelIsHoming = isHoming;
+  window.controlPanelOnStatus = considerHomingStatus;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

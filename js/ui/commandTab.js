@@ -230,6 +230,9 @@
         for (var i = 0; i < data.messages.length; i++) {
           var msg = data.messages[i];
           appendMessage(msg);
+          if (msg.dir === 'rx' && typeof window.considerRobotErrorLine === 'function') {
+            window.considerRobotErrorLine(requestedPort || _currentPort, msg.text);
+          }
           if (msg.id >= _lastMessageId) {
             _lastMessageId = msg.id + 1;
           }

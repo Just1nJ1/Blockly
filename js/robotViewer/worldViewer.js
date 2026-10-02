@@ -345,6 +345,14 @@
   // varName → { x, y, z, rotZ }  (metres / degrees)
   var pendingPoses = {};
 
+  function ensureScene() {
+    return ensureThree().then(function() {
+      var containerEl = document.getElementById('world-canvas');
+      if (!containerEl) return;
+      initScene(containerEl);
+    });
+  }
+
   function initScene(containerEl) {
     if (initialized) return;
     container = containerEl;
@@ -965,6 +973,7 @@
     setRobotVisible: setRobotVisible,
     isRobotVisible: isRobotVisible,
     isInitialized: isInitialized,
+    ensureScene: ensureScene,
     selectRobot: selectRobot,
     getSelectedRobot: getSelectedRobot,
     setOnSelectionChange: setOnSelectionChange,
