@@ -111,10 +111,13 @@ function appendOutput(text, type, raw) {
 
 function setRunButtonRunning(running) {
   var runBtn = document.getElementById('runBtn');
-  if (!runBtn) return;
-  runBtn.disabled = !!running;
-  setToolbarBtnLabel(runBtn, running ? '…' : 'Run');
-  runBtn.title = running ? 'Running…' : 'Run';
+  if (runBtn) {
+    runBtn.disabled = !!running;
+    setToolbarBtnLabel(runBtn, running ? '…' : 'Run');
+    runBtn.title = running ? 'Running…' : 'Run';
+  }
+  var stopBtn = document.getElementById('stopProgramBtn');
+  if (stopBtn) stopBtn.disabled = !running;
 }
 
 function closeExecStream() {
@@ -241,6 +244,26 @@ async function runCode() {
 
     var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
     var pythonCode = workspace ? Blockly.Python.workspaceToCode(workspace) : '';
+    if (pythonCode.indexOf('__studiox_preview') !== -1) {
+      pythonCode = [
+        'def __studiox_preview(image, slot):',
+        '    import base64, json, os, urllib.request, cv2',
+        '    ok, buf = cv2.imencode(".png", image)',
+        '    if not ok:',
+        '        return',
+        '    port = os.environ.get("STUDIOX_PORT", "5080")',
+        '    body = json.dumps({"slot": int(slot), "image": base64.b64encode(buf.tobytes()).decode("ascii")}).encode()',
+        '    req = urllib.request.Request(',
+        '        "http://127.0.0.1:%s/ext/camera/preview" % port,',
+        '        data=body, headers={"Content-Type": "application/json"}, method="POST")',
+        '    try:',
+        '        urllib.request.urlopen(req, timeout=5).read()',
+        '    except Exception:',
+        '        pass',
+        '',
+        pythonCode
+      ].join('\n');
+    }
 
     if (!pythonCode.trim()) {
       appendOutput('No code to execute. Add some blocks first!', 'error');
@@ -292,6 +315,27 @@ async function runCode() {
   } catch (error) {
     appendOutput('Connection Error: ' + error.message, 'error');
     appendOutput('Make sure the Python server is running.', 'stderr');
+    finishExecution(false);
+  }
+}
+
+/**
+ * Stop the running program, like Teaching's Stop. Does not emergency-stop robots.
+ */
+async function stopRunningProgram() {
+  var serverUrl = (typeof getServerUrl === 'function')
+    ? getServerUrl()
+    : 'http://127.0.0.1:5080';
+  try {
+    await fetch(serverUrl + '/execute/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(3000)
+    });
+  } catch (e) { /* ignore */ }
+  if (_execRunning) {
+    appendOutput('\n— stopped —\n', 'system', true);
     finishExecution(false);
   }
 }

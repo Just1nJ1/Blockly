@@ -621,44 +621,39 @@ body.stage-splitting-v {
   background: #000;
   position: relative;
 }
-#camera-area .camera-stage {
+#camera-preview-grid {
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  overflow: auto;
+  background: #111;
 }
-#camera-stream {
-  max-width: 100%;
-  max-height: 100%;
-  display: none;
+.camera-slot {
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
+  background: #000;
+  border: 1px solid #2c3640;
+}
+.camera-slot span {
+  padding: 4px 8px;
+  color: #c5d0d8;
+  font-size: 12px;
+}
+.camera-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  flex: 1;
+  min-height: 0;
 }
 #camera-empty {
   color: #9aabba;
   font-size: 13px;
-}
-.camera-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  border-top: 1px solid var(--border-primary);
-}
-.camera-toolbar select {
-  min-width: 180px;
-  font: inherit;
-}
-.camera-toolbar button {
-  font: inherit;
-  padding: 4px 10px;
-}
-#camera-status {
-  margin-left: auto;
-  color: var(--text-muted, #888);
-  font-size: 12px;
+  padding: 16px;
 }
 #content-stage {
   position: relative;
@@ -853,6 +848,7 @@ body.stage-splitting-v {
 #view-tabs-bar {
   border-bottom: 1px solid var(--border-primary);
 }
+#view-tabs-bar,
 #view-tabs {
   display: none;
   flex: 1;
@@ -878,6 +874,15 @@ body.stage-splitting-v {
   padding: 0 4px;
   background: var(--bg-header);
   border-bottom: 1px solid var(--border-primary);
+}
+.pane-tabbar.drop-target {
+  background: rgba(17, 137, 212, 0.14);
+}
+.pane-tabbar.drop-end {
+  box-shadow: inset -3px 0 0 #1189d4;
+}
+.view-tab-btn.drop-before {
+  box-shadow: inset 3px 0 0 #1189d4;
 }
 .pane-host {
   display: flex;
@@ -1341,6 +1346,7 @@ body.stage-splitting-v {
    G-code export stays visible but is disabled by JS (file-side action). */
 #toolbar.step-mode #runBtn,
 #toolbar.step-mode #debugBtn,
+#toolbar.step-mode #stopProgramBtn,
 #toolbar.step-mode #runSelectedBtn {
   display: none;
 }
@@ -3982,6 +3988,25 @@ body.world-popout #content-stage {
 }
 body.world-popout #blockly-view {
   display: flex !important;
+}
+body.view-popout .titlebar,
+body.view-popout #sidebar,
+body.view-popout #command-view,
+body.view-popout #teaching-view,
+body.view-popout #toolbar,
+body.view-popout #output-panel,
+body.view-popout .pane-tabbar,
+body.view-popout-camera #model-area,
+body.view-popout-camera #workspace-area,
+body.view-popout-workspace #model-area,
+body.view-popout-workspace #camera-area,
+body.view-popout #stage-splitter {
+  display: none !important;
+}
+body.view-popout-camera #camera-area,
+body.view-popout-workspace #workspace-area {
+  display: flex !important;
+  visibility: visible;
 }
 body.world-popout #model-area {
   flex: 1 !important;
