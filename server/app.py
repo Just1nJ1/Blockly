@@ -205,6 +205,14 @@ def execute_input():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/preview-frames', methods=['GET'])
+def preview_frames():
+    """Newest preview image for each slot. Served from this process."""
+    from .preview_hub import snapshot
+    rev, frames = snapshot()
+    return jsonify({'success': True, 'rev': rev, 'frames': frames})
+
+
 @app.route('/execute/abort', methods=['POST'])
 def execute_abort():
     """Abort any running code execution."""

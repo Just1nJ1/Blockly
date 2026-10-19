@@ -121,8 +121,20 @@ function _defineExtensionBlock(def, extensionName) {
   var json = {};
   var keys = Object.keys(def);
   for (var i = 0; i < keys.length; i++) {
-    if (keys[i] === 'python' || keys[i] === 'pythonImports') continue;
+    if (keys[i] === 'python' || keys[i] === 'pythonImports' || keys[i] === 'pythonHidden') continue;
     json[keys[i]] = def[keys[i]];
+  }
+  _wireCameraDropdown(json);
+  if (json.args0) {
+    json.args0 = json.args0.map(function (arg) {
+      if (!arg || typeof arg !== 'object') return arg;
+      var copy = {};
+      Object.keys(arg).forEach(function (key) {
+        if (key === 'source' || key === 'unquoted') return;
+        copy[key] = arg[key];
+      });
+      return copy;
+    });
   }
   var defineBlocks = window.Blockly && (
     Blockly.defineBlocksWithJsonArray ||
@@ -146,14 +158,18 @@ function _registerExtensionGenerator(type, template, imports, def) {
       && def.nextStatement === undefined;
     target[type] = function (block, generator) {
       var gen = generator || Blockly.Python;
-      (imports || []).forEach(function (line) {
+      (imports || []).forEach(function (line, idx) {
         if (!line) return;
-        var key = 'extimport_' + line;
+        var filled = _fillBlockTemplate(block, gen, line, args);
+        var key = 'camdef_' + (idx < 10 ? '0' : '') + idx + '_' + filled;
         if (Blockly.Python.definitions_) {
-          Blockly.Python.definitions_[key] = line;
+          Blockly.Python.definitions_[key] = filled;
         }
       });
       var code = _fillBlockTemplate(block, gen, template || '', args);
+      if (def.type === 'camera_convert' && block.getFieldValue('MODE') === 'BGR') {
+        code = _fillBlockTemplate(block, gen, '{IMAGE}', args);
+      }
       if (isValue) {
         var order = (gen.ORDER_NONE != null) ? gen.ORDER_NONE : 99;
         return [code.trim(), order];
@@ -185,6 +201,12 @@ function _fillBlockTemplate(block, generator, template, args) {
         var n = Number(val);
         return isFinite(n) ? String(n) : '0';
       }
+      if (fieldType === 'field_dropdown' && /^-?\d+$/.test(String(val))) {
+        return String(parseInt(val, 10));
+      }
+      if (spec && spec.unquoted) {
+        return val == null ? '' : String(val);
+      }
       return JSON.stringify(val == null ? '' : String(val));
     }
     if (fieldType === 'input_statement') {
@@ -198,6 +220,59 @@ function _fillBlockTemplate(block, generator, template, args) {
     if (fallback != null) return JSON.stringify(String(fallback));
     return 'None';
   });
+}
+
+function _wireCameraDropdown(json) {
+  var args = json.args0 || [];
+  var wants = false;
+  for (var i = 0; i < args.length; i++) {
+    if (args[i] && args[i].source === 'cameras') {
+      delete args[i].source;
+      wants = true;
+    }
+  }
+  if (!wants) return;
+  _registerCameraDropdown();
+  var ext = json.extensions ? json.extensions.slice() : [];
+  if (ext.indexOf('camera_list') < 0) ext.push('camera_list');
+  json.extensions = ext;
+}
+
+function _registerCameraDropdown() {
+  if (!window.Blockly || !Blockly.Extensions) return;
+  if (Blockly.Extensions.isRegistered && Blockly.Extensions.isRegistered('camera_list')) return;
+  if (!window._cameraBlockOptions) {
+    window._cameraBlockOptions = [['No camera', '0']];
+  }
+  Blockly.Extensions.register('camera_list', function () {
+    var field = this.getField('CAMERA');
+    if (!field) return;
+    field.menuGenerator_ = function () {
+      var opts = window._cameraBlockOptions;
+      return (opts && opts.length) ? opts : [['No camera', '0']];
+    };
+  });
+  if (!window._cameraOptionTimer) {
+    var pull = function () {
+      var port = '5080';
+      if (typeof getServerUrl === 'function') {
+        var match = String(getServerUrl()).match(/:(\d+)/);
+        if (match) port = match[1];
+      }
+      fetch('http://127.0.0.1:' + port + '/ext/camera/cameras')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var opts = [];
+          ((data && data.cameras) || []).forEach(function (cam) {
+            opts.push([cam.name || ('Camera ' + cam.id), String(cam.id)]);
+          });
+          if (opts.length) window._cameraBlockOptions = opts;
+        })
+        .catch(function () { /* extension not running yet */ });
+    };
+    pull();
+    window._cameraOptionTimer = setInterval(pull, 4000);
+  }
 }
 
 window.extensionBlockCategories = extensionBlockCategories;

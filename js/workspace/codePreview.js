@@ -9,7 +9,10 @@
  */
 function updateCodePreview() {
   try {
-    const code = Blockly.Python.workspaceToCode(getWorkspace ? getWorkspace() : null);
+    var code = Blockly.Python.workspaceToCode(getWorkspace ? getWorkspace() : null);
+    code = String(code || '').split('\n').filter(function (line) {
+      return line.indexOf('__studiox_preview') === -1;
+    }).join('\n');
     const previewElement = document.getElementById('code-preview');
     if (previewElement) {
       previewElement.textContent = code;

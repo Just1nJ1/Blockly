@@ -5,6 +5,7 @@
   var started = false;
   var timer = null;
   var pollToken = 0;
+  var lastRev = -1;
 
   function base() {
     var port = '5080';
@@ -12,7 +13,7 @@
       var match = String(getServerUrl()).match(/:(\d+)/);
       if (match) port = match[1];
     }
-    return 'http://127.0.0.1:' + port + '/ext/camera';
+    return 'http://127.0.0.1:' + port;
   }
 
   function render(frames) {
@@ -51,22 +52,42 @@
     }
   }
 
+  function setEmpty(text) {
+    var empty = document.getElementById('camera-empty');
+    if (!empty) return;
+    if (text) empty.textContent = text;
+    empty.style.display = '';
+  }
+
   function poll() {
     if (!started) return;
     var token = ++pollToken;
-    fetch(base() + '/previews')
+    fetch(base() + '/preview-frames')
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (!started || token !== pollToken) return;
-        if (data && data.success) render(data.frames || []);
+        if (!started || token !== pollToken || !data || !data.success) return;
+        if (data.rev === lastRev) return;
+        lastRev = data.rev;
+        if (!data.frames || !data.frames.length) {
+          setEmpty('Waiting for the first frame…');
+          return;
+        }
+        render(data.frames || []);
       })
-      .catch(function () { /* backend not up */ });
+      .catch(function () {
+        if (started) setEmpty('Camera preview is still starting…');
+      });
   }
 
   function start() {
     started = true;
     poll();
-    if (!timer) timer = setInterval(poll, 300);
+    if (!timer) timer = setInterval(poll, 50);
+  }
+
+  function arm() {
+    setEmpty('Waiting for the first frame…');
+    start();
   }
 
   function stop() {
@@ -77,5 +98,5 @@
     }
   }
 
-  window.CameraView = { start: start, stop: stop };
+  window.CameraView = { start: start, stop: stop, arm: arm };
 })();

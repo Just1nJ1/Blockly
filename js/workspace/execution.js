@@ -244,54 +244,9 @@ async function runCode() {
 
     var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
     var pythonCode = workspace ? Blockly.Python.workspaceToCode(workspace) : '';
-    if (pythonCode.indexOf('__studiox_preview') !== -1) {
-      pythonCode = [
-        'import threading, time',
-        '_studiox_preview_latest = {}',
-        '_studiox_preview_lock = threading.Lock()',
-        '_studiox_preview_on = False',
-        'def __studiox_preview(image, slot):',
-        '    global _studiox_preview_on',
-        '    with _studiox_preview_lock:',
-        '        _studiox_preview_latest[int(slot)] = image',
-        '        start = not _studiox_preview_on',
-        '        _studiox_preview_on = True',
-        '    if start:',
-        '        threading.Thread(target=_studiox_preview_sender, daemon=True).start()',
-        'def _studiox_preview_sender():',
-        '    import base64, json, os, urllib.request, cv2',
-        '    global _studiox_preview_on',
-        '    idle = 0',
-        '    while idle < 12:',
-        '        time.sleep(0.05)',
-        '        with _studiox_preview_lock:',
-        '            batch = _studiox_preview_latest.copy()',
-        '            _studiox_preview_latest.clear()',
-        '        if not batch:',
-        '            idle += 1',
-        '            continue',
-        '        idle = 0',
-        '        port = os.environ.get("STUDIOX_PORT", "5080")',
-        '        for slot, image in batch.items():',
-        '            try:',
-        '                ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])',
-        '                if not ok:',
-        '                    continue',
-        '                body = json.dumps({"slot": int(slot), "image": base64.b64encode(buf.tobytes()).decode("ascii")}).encode()',
-        '                req = urllib.request.Request(',
-        '                    "http://127.0.0.1:%s/ext/camera/preview" % port,',
-        '                    data=body, headers={"Content-Type": "application/json"}, method="POST")',
-        '                urllib.request.urlopen(req, timeout=2).read()',
-        '            except Exception:',
-        '                pass',
-        '    with _studiox_preview_lock:',
-        '        if _studiox_preview_latest:',
-        '            threading.Thread(target=_studiox_preview_sender, daemon=True).start()',
-        '        else:',
-        '            _studiox_preview_on = False',
-        '',
-        pythonCode
-      ].join('\n');
+    if (pythonCode.indexOf('__studiox_preview') !== -1 &&
+        window.CameraView && typeof window.CameraView.arm === 'function') {
+      window.CameraView.arm();
     }
 
     if (!pythonCode.trim()) {

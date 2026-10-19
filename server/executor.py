@@ -415,6 +415,8 @@ class CodeExecutor:
             sys.stderr = stderr_buffer
             blockly_site = CodeExecutor._prepare_blockly_packages()
             safe_globals = CodeExecutor._safe_globals()
+            from .preview_hub import submit as _preview_submit
+            safe_globals["__studiox_preview"] = _preview_submit
             CodeExecutor._prepare_serial_proxy(safe_globals)
 
             try:
@@ -509,6 +511,8 @@ class CodeExecutor:
                     "input": _ui_input,
                     "print": _ui_print,
                 })
+                from .preview_hub import submit as _preview_submit
+                safe_globals["__studiox_preview"] = _preview_submit
                 CodeExecutor._prepare_serial_proxy(safe_globals)
 
                 def _abort_trace(frame, event, arg):
