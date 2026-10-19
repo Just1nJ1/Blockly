@@ -5,6 +5,7 @@
 (function () {
   var started = false;
   var activeId = null;
+  var pumping = false;
 
   function base() {
     var port = '5080';
@@ -43,12 +44,30 @@
       showFrame(false);
       return;
     }
-    var stream = base() + '/stream';
-    if (frame.getAttribute('data-stream') !== stream) {
-      frame.setAttribute('data-stream', stream);
-      frame.src = stream;
+    if (!pumping) pump();
+  }
+
+  // One complete JPEG per request. A multipart stream never finishes
+  // through the extension proxy, so the image element stays broken.
+  function pump() {
+    if (!started || activeId === null || activeId === undefined) {
+      pumping = false;
+      return;
     }
-    showFrame(true);
+    pumping = true;
+    var loader = new Image();
+    loader.onload = function () {
+      var frame = els().frame;
+      if (frame) frame.src = loader.src;
+      showFrame(true);
+      if (started && activeId !== null && activeId !== undefined) pump();
+      else pumping = false;
+    };
+    loader.onerror = function () {
+      if (started) setTimeout(pump, 120);
+      else pumping = false;
+    };
+    loader.src = base() + '/frame?t=' + Date.now();
   }
 
   function refreshList() {
@@ -129,11 +148,9 @@
 
   function stop() {
     started = false;
+    pumping = false;
     var frame = els().frame;
-    if (frame) {
-      frame.removeAttribute('src');
-      frame.removeAttribute('data-stream');
-    }
+    if (frame) frame.removeAttribute('src');
     showFrame(false);
   }
 

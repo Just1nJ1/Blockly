@@ -19,7 +19,11 @@
 
   var splitMode = null; // null | 'h' | 'v'
   var splitRatio = 0.55;
-  var dockPair = null; // { first, second } in visual order (left/top, then right/bottom)
+  var ALL_VIEWS = ['workspace', 'world', 'camera'];
+  var VIEW_LABELS = { workspace: 'Blockly', world: 'World', camera: 'Camera' };
+  // One group when a single pane is showing. Two groups when docked:
+  // each group is the tabs that live in that pane.
+  var paneGroups = [{ views: ALL_VIEWS.slice(), active: 'workspace' }];
   var poppedOut = false;
   var dragging = false;
   var dragResizeTimer = null;
@@ -42,10 +46,13 @@
       if (typeof data.ratio === 'number' && data.ratio > 0.15 && data.ratio < 0.85) {
         splitRatio = data.ratio;
       }
-      if (data.first && data.second) {
-        dockPair = { first: data.first, second: data.second };
+      if (data.panes && data.panes.length) {
+        paneGroups = data.panes;
       } else if (splitMode) {
-        dockPair = { first: 'workspace', second: 'world' };
+        paneGroups = [
+          { views: ['workspace'], active: 'workspace' },
+          { views: ['world', 'camera'], active: 'world' }
+        ];
       }
     } catch (e) { /* ignore */ }
   }
@@ -55,8 +62,7 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         split: splitMode,
         ratio: splitRatio,
-        first: dockPair && dockPair.first,
-        second: dockPair && dockPair.second
+        panes: paneGroups
       }));
     } catch (e) { /* ignore */ }
   }
@@ -114,26 +120,97 @@
     return null;
   }
 
-  function layoutDockPanes() {
-    var panes = [workspaceArea, modelArea, document.getElementById('camera-area')];
-    for (var i = 0; i < panes.length; i++) {
-      if (!panes[i]) continue;
-      panes[i].classList.remove('dock-on');
-      panes[i].style.order = '';
-      panes[i].style.flex = '';
+  function ensurePaneDom() {
+    if (!contentStage || document.getElementById('pane-0')) return;
+    var overlay = document.getElementById('dock-overlay');
+    function make(id) {
+      var sec = document.createElement('section');
+      sec.id = id;
+      sec.className = 'view-pane';
+      sec.innerHTML = '<div class="pane-tabbar"></div><div class="pane-host"></div>';
+      return sec;
     }
-    if (splitter) splitter.style.order = '';
-    if (!splitMode || poppedOut || !dockPair) return;
-    var first = paneEl(dockPair.first);
-    var second = paneEl(dockPair.second);
-    if (!first || !second) return;
-    first.classList.add('dock-on');
-    second.classList.add('dock-on');
-    first.style.order = '0';
-    first.style.flex = splitRatio + ' 1 0';
-    second.style.order = '2';
-    second.style.flex = (1 - splitRatio) + ' 1 0';
+    var pane0 = make('pane-0');
+    var pane1 = make('pane-1');
+    contentStage.insertBefore(pane0, contentStage.firstChild);
+    if (splitter) contentStage.insertBefore(splitter, overlay || null);
+    contentStage.insertBefore(pane1, overlay || null);
+  }
+
+  function paneHost(index) {
+    var pane = document.getElementById('pane-' + index);
+    return pane ? pane.querySelector('.pane-host') : null;
+  }
+
+  function paneBar(index) {
+    var pane = document.getElementById('pane-' + index);
+    return pane ? pane.querySelector('.pane-tabbar') : null;
+  }
+
+  function layoutDockPanes() {
+    if (isPopoutWindow() || !contentStage) return;
+    ensurePaneDom();
+    var two = !!(splitMode && !poppedOut && paneGroups.length > 1);
+    var pane0 = document.getElementById('pane-0');
+    var pane1 = document.getElementById('pane-1');
+    if (pane0) {
+      pane0.classList.add('pane-open');
+      pane0.style.flex = two ? (splitRatio + ' 1 0') : '1 1 auto';
+      pane0.style.order = '0';
+    }
+    if (pane1) {
+      pane1.classList.toggle('pane-open', two);
+      pane1.style.flex = two ? ((1 - splitRatio) + ' 1 0') : '';
+      pane1.style.order = '2';
+    }
     if (splitter) splitter.style.order = '1';
+
+    var shown = {};
+    var count = two ? 2 : 1;
+    var groups = two ? paneGroups : [paneGroups[0] || { views: ALL_VIEWS.slice(), active: 'workspace' }];
+    for (var i = 0; i < count; i++) {
+      var group = groups[i];
+      if (!group || !group.views || !group.views.length) continue;
+      if (group.views.indexOf(group.active) < 0) group.active = group.views[0];
+      var bar = paneBar(i);
+      var host = paneHost(i);
+      if (bar) {
+        bar.innerHTML = '';
+        for (var t = 0; t < group.views.length; t++) {
+          var view = group.views[t];
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'view-tab-btn' + (view === group.active ? ' active' : '');
+          btn.dataset.view = view;
+          btn.dataset.pane = String(i);
+          btn.textContent = VIEW_LABELS[view] || view;
+          bar.appendChild(btn);
+        }
+      }
+      if (!host) continue;
+      for (var v = 0; v < group.views.length; v++) {
+        var name = group.views[v];
+        var el = paneEl(name);
+        if (!el) continue;
+        if (el.parentNode !== host) host.appendChild(el);
+        var on = name === group.active;
+        el.style.display = on ? 'flex' : 'none';
+        el.classList.toggle('hidden', !on);
+        if (name === 'world') el.classList.toggle('visible', on);
+        shown[name] = shown[name] || on;
+      }
+    }
+    if (window.ViewTabs && window.ViewTabs.showWorldSurface) {
+      if (shown.world) window.ViewTabs.showWorldSurface();
+      else window.ViewTabs.hideWorldSurface();
+    }
+    if (window.CameraView) {
+      if (shown.camera) window.CameraView.start();
+      else window.CameraView.stop();
+    }
+    if (shown.workspace && window.ViewTabs && window.ViewTabs.resizeBlockly) {
+      window.ViewTabs.resizeBlockly();
+    }
   }
 
   function isBlocklyViewActive() {
@@ -153,8 +230,7 @@
       window.ViewTabs.showExclusive('workspace');
       return;
     }
-    if (splitMode && dockPair && isBlocklyViewActive() && window.ViewTabs.showDock) {
-      window.ViewTabs.showDock(dockPair.first, dockPair.second);
+    if (!isPopoutWindow() && !poppedOut) {
       layoutDockPanes();
       setTimeout(resizePanes, 80);
       setTimeout(resizePanes, 350);
@@ -173,34 +249,47 @@
 
   function setSplit(mode) {
     if (poppedOut) closePopoutWindow();
-    if (splitMode === mode && dockPair && dockPair.first === 'workspace' && dockPair.second === 'world') {
+    if (splitMode === mode) {
       splitMode = null;
-      dockPair = null;
+      paneGroups = [{ views: ALL_VIEWS.slice(), active: 'workspace' }];
     } else {
       splitMode = mode;
-      dockPair = { first: 'workspace', second: 'world' };
+      paneGroups = [
+        { views: ['workspace'], active: 'workspace' },
+        { views: ['world', 'camera'], active: 'world' }
+      ];
     }
     save();
     applyLayout();
-    if (!splitMode && window.ViewTabs) {
-      window.ViewTabs.showExclusive('workspace');
-    }
   }
 
   function dockView(view, edge) {
-    var other = 'workspace';
-    if (dockPair && splitMode) {
-      other = dockPair.first === view ? dockPair.second : dockPair.first;
-    } else if (window.ViewTabs && window.ViewTabs.getMode) {
-      var mode = window.ViewTabs.getMode();
-      if (mode === 'world' || mode === 'camera' || mode === 'workspace') other = mode;
+    var rest = [];
+    var restActive = null;
+    for (var i = 0; i < paneGroups.length; i++) {
+      var group = paneGroups[i];
+      for (var j = 0; j < group.views.length; j++) {
+        if (group.views[j] === view) continue;
+        rest.push(group.views[j]);
+        if (group.views[j] === group.active) restActive = group.views[j];
+      }
     }
-    if (!other || other === view) other = view === 'workspace' ? 'world' : 'workspace';
+    if (!rest.length) return;
+    if (!restActive || rest.indexOf(restActive) < 0) restActive = rest[0];
+    var solo = { views: [view], active: view };
+    var others = { views: rest, active: restActive };
     var axis = (edge === 'left' || edge === 'right') ? 'h' : 'v';
-    if (edge === 'left' || edge === 'top') dockPair = { first: view, second: other };
-    else dockPair = { first: other, second: view };
+    if (edge === 'left' || edge === 'top') paneGroups = [solo, others];
+    else paneGroups = [others, solo];
     splitMode = axis;
     if (poppedOut) closePopoutWindow();
+    save();
+    applyLayout();
+  }
+
+  function activatePaneView(index, view) {
+    if (!paneGroups[index] || paneGroups[index].views.indexOf(view) < 0) return;
+    paneGroups[index].active = view;
     save();
     applyLayout();
   }
@@ -503,19 +592,25 @@
   }
 
   function bindWorldTabDrag() {
-    var viewTabs = document.getElementById('view-tabs');
-    if (!viewTabs) return;
+    if (!contentStage) return;
     var drag = null;
     var suppressClick = false;
 
-    viewTabs.addEventListener('click', function (e) {
-      if (!suppressClick) return;
-      suppressClick = false;
-      e.preventDefault();
-      e.stopPropagation();
-    }, true);
+    contentStage.addEventListener('click', function (e) {
+      var btn = e.target.closest && e.target.closest('.pane-tabbar .view-tab-btn');
+      if (suppressClick) {
+        suppressClick = false;
+        if (btn) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if (!btn) return;
+      activatePaneView(Number(btn.dataset.pane), btn.dataset.view);
+    });
 
-    viewTabs.addEventListener('pointerdown', function (e) {
+    contentStage.addEventListener('pointerdown', function (e) {
       if (e.button !== 0) return;
       var btn = e.target.closest && e.target.closest('.view-tab-btn');
       if (!btn) return;
@@ -629,8 +724,12 @@
 
   window.ViewSplit = {
     isSplit: function () { return !!splitMode && !poppedOut; },
-    isDocked: function () { return !!splitMode && !poppedOut && !!dockPair; },
-    getDock: function () { return dockPair; },
+    isDocked: function () { return !!splitMode && !poppedOut && paneGroups.length > 1; },
+    getDock: function () {
+      if (paneGroups.length < 2) return null;
+      return { first: paneGroups[0].active, second: paneGroups[1].active };
+    },
+    renderTabs: function () { layoutDockPanes(); },
     isPoppedOut: function () { return !!poppedOut; },
     isPopoutWindow: isPopoutWindow,
     getMode: function () { return splitMode; },
@@ -642,12 +741,6 @@
         var el = ipc();
         if (el) el.invoke('world:focus-popout');
         return true;
-      }
-      if (splitMode && !poppedOut) {
-        splitMode = null;
-        dockPair = null;
-        save();
-        applySplitStyles();
       }
       return false;
     }

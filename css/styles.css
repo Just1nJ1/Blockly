@@ -854,9 +854,44 @@ body.stage-splitting-v {
   border-bottom: 1px solid var(--border-primary);
 }
 #view-tabs {
+  display: none;
   flex: 1;
   min-width: 0;
   border-bottom: none;
+}
+.view-pane {
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.view-pane.pane-open {
+  display: flex;
+}
+.pane-tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 0 4px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-primary);
+}
+.pane-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.pane-host > #workspace-area,
+.pane-host > #model-area,
+.pane-host > #camera-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 #view-layout-actions {
   display: flex;
