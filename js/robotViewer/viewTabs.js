@@ -734,7 +734,7 @@
     if (activeView.indexOf('var:') === 0 || currentMode === 'individual') {
       activeView = 'world';
     }
-    if (activeView !== 'workspace' && activeView !== 'world' && activeView !== 'split') {
+    if (activeView !== 'workspace' && activeView !== 'world' && activeView !== 'camera' && activeView !== 'split') {
       activeView = 'workspace';
     }
 
@@ -752,8 +752,21 @@
     worldBtn.className = 'view-tab-btn' + (activeView === 'world' || activeView === 'split' ? ' active' : '');
     worldBtn.dataset.view = 'world';
     worldBtn.textContent = 'World';
-    worldBtn.title = 'World view — drag out to open in a new window';
+    worldBtn.title = 'World view — drag to an edge to dock, or out of the window to pop out';
     viewTabs.appendChild(worldBtn);
+
+    var cameraBtn = document.createElement('button');
+    var dock = window.ViewSplit && window.ViewSplit.getDock && window.ViewSplit.getDock();
+    var cameraActive = activeView === 'camera' || (dock && (dock.first === 'camera' || dock.second === 'camera'));
+    cameraBtn.className = 'view-tab-btn' + (cameraActive ? ' active' : '');
+    cameraBtn.dataset.view = 'camera';
+    cameraBtn.textContent = 'Camera';
+    cameraBtn.title = 'Camera view — drag to an edge to dock';
+    viewTabs.appendChild(cameraBtn);
+    if (activeView === 'split' && dock) {
+      blocklyBtn.classList.toggle('active', dock.first === 'workspace' || dock.second === 'workspace');
+      worldBtn.classList.toggle('active', dock.first === 'world' || dock.second === 'world');
+    }
 
     attachViewTabHandlers();
 
@@ -765,6 +778,7 @@
         var needSwitch = false;
         if (want === 'workspace' && currentMode !== 'workspace') needSwitch = true;
         else if (want === 'world' && currentMode !== 'world') needSwitch = true;
+        else if (want === 'camera' && currentMode !== 'camera') needSwitch = true;
         if (needSwitch) {
           handleViewTabClick(newActive);
         }
@@ -823,6 +837,8 @@
   function showExclusive(view) {
     ensureRA();
     if (view === 'workspace') {
+      showCameraPane(false);
+      modelArea.style.display = '';
       if (currentMode !== 'workspace') leaveCurrentMode();
       currentMode = 'workspace';
       currentVariableName = null;
@@ -834,6 +850,8 @@
       updatePlaybackButtons();
       restoreBlocklyView();
     } else if (view === 'world') {
+      showCameraPane(false);
+      modelArea.style.display = '';
       if (currentMode !== 'world') leaveCurrentMode();
       currentMode = 'world';
       currentVariableName = null;
@@ -844,7 +862,28 @@
       showWorldRobotsSection(true);
       enterWorldMode();
       setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 80);
+    } else if (view === 'camera') {
+      if (currentMode !== 'camera') leaveCurrentMode();
+      currentMode = 'camera';
+      currentVariableName = null;
+      workspaceArea.style.display = 'none';
+      workspaceArea.classList.add('hidden');
+      modelArea.classList.remove('visible');
+      modelArea.style.display = 'none';
+      hideAllCanvases();
+      showWorldRobotsSection(false);
+      updatePlaybackButtons();
+      showCameraPane(true);
+      if (window.CameraView) window.CameraView.start();
     }
+    if (view !== 'camera' && window.CameraView) window.CameraView.stop();
+  }
+
+  function showCameraPane(on) {
+    var cam = document.getElementById('camera-area');
+    if (!cam) return;
+    cam.style.display = on ? 'flex' : 'none';
+    cam.classList.toggle('visible', !!on);
   }
 
   function showSplit() {
@@ -882,7 +921,7 @@
 
     markActiveTab(view);
 
-    if (view === 'workspace' || view === 'world') {
+    if (view === 'workspace' || view === 'world' || view === 'camera') {
       showExclusive(view);
       return;
     }
@@ -1016,9 +1055,44 @@
     }
   }, 500);
 
+  function showDock(first, second) {
+    ensureRA();
+    if (currentMode === 'workspace') saveBlocklyView();
+    var show = {};
+    show[first] = true;
+    show[second] = true;
+    if (show.world) {
+      currentMode = 'world';
+      currentVariableName = null;
+      showWorldCanvas();
+      showWorldRobotsSection(true);
+      enterWorldMode();
+    } else if (currentMode === 'world') {
+      leaveCurrentMode();
+      currentMode = show.workspace ? 'workspace' : 'camera';
+      showWorldRobotsSection(false);
+    } else {
+      currentMode = show.workspace ? 'workspace' : 'camera';
+    }
+    workspaceArea.style.display = show.workspace ? 'flex' : 'none';
+    workspaceArea.classList.toggle('hidden', !show.workspace);
+    modelArea.style.display = show.world ? 'flex' : 'none';
+    if (show.world) modelArea.classList.add('visible');
+    else modelArea.classList.remove('visible');
+    showCameraPane(!!show.camera);
+    if (show.camera && window.CameraView) window.CameraView.start();
+    else if (window.CameraView) window.CameraView.stop();
+    if (show.workspace) restoreBlocklyView();
+    setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 80);
+    document.querySelectorAll('.view-tab-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.view === first || b.dataset.view === second);
+    });
+  }
+
   window.ViewTabs = {
     showExclusive: showExclusive,
     showSplit: showSplit,
+    showDock: showDock,
     resizeBlockly: restoreBlocklyView,
     ensureWorldScene: enterWorldMode,
     getMode: function() { return currentMode; }

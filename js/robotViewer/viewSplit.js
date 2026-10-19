@@ -19,6 +19,7 @@
 
   var splitMode = null; // null | 'h' | 'v'
   var splitRatio = 0.55;
+  var dockPair = null; // { first, second } in visual order (left/top, then right/bottom)
   var poppedOut = false;
   var dragging = false;
   var dragResizeTimer = null;
@@ -41,6 +42,11 @@
       if (typeof data.ratio === 'number' && data.ratio > 0.15 && data.ratio < 0.85) {
         splitRatio = data.ratio;
       }
+      if (data.first && data.second) {
+        dockPair = { first: data.first, second: data.second };
+      } else if (splitMode) {
+        dockPair = { first: 'workspace', second: 'world' };
+      }
     } catch (e) { /* ignore */ }
   }
 
@@ -48,7 +54,9 @@
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         split: splitMode,
-        ratio: splitRatio
+        ratio: splitRatio,
+        first: dockPair && dockPair.first,
+        second: dockPair && dockPair.second
       }));
     } catch (e) { /* ignore */ }
   }
@@ -96,15 +104,36 @@
       splitter.setAttribute('aria-orientation', splitMode === 'v' ? 'horizontal' : 'vertical');
     }
 
-    if (splitMode && !poppedOut && workspaceArea && modelArea) {
-      var primary = splitRatio;
-      var secondary = 1 - splitRatio;
-      workspaceArea.style.flex = primary + ' 1 0';
-      modelArea.style.flex = secondary + ' 1 0';
-    } else if (workspaceArea && modelArea) {
-      workspaceArea.style.flex = '';
-      modelArea.style.flex = '';
+    layoutDockPanes();
+  }
+
+  function paneEl(view) {
+    if (view === 'workspace') return workspaceArea;
+    if (view === 'world') return modelArea;
+    if (view === 'camera') return document.getElementById('camera-area');
+    return null;
+  }
+
+  function layoutDockPanes() {
+    var panes = [workspaceArea, modelArea, document.getElementById('camera-area')];
+    for (var i = 0; i < panes.length; i++) {
+      if (!panes[i]) continue;
+      panes[i].classList.remove('dock-on');
+      panes[i].style.order = '';
+      panes[i].style.flex = '';
     }
+    if (splitter) splitter.style.order = '';
+    if (!splitMode || poppedOut || !dockPair) return;
+    var first = paneEl(dockPair.first);
+    var second = paneEl(dockPair.second);
+    if (!first || !second) return;
+    first.classList.add('dock-on');
+    second.classList.add('dock-on');
+    first.style.order = '0';
+    first.style.flex = splitRatio + ' 1 0';
+    second.style.order = '2';
+    second.style.flex = (1 - splitRatio) + ' 1 0';
+    if (splitter) splitter.style.order = '1';
   }
 
   function isBlocklyViewActive() {
@@ -124,8 +153,9 @@
       window.ViewTabs.showExclusive('workspace');
       return;
     }
-    if (splitMode && isBlocklyViewActive()) {
-      window.ViewTabs.showSplit();
+    if (splitMode && dockPair && isBlocklyViewActive() && window.ViewTabs.showDock) {
+      window.ViewTabs.showDock(dockPair.first, dockPair.second);
+      layoutDockPanes();
       setTimeout(resizePanes, 80);
       setTimeout(resizePanes, 350);
     }
@@ -143,15 +173,62 @@
 
   function setSplit(mode) {
     if (poppedOut) closePopoutWindow();
-    if (splitMode === mode) {
+    if (splitMode === mode && dockPair && dockPair.first === 'workspace' && dockPair.second === 'world') {
       splitMode = null;
+      dockPair = null;
     } else {
       splitMode = mode;
+      dockPair = { first: 'workspace', second: 'world' };
     }
     save();
     applyLayout();
     if (!splitMode && window.ViewTabs) {
       window.ViewTabs.showExclusive('workspace');
+    }
+  }
+
+  function dockView(view, edge) {
+    var other = 'workspace';
+    if (dockPair && splitMode) {
+      other = dockPair.first === view ? dockPair.second : dockPair.first;
+    } else if (window.ViewTabs && window.ViewTabs.getMode) {
+      var mode = window.ViewTabs.getMode();
+      if (mode === 'world' || mode === 'camera' || mode === 'workspace') other = mode;
+    }
+    if (!other || other === view) other = view === 'workspace' ? 'world' : 'workspace';
+    var axis = (edge === 'left' || edge === 'right') ? 'h' : 'v';
+    if (edge === 'left' || edge === 'top') dockPair = { first: view, second: other };
+    else dockPair = { first: other, second: view };
+    splitMode = axis;
+    if (poppedOut) closePopoutWindow();
+    save();
+    applyLayout();
+  }
+
+  function edgeAt(e) {
+    if (!contentStage) return null;
+    var rect = contentStage.getBoundingClientRect();
+    var x = e.clientX - rect.left;
+    var y = e.clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+    var band = Math.min(110, Math.min(rect.width, rect.height) * 0.3);
+    var hits = [];
+    if (x < band) hits.push({ edge: 'left', d: x });
+    if (rect.width - x < band) hits.push({ edge: 'right', d: rect.width - x });
+    if (y < band) hits.push({ edge: 'top', d: y });
+    if (rect.height - y < band) hits.push({ edge: 'bottom', d: rect.height - y });
+    if (!hits.length) return null;
+    hits.sort(function (a, b) { return a.d - b.d; });
+    return hits[0].edge;
+  }
+
+  function showDockOverlay(edge) {
+    var overlay = document.getElementById('dock-overlay');
+    if (!overlay) return;
+    overlay.hidden = !edge;
+    var zones = overlay.querySelectorAll('.dock-zone');
+    for (var i = 0; i < zones.length; i++) {
+      zones[i].classList.toggle('active', zones[i].dataset.edge === edge);
     }
   }
 
@@ -429,29 +506,41 @@
     var viewTabs = document.getElementById('view-tabs');
     if (!viewTabs) return;
     var drag = null;
+    var suppressClick = false;
+
+    viewTabs.addEventListener('click', function (e) {
+      if (!suppressClick) return;
+      suppressClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
 
     viewTabs.addEventListener('pointerdown', function (e) {
       if (e.button !== 0) return;
-      var btn = e.target.closest && e.target.closest('.view-tab-btn[data-view="world"]');
-      if (!btn || poppedOut) return;
-      drag = { x: e.clientX, y: e.clientY, moved: false, btn: btn };
+      var btn = e.target.closest && e.target.closest('.view-tab-btn');
+      if (!btn) return;
+      drag = { x: e.clientX, y: e.clientY, moved: false, btn: btn, view: btn.dataset.view };
     });
 
     window.addEventListener('pointermove', function (e) {
       if (!drag) return;
       var dx = e.clientX - drag.x;
       var dy = e.clientY - drag.y;
-      if (dx * dx + dy * dy > 256) {
+      if (dx * dx + dy * dy > 36) {
         drag.moved = true;
         drag.btn.classList.add('tab-dragging');
       }
+      if (!drag.moved) return;
       var outside = e.clientY < 0 || e.clientX < 0 ||
         e.clientX > window.innerWidth || e.clientY > window.innerHeight;
-      if (drag.moved && outside) {
+      if (outside && drag.view === 'world') {
+        showDockOverlay(null);
         drag.btn.classList.remove('tab-dragging');
         drag = null;
         openPopout();
+        return;
       }
+      showDockOverlay(edgeAt(e));
     });
 
     window.addEventListener('pointerup', function (e) {
@@ -459,10 +548,11 @@
       var info = drag;
       info.btn.classList.remove('tab-dragging');
       drag = null;
-      if (!info.moved) return;
-      if (Math.abs(e.clientY - info.y) > 48 || Math.abs(e.clientX - info.x) > 96) {
-        openPopout();
-      }
+      var edge = info.moved ? edgeAt(e) : null;
+      showDockOverlay(null);
+      if (!info.moved || !edge) return;
+      suppressClick = true;
+      dockView(info.view, edge);
     });
   }
 
@@ -539,6 +629,8 @@
 
   window.ViewSplit = {
     isSplit: function () { return !!splitMode && !poppedOut; },
+    isDocked: function () { return !!splitMode && !poppedOut && !!dockPair; },
+    getDock: function () { return dockPair; },
     isPoppedOut: function () { return !!poppedOut; },
     isPopoutWindow: isPopoutWindow,
     getMode: function () { return splitMode; },
@@ -552,8 +644,10 @@
         return true;
       }
       if (splitMode && !poppedOut) {
-        applyLayout();
-        return true;
+        splitMode = null;
+        dockPair = null;
+        save();
+        applySplitStyles();
       }
       return false;
     }
