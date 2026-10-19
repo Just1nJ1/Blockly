@@ -191,6 +191,7 @@
       if (_selectedBlocks.length > 0) {
         if (e.key === 'Delete' || e.key === 'Backspace') {
           e.preventDefault();
+          e.stopPropagation();
           deleteSelectedBlocks(ws);
         }
       }
@@ -198,12 +199,14 @@
       if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
         if (getBlocksToCopy().length > 0) {
           e.preventDefault();
+          e.stopPropagation();
           copySelectedBlocks(ws);
         }
       }
 
       if ((e.metaKey || e.ctrlKey) && e.key === 'v' && _clipboard.length > 0) {
         e.preventDefault();
+        e.stopPropagation();
         pasteBlocks(ws);
       }
 
@@ -222,7 +225,7 @@
       if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         ws.undo(true);
       }
-    });
+    }, true);
 
     // Group drag: use overlay to intercept mouse before Blockly.
     // On drag start: disconnect selected from non-selected, save internal connections.
@@ -880,6 +883,7 @@
   // ── Clipboard ──
 
   var _clipboard = [];  // array of XML strings
+  var _clipboardNext = [];  // clipboard index of the next block, or -1
 
   function isStepMode() {
     var toolbar = document.getElementById('toolbar');
@@ -898,31 +902,80 @@
     if (pasteBtn) pasteBtn.disabled = debug || _clipboard.length === 0;
   }
 
+  function _uniqueBlocks(blocks) {
+    var unique = [];
+    var seen = {};
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      if (!block || block.isDisposed() || seen[block.id]) continue;
+      seen[block.id] = true;
+      unique.push(block);
+    }
+    return unique;
+  }
+
+  function _nestedInSelection(block, idSet) {
+    var parent = block.getSurroundParent ? block.getSurroundParent() : null;
+    while (parent) {
+      if (idSet[parent.id]) return true;
+      parent = parent.getSurroundParent ? parent.getSurroundParent() : null;
+    }
+    return false;
+  }
+
+  function _stripNextAndIds(xml) {
+    var kids = [];
+    for (var i = 0; i < xml.childNodes.length; i++) kids.push(xml.childNodes[i]);
+    for (var k = 0; k < kids.length; k++) {
+      var node = kids[k];
+      if (node.nodeType === 1 && String(node.tagName).toLowerCase() === 'next') {
+        xml.removeChild(node);
+      }
+    }
+    if (xml.removeAttribute) xml.removeAttribute('id');
+    var all = xml.getElementsByTagName('*');
+    for (var n = 0; n < all.length; n++) {
+      if (all[n].removeAttribute) all[n].removeAttribute('id');
+    }
+  }
+
   function copySelectedBlocks(ws) {
     if (isStepMode()) return;
     ws = ws || ((typeof getWorkspace === 'function') ? getWorkspace() : null);
     if (!ws) return;
-    var blocks = getBlocksToCopy();
-    if (!blocks.length) return;
+    var blocks = _uniqueBlocks(getBlocksToCopy());
+    var idSet = {};
+    for (var s = 0; s < blocks.length; s++) idSet[blocks[s].id] = true;
+    var roots = [];
+    for (var r = 0; r < blocks.length; r++) {
+      if (!_nestedInSelection(blocks[r], idSet)) roots.push(blocks[r]);
+    }
+    if (!roots.length) return;
+
+    var indexById = {};
+    for (var u = 0; u < roots.length; u++) indexById[roots[u].id] = u;
 
     _clipboard = [];
-    for (var i = 0; i < blocks.length; i++) {
-      var block = blocks[i];
-      if (!block || block.isDisposed()) continue;
-
-      // Temporarily disconnect the next block so we only copy THIS block
-      // (and its value inputs), not the entire stack below it.
+    _clipboardNext = [];
+    for (var i = 0; i < roots.length; i++) {
+      var block = roots[i];
       var nextBlock = block.getNextBlock();
+      var nextIndex = (nextBlock && idSet[nextBlock.id] && indexById[nextBlock.id] !== undefined)
+        ? indexById[nextBlock.id] : -1;
+      _clipboardNext.push(nextIndex);
+
       var nextConn = block.nextConnection;
+      var disconnected = false;
       if (nextBlock && nextConn && nextConn.targetConnection) {
         nextConn.disconnect();
+        disconnected = true;
       }
 
       var xml = Blockly.Xml.blockToDom(block);
+      _stripNextAndIds(xml);
       _clipboard.push(Blockly.Xml.domToText(xml));
 
-      // Reconnect
-      if (nextBlock && nextConn && nextBlock.previousConnection) {
+      if (disconnected && nextBlock && nextBlock.previousConnection) {
         nextConn.connect(nextBlock.previousConnection);
       }
     }
@@ -953,18 +1006,24 @@
       }
     }
 
-    // Connect blocks in order via next/previous connections
-    for (var k = 1; k < pastedBlocks.length; k++) {
-      var prev = pastedBlocks[k - 1];
-      var curr = pastedBlocks[k];
-      if (prev.nextConnection && curr.previousConnection) {
+    // Restore only the next-links that existed among the copied blocks.
+    var followed = {};
+    for (var k = 0; k < pastedBlocks.length; k++) {
+      var nextIndex = _clipboardNext[k];
+      var prev = pastedBlocks[k];
+      var curr = (nextIndex >= 0) ? pastedBlocks[nextIndex] : null;
+      if (!prev || !curr) continue;
+      if (prev.nextConnection && curr.previousConnection && !curr.previousConnection.isConnected()) {
         prev.nextConnection.connect(curr.previousConnection);
+        followed[nextIndex] = true;
       }
     }
 
-    // Move the first block (the rest follow since they're connected)
-    if (pastedBlocks.length > 0) {
-      pastedBlocks[0].moveBy(offset, offset);
+    var rootN = 0;
+    for (var m = 0; m < pastedBlocks.length; m++) {
+      if (!pastedBlocks[m] || followed[m]) continue;
+      pastedBlocks[m].moveBy(offset, offset + rootN * 24);
+      rootN += 1;
     }
 
     Blockly.Events.enable();
