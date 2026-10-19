@@ -1,157 +1,80 @@
 /**
- * In-app Camera pane. Uses the camera extension backend.
- * The preview is one MJPEG stream, not a new JPEG request every frame.
+ * Camera pane shows frames sent by the preview block, one cell per slot.
  */
 (function () {
   var started = false;
-  var activeId = null;
-  var pumping = false;
+  var timer = null;
+  var pollToken = 0;
 
   function base() {
     var port = '5080';
     if (typeof getServerUrl === 'function') {
-      var url = getServerUrl();
-      var m = String(url).match(/:(\d+)/);
-      if (m) port = m[1];
+      var match = String(getServerUrl()).match(/:(\d+)/);
+      if (match) port = match[1];
     }
     return 'http://127.0.0.1:' + port + '/ext/camera';
   }
 
-  function els() {
-    return {
-      select: document.getElementById('camera-select'),
-      status: document.getElementById('camera-status'),
-      frame: document.getElementById('camera-stream'),
-      empty: document.getElementById('camera-empty')
-    };
-  }
-
-  function setStatus(text) {
-    var status = els().status;
-    if (status) status.textContent = text;
-  }
-
-  function showFrame(on) {
-    var ui = els();
-    if (ui.frame) ui.frame.style.display = on ? 'block' : 'none';
-    if (ui.empty) ui.empty.style.display = on ? 'none' : 'block';
-  }
-
-  function ensureStream() {
-    var frame = els().frame;
-    if (!frame || activeId === null || activeId === undefined) {
-      if (frame) frame.removeAttribute('src');
-      showFrame(false);
+  function render(frames) {
+    var grid = document.getElementById('camera-preview-grid');
+    var empty = document.getElementById('camera-empty');
+    if (!grid) return;
+    if (!frames || !frames.length) {
+      grid.innerHTML = '';
+      if (empty) empty.style.display = '';
       return;
     }
-    if (!pumping) pump();
-  }
-
-  // One complete JPEG per request. A multipart stream never finishes
-  // through the extension proxy, so the image element stays broken.
-  function pump() {
-    if (!started || activeId === null || activeId === undefined) {
-      pumping = false;
-      return;
-    }
-    pumping = true;
-    var loader = new Image();
-    loader.onload = function () {
-      var frame = els().frame;
-      if (frame) frame.src = loader.src;
-      showFrame(true);
-      if (started && activeId !== null && activeId !== undefined) pump();
-      else pumping = false;
-    };
-    loader.onerror = function () {
-      if (started) setTimeout(pump, 120);
-      else pumping = false;
-    };
-    loader.src = base() + '/frame?t=' + Date.now();
-  }
-
-  function refreshList() {
-    var select = els().select;
-    if (!select) return;
-    fetch(base() + '/cameras').then(function (r) { return r.json(); }).then(function (data) {
-      if (!data || !data.success) return;
-      var previous = select.value;
-      select.innerHTML = '';
-      (data.cameras || []).forEach(function (cam) {
-        var opt = document.createElement('option');
-        opt.value = String(cam.id);
-        opt.textContent = cam.name + (cam.connected ? ' (connected)' : '');
-        select.appendChild(opt);
-      });
-      activeId = data.active;
-      if (activeId !== null && activeId !== undefined) {
-        select.value = String(activeId);
-        setStatus(select.options[select.selectedIndex]
-          ? select.options[select.selectedIndex].textContent
-          : 'Camera ' + activeId);
-      } else if (previous) {
-        select.value = previous;
-        setStatus('No camera connected');
-      } else {
-        setStatus(select.options.length ? 'No camera connected' : 'No cameras found');
+    if (empty) empty.style.display = 'none';
+    var seen = {};
+    frames.forEach(function (frame) {
+      var slot = String(frame.slot);
+      seen[slot] = true;
+      var cell = grid.querySelector('[data-slot="' + slot + '"]');
+      if (!cell) {
+        cell = document.createElement('div');
+        cell.className = 'camera-slot';
+        cell.dataset.slot = slot;
+        cell.innerHTML = '<span></span><img alt="">';
+        grid.appendChild(cell);
       }
-      ensureStream();
-    }).catch(function () {
-      setStatus('Camera extension is not running');
-      showFrame(false);
+      cell.querySelector('span').textContent = 'Slot ' + slot;
+      var img = cell.querySelector('img');
+      var src = 'data:image/jpeg;base64,' + frame.image;
+      if (img.getAttribute('data-src') !== src) {
+        img.setAttribute('data-src', src);
+        img.src = src;
+      }
     });
+    var cells = grid.querySelectorAll('.camera-slot');
+    for (var i = 0; i < cells.length; i++) {
+      if (!seen[cells[i].dataset.slot]) cells[i].remove();
+    }
   }
 
-  function bind() {
-    var connect = document.getElementById('camera-connect');
-    var disconnect = document.getElementById('camera-disconnect');
-    var select = document.getElementById('camera-select');
-    if (connect && !connect.dataset.bound) {
-      connect.dataset.bound = '1';
-      connect.addEventListener('click', function () {
-        fetch(base() + '/connect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: Number(select.value) })
-        }).then(function (r) { return r.json(); }).then(function (data) {
-          if (data && !data.success) setStatus(data.error || 'Connect failed');
-          refreshList();
-        }).catch(function () { setStatus('Connect failed'); });
-      });
-    }
-    if (disconnect && !disconnect.dataset.bound) {
-      disconnect.dataset.bound = '1';
-      disconnect.addEventListener('click', function () {
-        fetch(base() + '/disconnect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: Number(select.value) })
-        }).then(function () { refreshList(); });
-      });
-    }
+  function poll() {
+    if (!started) return;
+    var token = ++pollToken;
+    fetch(base() + '/previews')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!started || token !== pollToken) return;
+        if (data && data.success) render(data.frames || []);
+      })
+      .catch(function () { /* backend not up */ });
   }
 
   function start() {
-    bind();
     started = true;
-    if (typeof ensureExtensionPermissions === 'function') {
-      ensureExtensionPermissions('camera').then(function () { refreshList(); });
-    } else {
-      refreshList();
-    }
-    if (!start._timer) {
-      start._timer = setInterval(function () {
-        if (started) refreshList();
-      }, 2000);
-    }
+    poll();
+    if (!timer) timer = setInterval(poll, 300);
   }
 
   function stop() {
     started = false;
-    pumping = false;
-    var frame = els().frame;
-    if (frame) frame.removeAttribute('src');
-    showFrame(false);
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
   }
 
   window.CameraView = { start: start, stop: stop };
