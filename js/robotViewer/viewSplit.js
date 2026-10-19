@@ -29,12 +29,21 @@
   var dragResizeTimer = null;
   var channel = null;
 
-  function isPopoutWindow() {
+  var detached = {};
+  var detachedWorkspaceXml = '';
+
+  function popoutViewName() {
     try {
-      return new URLSearchParams(location.search).get('worldPopout') === '1';
-    } catch (e) {
-      return /worldPopout=1/.test(location.search || '');
-    }
+      var q = new URLSearchParams(location.search);
+      if (q.get('viewPopout')) return q.get('viewPopout');
+      if (q.get('worldPopout') === '1') return 'world';
+    } catch (e) { /* ignore */ }
+    if (/(?:^|[?&])worldPopout=1(?:&|$)/.test(location.search || '')) return 'world';
+    return null;
+  }
+
+  function isPopoutWindow() {
+    return !!popoutViewName();
   }
 
   function loadSaved() {
@@ -54,7 +63,26 @@
           { views: ['world', 'camera'], active: 'world' }
         ];
       }
+      ensureViewsPresent();
     } catch (e) { /* ignore */ }
+  }
+
+  function ensureViewsPresent() {
+    if (!paneGroups.length || !paneGroups[0] || !paneGroups[0].views) {
+      paneGroups = [{ views: [], active: null }];
+    }
+    var present = {};
+    for (var i = 0; i < paneGroups.length; i++) {
+      var views = paneGroups[i].views || [];
+      paneGroups[i].views = views;
+      for (var j = 0; j < views.length; j++) present[views[j]] = true;
+    }
+    for (var k = 0; k < ALL_VIEWS.length; k++) {
+      var view = ALL_VIEWS[k];
+      if (detached[view] || present[view]) continue;
+      paneGroups[0].views.push(view);
+      if (!paneGroups[0].active) paneGroups[0].active = view;
+    }
   }
 
   function save() {
@@ -149,8 +177,9 @@
 
   function layoutDockPanes() {
     if (isPopoutWindow() || !contentStage) return;
+    ensureViewsPresent();
     ensurePaneDom();
-    var two = !!(splitMode && !poppedOut && paneGroups.length > 1);
+    var two = !!(splitMode && paneGroups.length > 1);
     var pane0 = document.getElementById('pane-0');
     var pane1 = document.getElementById('pane-1');
     if (pane0) {
@@ -200,14 +229,20 @@
         shown[name] = shown[name] || on;
       }
     }
+    for (var hidden = 0; hidden < ALL_VIEWS.length; hidden++) {
+      var hiddenName = ALL_VIEWS[hidden];
+      if (shown[hiddenName]) continue;
+      var hiddenEl = paneEl(hiddenName);
+      if (!hiddenEl) continue;
+      hiddenEl.style.display = 'none';
+      hiddenEl.classList.add('hidden');
+      if (hiddenName === 'world') hiddenEl.classList.remove('visible');
+    }
     if (window.ViewTabs && window.ViewTabs.showWorldSurface) {
       if (shown.world) window.ViewTabs.showWorldSurface();
       else window.ViewTabs.hideWorldSurface();
     }
-    if (window.CameraView) {
-      if (shown.camera) window.CameraView.start();
-      else window.CameraView.stop();
-    }
+    if (shown.camera && window.CameraView) window.CameraView.start();
     if (shown.workspace && window.ViewTabs && window.ViewTabs.resizeBlockly) {
       window.ViewTabs.resizeBlockly();
     }
@@ -226,11 +261,7 @@
       window.ViewTabs.showExclusive('world');
       return;
     }
-    if (poppedOut) {
-      window.ViewTabs.showExclusive('workspace');
-      return;
-    }
-    if (!isPopoutWindow() && !poppedOut) {
+    if (!isPopoutWindow()) {
       layoutDockPanes();
       setTimeout(resizePanes, 80);
       setTimeout(resizePanes, 350);
@@ -259,6 +290,48 @@
         { views: ['world', 'camera'], active: 'world' }
       ];
     }
+    save();
+    applyLayout();
+  }
+
+  function findPane(view) {
+    for (var i = 0; i < paneGroups.length; i++) {
+      if (paneGroups[i].views.indexOf(view) >= 0) return i;
+    }
+    return -1;
+  }
+
+  function placeView(view, destIndex, insertAt) {
+    var src = findPane(view);
+    if (src < 0 || !paneGroups[src]) return;
+    var srcGroup = paneGroups[src];
+    var from = srcGroup.views.indexOf(view);
+    if (src === destIndex) {
+      var to = insertAt;
+      if (to > from) to -= 1;
+      if (to < 0) to = 0;
+      if (to > srcGroup.views.length - 1) to = srcGroup.views.length - 1;
+      if (to !== from) {
+        srcGroup.views.splice(from, 1);
+        srcGroup.views.splice(to, 0, view);
+      }
+      srcGroup.active = view;
+      save();
+      applyLayout();
+      return;
+    }
+    srcGroup.views.splice(from, 1);
+    if (srcGroup.active === view) srcGroup.active = srcGroup.views[0] || null;
+    if (!srcGroup.views.length) {
+      paneGroups.splice(src, 1);
+      if (destIndex > src) destIndex -= 1;
+      if (paneGroups.length < 2) splitMode = null;
+    }
+    var dest = paneGroups[destIndex];
+    if (!dest) return;
+    if (insertAt < 0 || insertAt > dest.views.length) insertAt = dest.views.length;
+    dest.views.splice(insertAt, 0, view);
+    dest.active = view;
     save();
     applyLayout();
   }
@@ -319,6 +392,59 @@
     for (var i = 0; i < zones.length; i++) {
       zones[i].classList.toggle('active', zones[i].dataset.edge === edge);
     }
+  }
+
+  function clearTabDrop() {
+    var bars = document.querySelectorAll('.pane-tabbar');
+    for (var i = 0; i < bars.length; i++) {
+      bars[i].classList.remove('drop-target', 'drop-end');
+    }
+    var btns = document.querySelectorAll('.pane-tabbar .view-tab-btn');
+    for (var j = 0; j < btns.length; j++) btns[j].classList.remove('drop-before');
+  }
+
+  function dropTarget(e) {
+    var el = document.elementFromPoint(e.clientX, e.clientY);
+    var bar = el && el.closest && el.closest('.pane-tabbar');
+    if (bar) {
+      var pane = bar.closest('.view-pane');
+      var index = pane && pane.id === 'pane-1' && splitMode ? 1 : 0;
+      var buttons = bar.querySelectorAll('.view-tab-btn');
+      var insertAt = buttons.length;
+      for (var i = 0; i < buttons.length; i++) {
+        var rect = buttons[i].getBoundingClientRect();
+        if (e.clientX < rect.left + rect.width / 2) {
+          insertAt = i;
+          break;
+        }
+      }
+      return { type: 'tabs', pane: index, index: insertAt };
+    }
+    var edge = edgeAt(e);
+    if (edge) return { type: 'edge', edge: edge };
+    var host = el && el.closest && el.closest('.view-pane');
+    if (host) {
+      var index2 = host.id === 'pane-1' && splitMode ? 1 : 0;
+      var group = paneGroups[index2];
+      return { type: 'tabs', pane: index2, index: group ? group.views.length : 0 };
+    }
+    return null;
+  }
+
+  function showDrop(target) {
+    clearTabDrop();
+    showDockOverlay(null);
+    if (!target) return;
+    if (target.type === 'edge') {
+      showDockOverlay(target.edge);
+      return;
+    }
+    var bar = paneBar(target.pane);
+    if (!bar) return;
+    bar.classList.add('drop-target');
+    var buttons = bar.querySelectorAll('.view-tab-btn');
+    if (target.index < buttons.length) buttons[target.index].classList.add('drop-before');
+    else bar.classList.add('drop-end');
   }
 
   function onSplitterPointerDown(e) {
@@ -412,7 +538,7 @@
       if (typeof orig !== 'function') return;
       WV[name] = function () {
         var result = orig.apply(WV, arguments);
-        if (!isPopoutWindow() && poppedOut) {
+        if (!isPopoutWindow() && detached.world) {
           if (name === 'setJoints') {
             post({ type: 'joints', name: arguments[0], angles: arguments[1] });
           } else {
@@ -445,14 +571,100 @@
         if (msg.type === 'close-popout') {
           window.close();
         }
+        if (msg.type === 'workspace-xml' && msg.from === 'main') {
+          restoreWorkspaceXml(msg.xml);
+        }
+        if (msg.type === 'request-workspace') {
+          post({ type: 'workspace-xml', xml: currentWorkspaceXml(), from: 'popout' });
+        }
       } else if (msg.type === 'control') {
         handleRemoteControl(msg.action);
       } else if (msg.type === 'request-snapshot') {
         sendSnapshotWhenReady(0);
       } else if (msg.type === 'request-state') {
         postControlState();
+      } else if (msg.type === 'request-workspace') {
+        post({ type: 'workspace-xml', xml: detachedWorkspaceXml, from: 'main' });
+      } else if (msg.type === 'workspace-xml' && msg.from === 'popout') {
+        detachedWorkspaceXml = msg.xml || '';
+        if (findPane('workspace') >= 0) restoreWorkspaceXml(detachedWorkspaceXml);
       }
     };
+  }
+
+  function currentWorkspaceXml() {
+    try {
+      var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+      if (!ws || !window.Blockly) return '';
+      return Blockly.Xml.domToText(Blockly.Xml.workspaceToDom(ws));
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function restoreWorkspaceXml(xml) {
+    if (!xml) return;
+    try {
+      var ws = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+      if (!ws || !window.Blockly) return;
+      ws.clear();
+      Blockly.Xml.domToWorkspace(Blockly.Xml.textToDom(xml), ws);
+    } catch (e) { /* ignore */ }
+  }
+
+  function detachView(view) {
+    if (detached[view]) {
+      openViewPopout(view);
+      return;
+    }
+    var src = findPane(view);
+    if (src < 0) return;
+    var group = paneGroups[src];
+    var at = group.views.indexOf(view);
+    if (at >= 0) group.views.splice(at, 1);
+    if (group.active === view) group.active = group.views[0] || null;
+    if (!group.views.length) {
+      paneGroups.splice(src, 1);
+      if (paneGroups.length < 2) splitMode = null;
+    }
+    if (!paneGroups.length) {
+      paneGroups = [{ views: [], active: null }];
+      splitMode = null;
+    }
+    if (view === 'workspace') detachedWorkspaceXml = currentWorkspaceXml();
+    detached[view] = true;
+    save();
+    applyLayout();
+    openViewPopout(view);
+  }
+
+  function restoreView(view) {
+    if (!view || detached[view] === false) return;
+    delete detached[view];
+    if (findPane(view) < 0) {
+      if (!paneGroups.length || !paneGroups[0] || !paneGroups[0].views) {
+        paneGroups = [{ views: [], active: null }];
+      }
+      paneGroups[0].views.push(view);
+      paneGroups[0].active = view;
+    }
+    if (view === 'workspace') restoreWorkspaceXml(detachedWorkspaceXml);
+    save();
+    applyLayout();
+  }
+
+  function openViewPopout(view) {
+    var el = ipc();
+    if (el) {
+      el.invoke('view:open-popout', view).catch(function () {
+        restoreView(view);
+      });
+      return;
+    }
+    var url = location.href.split('#')[0];
+    url += (url.indexOf('?') >= 0 ? '&' : '?') + 'viewPopout=' + encodeURIComponent(view);
+    if (view === 'world') url += '&worldPopout=1';
+    window.open(url, 'studiox-view-' + view, 'width=960,height=720');
   }
 
   function postControlState() {
@@ -525,7 +737,7 @@
     }
     WA._viewSplitProgressHooked = true;
     WA.setOnProgress(function (state) {
-      if (!isPopoutWindow() && poppedOut) {
+      if (!isPopoutWindow() && detached.world) {
         post({ type: 'progress', state: state });
       }
     });
@@ -586,9 +798,9 @@
     sendSnapshotWhenReady(0);
   }
 
-  function onPopoutClosed() {
+  function onPopoutClosed(view) {
     poppedOut = false;
-    applyLayout();
+    restoreView(view || 'world');
   }
 
   function bindWorldTabDrag() {
@@ -626,16 +838,8 @@
         drag.btn.classList.add('tab-dragging');
       }
       if (!drag.moved) return;
-      var outside = e.clientY < 0 || e.clientX < 0 ||
-        e.clientX > window.innerWidth || e.clientY > window.innerHeight;
-      if (outside && drag.view === 'world') {
-        showDockOverlay(null);
-        drag.btn.classList.remove('tab-dragging');
-        drag = null;
-        openPopout();
-        return;
-      }
-      showDockOverlay(edgeAt(e));
+      if (pointerOutside(e)) showDrop(null);
+      else showDrop(dropTarget(e));
     });
 
     window.addEventListener('pointerup', function (e) {
@@ -643,12 +847,23 @@
       var info = drag;
       info.btn.classList.remove('tab-dragging');
       drag = null;
-      var edge = info.moved ? edgeAt(e) : null;
-      showDockOverlay(null);
-      if (!info.moved || !edge) return;
+      showDrop(null);
+      if (!info.moved) return;
       suppressClick = true;
-      dockView(info.view, edge);
+      if (pointerOutside(e)) {
+        detachView(info.view);
+        return;
+      }
+      var target = dropTarget(e);
+      if (!target) return;
+      if (target.type === 'edge') dockView(info.view, target.edge);
+      else placeView(info.view, target.pane, target.index);
     });
+  }
+
+  function pointerOutside(e) {
+    return e.clientX <= 0 || e.clientY <= 0 ||
+      e.clientX >= window.innerWidth - 1 || e.clientY >= window.innerHeight - 1;
   }
 
   function interceptPopoutPlayback() {
@@ -668,7 +883,9 @@
   }
 
   function bootPopoutWindow() {
-    document.body.classList.add('world-popout');
+    var which = popoutViewName() || 'world';
+    document.body.classList.add('view-popout', 'view-popout-' + which);
+    if (which === 'world') document.body.classList.add('world-popout');
     var bv = document.getElementById('blockly-view');
     var cv = document.getElementById('command-view');
     if (bv) bv.classList.add('active');
@@ -680,10 +897,22 @@
     interceptPopoutPlayback();
     ensurePopoutProgressBar();
     setTimeout(function () {
-      if (window.ViewTabs) window.ViewTabs.showExclusive('world');
-      post({ type: 'request-snapshot' });
+      if (window.ViewTabs && window.ViewTabs.showExclusive) {
+        var mode = which === 'workspace' ? 'workspace' : (which === 'camera' ? 'camera' : 'world');
+        window.ViewTabs.showExclusive(mode);
+      }
+      if (which === 'workspace') post({ type: 'request-workspace' });
+      else post({ type: 'request-snapshot' });
     }, 400);
-    setTimeout(function () { post({ type: 'request-snapshot' }); }, 1200);
+    setTimeout(function () {
+      if (which === 'workspace') post({ type: 'request-workspace' });
+      else post({ type: 'request-snapshot' });
+    }, 1200);
+    if (which === 'workspace') {
+      window.addEventListener('beforeunload', function () {
+        post({ type: 'workspace-xml', xml: currentWorkspaceXml(), from: 'popout' });
+      });
+    }
   }
 
   function init() {
@@ -703,15 +932,12 @@
       window.addEventListener('pointermove', onSplitterPointerMove);
       window.addEventListener('pointerup', onSplitterPointerUp);
     }
-    if (splitHBtn) splitHBtn.addEventListener('click', function () { setSplit('h'); });
-    if (splitVBtn) splitVBtn.addEventListener('click', function () { setSplit('v'); });
-    if (popoutBtn) popoutBtn.addEventListener('click', openPopout);
-
     bindWorldTabDrag();
 
     var el = ipc();
     if (el) {
-      el.on('world:popout-closed', onPopoutClosed);
+      el.on('world:popout-closed', function () { onPopoutClosed('world'); });
+      el.on('view:popout-closed', function (event, view) { onPopoutClosed(view); });
     }
     window.addEventListener('storage', function () { /* ignore */ });
 
