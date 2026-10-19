@@ -476,8 +476,18 @@ function _installExtension(mode) {
     var listEl = document.getElementById('ext-list-container');
     if (listEl) _fetchExtensionList(listEl);
 
-    if (result.requirements && result.requirements.trim()) {
-      _setupExtensionEnv(result.name, result.requirements);
+    if (result.missingDepends && result.missingDepends.length) {
+      alert(
+        'Extension "' + result.name + '" requires: ' +
+        result.missingDepends.join(', ') +
+        '.\nInstall those extensions before using it.'
+      );
+    }
+    var depReqs = result.dependencyRequirements || {};
+    var depNames = Object.keys(depReqs);
+    var hasOwnReqs = result.requirements && String(result.requirements).trim();
+    if (hasOwnReqs || depNames.length) {
+      _setupExtensionEnv(result.name, result.requirements || '', depReqs);
     } else {
       alert('Extension "' + result.name + '" installed.\nRestart the app to load it.');
     }
@@ -490,7 +500,7 @@ function _installExtension(mode) {
  * After installing an extension that has requirements.txt, show a
  * full-screen loading overlay while creating the venv and installing deps.
  */
-function _setupExtensionEnv(extName, requirementsText) {
+function _setupExtensionEnv(extName, requirementsText, dependencyRequirements) {
   // Build modal overlay — start with confirmation prompt
   var overlay = document.createElement('div');
   overlay.id = 'ext-setup-overlay';
@@ -501,9 +511,21 @@ function _setupExtensionEnv(extName, requirementsText) {
   dialog.className = 'ctrl-modal-dialog';
   dialog.style.width = '380px';
 
-  var pkgPreview = requirementsText.trim().split('\n')
-    .filter(function(l) { return l.trim() && l.trim()[0] !== '#'; })
-    .join(', ');
+  var depMap = dependencyRequirements || {};
+  var previewLines = [];
+  Object.keys(depMap).forEach(function (depName) {
+    String(depMap[depName] || '').split('\n').forEach(function (line) {
+      var trimmed = line.trim();
+      if (trimmed && trimmed.charAt(0) !== '#') {
+        previewLines.push(depName + ': ' + trimmed);
+      }
+    });
+  });
+  String(requirementsText || '').split('\n').forEach(function (line) {
+    var trimmed = line.trim();
+    if (trimmed && trimmed.charAt(0) !== '#') previewLines.push(trimmed);
+  });
+  var pkgPreview = previewLines.join(', ');
 
   dialog.innerHTML =
     '<div style="padding:24px;">' +
@@ -577,45 +599,72 @@ function _setupExtensionEnv(extName, requirementsText) {
 
     appendLog('Creating virtual environment...');
 
-    // Step 1: Create the environment
-    fetch(serverUrl + '/env/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: extName })
-    })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.success) {
-          showDone('Environment creation failed: ' + (data.error || 'Unknown'), true);
-          return;
-        }
-
-        appendLog('Environment created.');
-
-        // Step 2: Install requirements
-        var pkgs = requirementsText.trim().split('\n')
-          .filter(function(l) { return l.trim() && l.trim()[0] !== '#'; });
-        setStage('Installing packages\u2026', pkgs.join(', '));
-        appendLog('Installing: ' + pkgs.join(', '));
-
-        return fetch(serverUrl + '/env/install-requirements', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ env: extName, requirements: requirementsText })
-        })
-          .then(function(r) { return r.json(); })
-          .then(function(installData) {
-            if (installData.success) {
-              appendLog('All packages installed.');
-              showDone('Extension "' + extName + '" is ready. Restart the app to load it.', false);
-            } else {
-              appendLog('Error: ' + (installData.error || 'Unknown'));
-              showDone('Packages failed: ' + (installData.error || 'Unknown'), true);
-            }
-          });
+    function ensureEnv(name) {
+      return fetch(serverUrl + '/env/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
       })
-      .catch(function(err) {
-        showDone('Setup error: ' + err.message, true);
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.success) {
+            appendLog('Environment created: ' + name);
+            return;
+          }
+          var err = data.error || '';
+          if (err.indexOf('already exists') !== -1) {
+            appendLog('Environment already exists: ' + name);
+            return;
+          }
+          throw new Error(err || 'Could not create environment ' + name);
+        });
+    }
+
+    function installReqs(name, text) {
+      var body = String(text || '').trim();
+      if (!body) return Promise.resolve();
+      var pkgs = body.split('\n').filter(function (l) {
+        return l.trim() && l.trim().charAt(0) !== '#';
+      });
+      setStage('Installing packages\u2026', name + ': ' + pkgs.join(', '));
+      appendLog('Installing into ' + name + ': ' + pkgs.join(', '));
+      return fetch(serverUrl + '/env/install-requirements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ env: name, requirements: body })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (installData) {
+          if (!installData.success) {
+            throw new Error(installData.error || 'Package install failed for ' + name);
+          }
+          appendLog('Packages installed for ' + name + '.');
+        });
+    }
+
+    var chain = Promise.resolve();
+    Object.keys(depMap).forEach(function (depName) {
+      chain = chain.then(function () {
+        setStage('Preparing ' + depName + '\u2026', 'Dependency of ' + extName);
+        return ensureEnv(depName).then(function () {
+          return installReqs(depName, depMap[depName]);
+        });
+      });
+    });
+    chain
+      .then(function () {
+        setStage('Creating environment\u2026', 'Setting up "' + extName + '"');
+        return ensureEnv(extName);
+      })
+      .then(function () {
+        return installReqs(extName, requirementsText);
+      })
+      .then(function () {
+        showDone('Extension "' + extName + '" is ready. Restart the app to load it.', false);
+      })
+      .catch(function (err) {
+        appendLog('Error: ' + (err && err.message ? err.message : err));
+        showDone('Setup error: ' + (err && err.message ? err.message : err), true);
       });
   }
 }

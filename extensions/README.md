@@ -1,8 +1,9 @@
 # WLKATA StudioX Extension Development Guide
 
 Build custom extensions for WLKATA StudioX. Extensions can add new backend
-endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), Blockly workflow
-templates, and default saved functions.
+endpoints (Python/Flask), new frontend tabs (HTML/JS/CSS), their own Blockly
+block groups, workflow templates, default saved functions, and dependencies
+on other extensions.
 
 ---
 
@@ -85,6 +86,8 @@ my-extension/
 │   └── main.py             #   Must export a `blueprint` variable.
 ├── workflows/              # Optional. Blockly workflow template JSON files.
 │   └── my_pipeline.json    #   Listed under contributes.workflows
+├── blocks/                 # Optional. This extension's Blockly block group.
+│   └── blocks.json         #   Listed under contributes.blocks.files
 └── functions/              # Optional. Default saved-function JSON (auto-scanned).
     └── my_helper.json      #   Same schema as workspace functions/*.json
 ```
@@ -108,6 +111,7 @@ extension provides.
 | `version` | string | No | Semver version string. |
 | `description` | string | No | Short description of the extension. |
 | `permissions` | string[] | No | OS media permissions to request when the tab is opened (`camera`, `microphone`). Already-granted permissions are skipped. |
+| `depends` | string[] | No | Other extension names that must be installed. Their Python environments are shared onto this extension's `sys.path`. |
 | `contributes` | object | Yes | What the extension provides (see below). |
 
 ### `contributes.sidebarTab`
@@ -153,6 +157,65 @@ Blockly even if the user never opens your tab.
 See [Blockly Workflow Templates](#blockly-workflow-templates) for the full
 schema and examples. Core docs also live in `workflows/README.md` in the app
 repo.
+
+### `depends`
+
+List other extensions this one requires:
+
+```json
+"depends": ["camera"]
+```
+
+StudioX does not load the extension until every dependency is installed.
+Each dependency keeps its own virtual environment. When this extension's
+backend starts, those environments' `site-packages` directories are added
+to `sys.path` (after this extension's own packages). Shared libraries such
+as OpenCV stay in the dependency's `requirements.txt`. This extension's
+`requirements.txt` lists only the packages it owns (for example
+`ultralytics`).
+
+Installing this extension also offers to create the dependency environments
+and install their requirements first.
+
+### `contributes.blocks`
+
+Adds a toolbox category that belongs to this extension. Blocks load when
+the extension is discovered, without opening its sidebar tab.
+
+```json
+"blocks": {
+  "category": "Camera",
+  "colour": "#4B8BBE",
+  "files": ["blocks/blocks.json"]
+}
+```
+
+`blocks.json` is an array of [Blockly JSON block definitions](https://developers.google.com/blockly/guides/create-custom-blocks/define/json-definitions).
+Two extra keys are stripped before the block is defined:
+
+| Key | Meaning |
+|-----|---------|
+| `python` | Code template. `{FIELD}` inserts that field or input. Field text is quoted. `field_number` stays numeric. |
+| `pythonImports` | Import lines added once, such as `"import cv2"`. |
+
+Statement blocks (with `previousStatement` / `nextStatement`) should end the template with a newline. Blocks with `output` generate a value expression.
+
+```json
+[
+  {
+    "type": "camera_open",
+    "message0": "open camera %1",
+    "args0": [{ "type": "field_number", "name": "INDEX", "value": 0, "min": 0 }],
+    "previousStatement": null,
+    "nextStatement": null,
+    "colour": 200,
+    "pythonImports": ["import cv2"],
+    "python": "cap = cv2.VideoCapture({INDEX})\n"
+  }
+]
+```
+
+Block `type` values must be unique across the app.
 
 ### Default saved functions (`functions/`)
 

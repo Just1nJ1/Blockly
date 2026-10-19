@@ -420,5 +420,12 @@ function updateToolboxDisplay() {
     });
   }
 
+  if (typeof extensionBlockCategories === 'function') {
+    var extCats = extensionBlockCategories();
+    for (var ei = 0; ei < extCats.length; ei++) {
+      toolbox.contents.push(extCats[ei]);
+    }
+  }
+
   workspace.updateToolbox(toolbox);
 }

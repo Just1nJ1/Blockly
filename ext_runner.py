@@ -156,6 +156,8 @@ def main():
                         help='Main StudioX server URL')
     parser.add_argument('--server-root', default='',
                         help='Project root (added to sys.path for server.* imports)')
+    parser.add_argument('--dep-site', action='append', default=[],
+                        help='site-packages from a dependency extension environment')
     args = parser.parse_args()
 
     # Add project root so `from server.serial_manager import ...` resolves
@@ -185,6 +187,12 @@ def main():
     if not os.path.isfile(main_path):
         print(f'[ext_runner] Backend not found: {main_path}', flush=True)
         sys.exit(1)
+
+    # Dependency libraries (for example OpenCV from the camera extension)
+    # are appended so this extension's own site-packages win on name clashes.
+    for site in args.dep_site or []:
+        if site and site not in sys.path:
+            sys.path.append(site)
 
     # Add backend dir to sys.path for sibling imports
     backend_dir = os.path.dirname(main_path)

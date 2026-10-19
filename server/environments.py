@@ -4,8 +4,10 @@ Environment manager for StudioX.
 Creates and manages Python virtual environments under
 ~/.wlkata-studiox/environments/ for:
 
-  * **Extensions** — one venv per extension name (isolated; no cross-extension
-    package version conflicts). Base packages flask/flask-cors for backends.
+  * **Extensions** — one venv per extension name. An extension that lists
+    ``depends`` does not reinstall those libraries; at runtime the dependency
+    environment's site-packages are added to its ``sys.path``. Base packages
+    flask/flask-cors for backends.
   * **Blockly** — a single reserved env named ``blockly`` used when the user
     runs Blockly-generated code (import blocks). Packages installed there are
     visible to ``import`` during Run / Debug.

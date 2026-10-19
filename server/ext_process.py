@@ -56,12 +56,14 @@ def _find_free_port():
         return s.getsockname()[1]
 
 
-def register_ext(name, ext_dir, env_python, main_server_url):
+def register_ext(name, ext_dir, env_python, main_server_url,
+                 dep_site_packages=None):
     """Store launch config for lazy startup (called during load_extensions)."""
     _launch_configs[name] = {
         'ext_dir': ext_dir,
         'env_python': env_python,
         'main_server_url': main_server_url,
+        'dep_site_packages': list(dep_site_packages or []),
     }
     _start_locks[name] = threading.Lock()
 
@@ -111,7 +113,8 @@ def _drain_stdout(proc, buf):
         pass
 
 
-def _start_and_wait(name, ext_dir, env_python, main_server_url):
+def _start_and_wait(name, ext_dir, env_python, main_server_url,
+                    dep_site_packages=None):
     """Spawn the subprocess and block until it responds to /health."""
     port = _find_free_port()
 
@@ -128,6 +131,8 @@ def _start_and_wait(name, ext_dir, env_python, main_server_url):
         '--main-server', main_server_url,
         '--server-root', _SERVER_ROOT,
     ]
+    for site in dep_site_packages or []:
+        cmd.extend(['--dep-site', site])
 
     print(f'[ext_process] Spawning {name}: {" ".join(cmd)}', flush=True)
 

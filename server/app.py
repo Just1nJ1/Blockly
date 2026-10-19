@@ -1930,6 +1930,5 @@ def create_app(extensions_dirs=None, host='127.0.0.1', port=5080):
     if extensions_dirs:
         main_server_url = f'http://{host}:{port}'
         from .extensions import load_extensions
-        for ext_dir in extensions_dirs:
-            load_extensions(app, ext_dir, main_server_url=main_server_url)
+        load_extensions(app, extensions_dirs, main_server_url=main_server_url)
     return app

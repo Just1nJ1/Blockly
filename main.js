@@ -221,6 +221,46 @@ function resetRuntimeOnNewInstall() {
 }
 
 /**
+ * Install result plus dependency requirements already on disk.
+ * Missing dependency extensions are listed so the UI can refuse to
+ * treat the new extension as usable.
+ */
+function _extensionInstallPayload(dest, manifest) {
+  const reqPath = path.join(dest, 'requirements.txt');
+  const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
+  const rawDepends = manifest.depends || manifest.dependencies || [];
+  const depends = Array.isArray(rawDepends)
+    ? rawDepends.map((name) => String(name || '').trim()).filter(Boolean)
+    : [];
+  const discovered = discoverExtensions();
+  const byName = new Map();
+  for (const ext of discovered) {
+    if (ext.manifest && ext.manifest.name) byName.set(ext.manifest.name, ext);
+  }
+  const missingDepends = [];
+  const dependencyRequirements = {};
+  for (const dep of depends) {
+    const found = byName.get(dep);
+    if (!found) {
+      missingDepends.push(dep);
+      continue;
+    }
+    const depReq = path.join(found.path, 'requirements.txt');
+    dependencyRequirements[dep] = fs.existsSync(depReq)
+      ? fs.readFileSync(depReq, 'utf-8')
+      : '';
+  }
+  return {
+    success: true,
+    name: manifest.name || path.basename(dest),
+    requirements: requirements,
+    depends: depends,
+    missingDepends: missingDepends,
+    dependencyRequirements: dependencyRequirements,
+  };
+}
+
+/**
  * Discover extensions in the extensions directories.
  * Checks user dir, dev dir, and packaged app resources.
  */
@@ -1207,9 +1247,7 @@ ipcMain.handle('extensions:installFolder', async () => {
   try {
     _copyDirSync(srcDir, dest);
     log('Extension installed from folder: ' + name);
-    const reqPath = path.join(dest, 'requirements.txt');
-    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : null;
-    return { success: true, name: name, requirements: requirements };
+    return _extensionInstallPayload(dest, manifest);
   } catch (e) {
     return { success: false, error: 'Copy failed: ' + e.message };
   }
@@ -1270,9 +1308,7 @@ ipcMain.handle('extensions:installZip', async () => {
     }
 
     log('Extension installed from zip: ' + name);
-    const reqPath = path.join(dest, 'requirements.txt');
-    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : null;
-    return { success: true, name: name, requirements: requirements };
+    return _extensionInstallPayload(dest, manifest);
   } catch (e) {
     if (e.code === 'MODULE_NOT_FOUND') {
       return { success: false, error: 'Zip support requires the adm-zip package. Install it with: npm install adm-zip' };
