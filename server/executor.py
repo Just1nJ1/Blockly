@@ -21,9 +21,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .serial_manager import SerialManager
 
 
-class _AbortExecution(Exception):
-    """Raised when execution is aborted via emergency stop."""
-    pass
+class _AbortExecution(BaseException):
+    """Raised to stop a running program.
+
+    A BaseException so ``except Exception`` cannot treat Stop as a failed
+    camera frame. Catching it used to disable tracing and leave the loop running.
+    """
 
 
 class _LiveStream(io.TextIOBase):
@@ -153,6 +156,12 @@ class CodeExecutor:
     _sessions: Dict[str, InteractiveSession] = {}
     _sessions_lock = threading.Lock()
     _SESSION_TTL_S = 600
+
+    @classmethod
+    def raise_if_aborted(cls):
+        """Raise if Stop was requested. Safe to call from traced program code."""
+        if cls._abort_event.is_set():
+            raise _AbortExecution("Execution aborted by emergency stop")
 
     @classmethod
     def abort(cls):
@@ -353,6 +362,29 @@ class CodeExecutor:
         safe_globals["__builtins__"]["__import__"] = _patched_import
 
     @staticmethod
+    def _prepare_cv_proxy(safe_globals: dict) -> None:
+        """Make ``import cv2`` open cameras through the camera extension."""
+        from .camera_client import ManagedCapture, patch_cv2_module
+
+        prev = safe_globals["__builtins__"].get("__import__", __import__)
+
+        def _patched_import(name, *args, **kwargs):
+            mod = prev(name, *args, **kwargs)
+            if name != "cv2":
+                return mod
+            return patch_cv2_module(mod, ManagedCapture)
+
+        safe_globals["__builtins__"]["__import__"] = _patched_import
+
+    @staticmethod
+    def _release_cameras() -> None:
+        try:
+            from .camera_client import release_program_captures
+            release_program_captures()
+        except Exception:
+            pass
+
+    @staticmethod
     def _release_serial() -> None:
         try:
             mgr = SerialManager.get_instance()
@@ -418,13 +450,13 @@ class CodeExecutor:
             from .preview_hub import submit as _preview_submit
             safe_globals["__studiox_preview"] = _preview_submit
             CodeExecutor._prepare_serial_proxy(safe_globals)
+            CodeExecutor._prepare_cv_proxy(safe_globals)
 
             try:
                 CodeExecutor._abort_event.clear()
 
                 def _abort_trace(frame, event, arg):
-                    if CodeExecutor._abort_event.is_set():
-                        raise _AbortExecution("Execution aborted by emergency stop")
+                    CodeExecutor.raise_if_aborted()
                     return _abort_trace
 
                 compiled = compile(code, "<blockly>", "exec")
@@ -468,6 +500,7 @@ class CodeExecutor:
             sys.stderr = old_stderr
             CodeExecutor._cleanup_blockly_packages(blockly_site)
             CodeExecutor._release_serial()
+            CodeExecutor._release_cameras()
 
     @classmethod
     def start_interactive(cls, code: str) -> dict:
@@ -514,10 +547,10 @@ class CodeExecutor:
                 from .preview_hub import submit as _preview_submit
                 safe_globals["__studiox_preview"] = _preview_submit
                 CodeExecutor._prepare_serial_proxy(safe_globals)
+                CodeExecutor._prepare_cv_proxy(safe_globals)
 
                 def _abort_trace(frame, event, arg):
-                    if CodeExecutor._abort_event.is_set():
-                        raise _AbortExecution("Execution aborted by emergency stop")
+                    CodeExecutor.raise_if_aborted()
                     return _abort_trace
 
                 compiled = compile(code, "<blockly>", "exec")
@@ -563,6 +596,7 @@ class CodeExecutor:
                 sys.stderr = old_stderr
                 CodeExecutor._cleanup_blockly_packages(blockly_site)
                 CodeExecutor._release_serial()
+                CodeExecutor._release_cameras()
 
         t = threading.Thread(target=runner, name=f"exec-{session_id}", daemon=True)
         t.start()

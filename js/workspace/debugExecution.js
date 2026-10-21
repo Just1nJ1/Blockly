@@ -40,6 +40,11 @@ async function debugStart() {
     return;
   }
 
+  if (pythonCode.indexOf('__studiox_preview') !== -1 &&
+      window.CameraView && typeof window.CameraView.arm === 'function') {
+    window.CameraView.arm();
+  }
+
   console.log('[Debug] Line-to-block map:', _debugLineToBlock);
 
   // Clear previous output

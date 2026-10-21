@@ -117,7 +117,7 @@ def _collect_orphan_deps(pip, env, initial_deps):
 
 
 def _find_uv():
-    """Locate the uv binary (installed via pip as a project dependency)."""
+    """Locate uv next to this interpreter, or anywhere on PATH."""
     base = os.path.dirname(sys.executable)
     for candidate in [
         os.path.join(base, 'uv'),
@@ -125,9 +125,9 @@ def _find_uv():
         os.path.join(base, 'Scripts', 'uv.exe'),
         os.path.join(base, 'Scripts', 'uv'),
     ]:
-        if os.path.isfile(candidate):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    return None
+    return shutil.which('uv')
 
 
 def _ensure_base_dir():
@@ -268,15 +268,17 @@ def create_environment(name, python_version=None, install_base_packages=True):
         return {'success': False, 'error': f'Environment "{name}" already exists'}
 
     uv = _find_uv()
-    if not uv:
+    # An explicit Python version needs uv to download it. The default
+    # interpreter can still create a venv with the standard library.
+    if python_version and not uv:
         return {'success': False,
-                'error': 'uv not found. It should be installed as a project dependency.'}
+                'error': 'uv was not found, so another Python version cannot be downloaded. '
+                         'Install uv, or leave the Python version empty to use the app interpreter.'}
 
-    cmd = [uv, 'venv', '--seed']
-    # Default: the embedded interpreter running this server. An explicit
-    # python_version (Settings UI) still lets uv fetch that version instead.
-    cmd += ['--python', python_version or sys.executable]
-    cmd.append(env_dir)
+    if uv:
+        cmd = [uv, 'venv', '--seed', '--python', python_version or sys.executable, env_dir]
+    else:
+        cmd = [sys.executable, '-m', 'venv', env_dir]
 
     env = _clean_env()
     try:

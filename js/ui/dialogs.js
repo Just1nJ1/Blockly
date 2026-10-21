@@ -430,6 +430,12 @@ function _fetchExtensionList(listEl) {
           descSpan.textContent = ext.description;
           tdName.appendChild(descSpan);
         }
+        if (ext.source && ext.source !== 'user') {
+          var srcSpan = document.createElement('div');
+          srcSpan.style.cssText = 'font-size:10px;font-weight:normal;color:var(--text-muted);margin-top:1px;';
+          srcSpan.textContent = ext.source === 'bundled' ? 'Bundled with the app' : 'Project extensions folder';
+          tdName.appendChild(srcSpan);
+        }
 
         var tdVer = document.createElement('td');
         tdVer.className = 'pkg-col-ver';
@@ -437,16 +443,28 @@ function _fetchExtensionList(listEl) {
 
         var tdAct = document.createElement('td');
         tdAct.className = 'pkg-col-act';
-        var removeBtn = document.createElement('button');
-        removeBtn.className = 'app-settings-pkg-remove-btn';
-        removeBtn.title = 'Remove ' + ext.displayName;
-        removeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>';
-        removeBtn.addEventListener('click', function() {
-          if (confirm('Remove extension "' + ext.displayName + '"?\nRestart the app to apply changes.')) {
-            _removeExtension(ext.name, listEl);
-          }
-        });
-        tdAct.appendChild(removeBtn);
+        if (ext.requirements && String(ext.requirements).trim()) {
+          var installPkgs = document.createElement('button');
+          installPkgs.className = 'app-settings-btn';
+          installPkgs.style.marginRight = '6px';
+          installPkgs.textContent = 'Install packages';
+          installPkgs.addEventListener('click', function() {
+            _setupExtensionEnv(ext.name, ext.requirements, {});
+          });
+          tdAct.appendChild(installPkgs);
+        }
+        if (ext.removable) {
+          var removeBtn = document.createElement('button');
+          removeBtn.className = 'app-settings-pkg-remove-btn';
+          removeBtn.title = 'Remove ' + ext.displayName;
+          removeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>';
+          removeBtn.addEventListener('click', function() {
+            if (confirm('Remove extension "' + ext.displayName + '"?\nRestart the app to apply changes.')) {
+              _removeExtension(ext.name, listEl);
+            }
+          });
+          tdAct.appendChild(removeBtn);
+        }
 
         tr.appendChild(tdName);
         tr.appendChild(tdVer);

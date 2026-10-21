@@ -217,6 +217,21 @@ Statement blocks (with `previousStatement` / `nextStatement`) should end the tem
 
 Block `type` values must be unique across the app.
 
+### `contributes.window`
+
+Opens a separate window. This does **not** add a sidebar icon or page. Leave out `sidebarTab` when the extension only needs blocks, a backend, and this window.
+
+```json
+"window": {
+  "title": "Camera",
+  "html": "frontend/window.html",
+  "js": "frontend/window.js",
+  "css": "frontend/window.css"
+}
+```
+
+StudioX adds an item with that title to the **Window** menu. The page can call the extension backend at `http://127.0.0.1:<port>/ext/<name>/`. Blockly programs see the same port in the `STUDIOX_PORT` environment variable.
+
 ### Default saved functions (`functions/`)
 
 Drop procedure library JSON files under a **`functions/`** folder at the

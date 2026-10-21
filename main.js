@@ -264,23 +264,23 @@ function _extensionInstallPayload(dest, manifest) {
  * Discover extensions in the extensions directories.
  * Checks user dir, dev dir, and packaged app resources.
  */
-function discoverExtensions() {
-  const extensionsDirs = [
-    // User extensions (always checked, highest priority)
-    getExtensionsDir(),
-    // Dev extensions (checked in development)
-    path.join(__dirname, 'extensions'),
+function extensionSearchRoots() {
+  const roots = [
+    { dir: getExtensionsDir(), source: 'user' },
+    { dir: path.join(__dirname, 'extensions'), source: 'project' },
   ];
-
-  // In packaged app, also check extraResources
   if (isPackaged()) {
-    extensionsDirs.push(path.join(process.resourcesPath, 'extensions'));
+    roots.push({ dir: path.join(process.resourcesPath, 'extensions'), source: 'bundled' });
   }
+  return roots;
+}
 
+function discoverExtensions() {
   const extensions = [];
   const seen = new Set();
 
-  for (const dir of extensionsDirs) {
+  for (const root of extensionSearchRoots()) {
+    const dir = root.dir;
     if (!fs.existsSync(dir)) continue;
 
     let entries;
@@ -300,7 +300,7 @@ function discoverExtensions() {
         if (seen.has(name)) continue;
         seen.add(name);
 
-        extensions.push({ manifest: manifest, path: extDir });
+        extensions.push({ manifest: manifest, path: extDir, source: root.source });
         log('Extension found: ' + (manifest.displayName || name) + ' (' + extDir + ')');
       } catch (err) {
         logError('Invalid extension manifest in ' + entry + ': ' + err.message);
@@ -489,7 +489,8 @@ function buildAppMenu() {
           { role: 'front' }
         ] : [
           { role: 'close' }
-        ])
+        ]),
+        ...extensionWindowMenuItems(),
       ]
     },
     // Help menu
@@ -506,6 +507,77 @@ function buildAppMenu() {
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+}
+
+const _extensionWindows = new Map();
+
+function extensionWindowSpecs() {
+  const specs = [];
+  for (const ext of _discoveredExtensions || []) {
+    const manifest = ext && ext.manifest;
+    const win = manifest && manifest.contributes && manifest.contributes.window;
+    if (!manifest || !win || typeof win !== 'object') continue;
+    specs.push({
+      name: manifest.name,
+      title: win.title || manifest.displayName || manifest.name,
+      displayName: manifest.displayName || manifest.name,
+      permissions: Array.isArray(manifest.permissions) ? manifest.permissions : [],
+      basePath: ext.path,
+      html: win.html || '',
+      js: win.js || '',
+      css: win.css || '',
+    });
+  }
+  return specs;
+}
+
+function extensionWindowMenuItems() {
+  const specs = extensionWindowSpecs();
+  if (!specs.length) return [];
+  return [
+    { type: 'separator' },
+    ...specs.map((spec) => ({
+      label: spec.title,
+      click: () => { openExtensionWindow(spec); },
+    })),
+  ];
+}
+
+async function openExtensionWindow(spec) {
+  const existing = _extensionWindows.get(spec.name);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return;
+  }
+  for (const permission of spec.permissions) {
+    const result = await ensureMediaPermission(permission, spec.displayName);
+    if (!result || !result.granted) return;
+  }
+  const win = new BrowserWindow({
+    width: 960,
+    height: 640,
+    title: spec.title,
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  _extensionWindows.set(spec.name, win);
+  win.on('closed', () => {
+    if (_extensionWindows.get(spec.name) === win) _extensionWindows.delete(spec.name);
+  });
+  await win.loadFile(path.join(__dirname, 'extension-window.html'), {
+    query: {
+      title: spec.title,
+      basePath: spec.basePath,
+      html: spec.html,
+      js: spec.js,
+      css: spec.css,
+      serverPort: String(serverPort),
+      extensionName: spec.name,
+    },
+  });
 }
 
 function finishAppClose(fromQuit) {
@@ -598,6 +670,42 @@ async function requestAppClose(fromQuit) {
 }
 
 let worldPopout = null;
+const viewPopouts = new Map();
+
+async function openViewPopoutWindow(view) {
+  const existing = viewPopouts.get(view);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return { ok: true, reused: true };
+  }
+  const titles = { workspace: 'Blockly', world: 'World', camera: 'Camera' };
+  const win = new BrowserWindow({
+    width: 960,
+    height: 720,
+    title: titles[view] || 'StudioX',
+    icon: path.join(__dirname, 'resources', 'icons', 'icon.png'),
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  attachRendererBoot(win);
+  viewPopouts.set(view, win);
+  const query = { viewPopout: view };
+  if (view === 'world') query.worldPopout = '1';
+  await win.loadFile('index.html', { query });
+  win.on('closed', () => {
+    if (viewPopouts.get(view) === win) viewPopouts.delete(view);
+    if (view === 'world') worldPopout = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('view:popout-closed', view);
+      if (view === 'world') mainWindow.webContents.send('world:popout-closed');
+    }
+  });
+  if (view === 'world') worldPopout = win;
+  return { ok: true };
+}
 
 function attachRendererBoot(win) {
   win.webContents.on('did-finish-load', () => {
@@ -607,31 +715,12 @@ function attachRendererBoot(win) {
   });
 }
 
+ipcMain.handle('view:open-popout', async (event, view) => {
+  return openViewPopoutWindow(view || 'world');
+});
+
 ipcMain.handle('world:open-popout', async () => {
-  if (worldPopout && !worldPopout.isDestroyed()) {
-    worldPopout.focus();
-    return { ok: true, reused: true };
-  }
-  worldPopout = new BrowserWindow({
-    width: 960,
-    height: 720,
-    title: 'World',
-    icon: path.join(__dirname, 'resources', 'icons', 'icon.png'),
-    autoHideMenuBar: true,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
-  attachRendererBoot(worldPopout);
-  await worldPopout.loadFile('index.html', { query: { worldPopout: '1' } });
-  worldPopout.on('closed', () => {
-    worldPopout = null;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('world:popout-closed');
-    }
-  });
-  return { ok: true };
+  return openViewPopoutWindow('world');
 });
 
 ipcMain.handle('world:focus-popout', () => {
@@ -723,6 +812,12 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    viewPopouts.forEach((win) => {
+      if (win && !win.isDestroyed()) win.close();
+    });
+    _extensionWindows.forEach((win) => {
+      if (win && !win.isDestroyed()) win.close();
+    });
     if (worldPopout && !worldPopout.isDestroyed()) {
       worldPopout.close();
     }
@@ -789,13 +884,9 @@ function startPythonServer() {
     const serverArgs = ['-u', serverPath, '--port', String(serverPort)];
 
     // Pass all extensions directories to the Flask server
-    const extDirs = [getExtensionsDir()];
-    const devExtDir = path.join(__dirname, 'extensions');
-    if (fs.existsSync(devExtDir)) extDirs.push(devExtDir);
-    if (isPackaged()) {
-      const bundledExtDir = path.join(process.resourcesPath, 'extensions');
-      if (fs.existsSync(bundledExtDir)) extDirs.push(bundledExtDir);
-    }
+    const extDirs = extensionSearchRoots()
+      .map(function (root) { return root.dir; })
+      .filter(function (dir) { return fs.existsSync(dir); });
     for (const d of extDirs) {
       serverArgs.push('--extensions-dir', d);
     }
@@ -1126,13 +1217,10 @@ async function showPermissionBlockedDialog(meta, listText) {
   }
 }
 
-ipcMain.handle('permissions:ensure', async (event, payload) => {
-  const permission = payload && payload.permission;
+async function ensureMediaPermission(permission, openerName) {
   const meta = MEDIA_PERMISSIONS[permission];
   if (!meta) return { granted: true };
-
-  const opener = (payload && (payload.displayName || payload.extensionName)) || '';
-  const listText = permissionListText(permission, opener);
+  const listText = permissionListText(permission, openerName || '');
 
   // Electron can show the TCC prompt only on macOS.
   if (process.platform !== 'darwin') {
@@ -1176,6 +1264,12 @@ ipcMain.handle('permissions:ensure', async (event, payload) => {
     return { granted: false, status: 'denied' };
   }
   return { granted: true, status: 'granted' };
+}
+
+ipcMain.handle('permissions:ensure', async (event, payload) => {
+  const permission = payload && payload.permission;
+  const opener = (payload && (payload.displayName || payload.extensionName)) || '';
+  return ensureMediaPermission(permission, opener);
 });
 
 // ── Extension management (native OS) ────────────────────────────
@@ -1188,32 +1282,31 @@ ipcMain.handle('extensions:getDir', () => {
 });
 
 /**
- * List installed extensions from the user extensions directory.
- * Returns array of { name, displayName, version, description, path }.
+ * List every discovered extension: user installs, the project extensions
+ * folder, and bundled copies. User installs win when names collide.
  */
 ipcMain.handle('extensions:list', () => {
-  const dir = getExtensionsDir();
-  const results = [];
-  let entries;
-  try { entries = fs.readdirSync(dir); } catch (e) { return results; }
-  for (const entry of entries) {
-    const extDir = path.join(dir, entry);
-    const manifestPath = path.join(extDir, 'extension.json');
-    if (!fs.existsSync(manifestPath)) continue;
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      results.push({
-        name: manifest.name || entry,
-        displayName: manifest.displayName || manifest.name || entry,
-        version: manifest.version || '',
-        description: manifest.description || '',
-        path: extDir,
-      });
-    } catch (e) {
-      results.push({ name: entry, displayName: entry, version: '', description: 'Invalid manifest', path: extDir });
-    }
-  }
-  return results;
+  return discoverExtensions().map((ext) => {
+    const manifest = ext.manifest || {};
+    const name = manifest.name || path.basename(ext.path);
+    const reqPath = path.join(ext.path, 'requirements.txt');
+    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
+    const rawDepends = manifest.depends || [];
+    const depends = Array.isArray(rawDepends)
+      ? rawDepends.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    return {
+      name: name,
+      displayName: manifest.displayName || name,
+      version: manifest.version || '',
+      description: manifest.description || '',
+      path: ext.path,
+      source: ext.source || 'project',
+      removable: ext.source === 'user',
+      requirements: requirements,
+      depends: depends,
+    };
+  });
 });
 
 /**

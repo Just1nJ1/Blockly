@@ -56,6 +56,23 @@ def _find_free_port():
         return s.getsockname()[1]
 
 
+def warm_registered():
+    """Start subprocess extensions during app launch.
+
+    The first preview used to be the request that booted the camera
+    process. That request often timed out, so the camera light came on
+    in the Blockly program while no preview slot was ever stored.
+    """
+    def _run():
+        for name in list(_launch_configs):
+            try:
+                _ensure_running(name)
+            except Exception as exc:
+                print(f'[ext_process] Warm start failed for {name}: {exc}',
+                      flush=True)
+    threading.Thread(target=_run, name='ext-warm', daemon=True).start()
+
+
 def register_ext(name, ext_dir, env_python, main_server_url,
                  dep_site_packages=None):
     """Store launch config for lazy startup (called during load_extensions)."""
@@ -76,8 +93,10 @@ def _ensure_running(name):
     Returns the port, or None on failure.
     """
     info = _running.get(name)
-    if info and info.healthy:
+    if info and info.healthy and info.process.poll() is None:
         return info.port
+    if info and info.process.poll() is not None:
+        _running.pop(name, None)
 
     lock = _start_locks.get(name)
     if not lock:
@@ -86,8 +105,10 @@ def _ensure_running(name):
     with lock:
         # Re-check after acquiring lock (another thread may have started it)
         info = _running.get(name)
-        if info and info.healthy:
+        if info and info.healthy and info.process.poll() is None:
             return info.port
+        if info and info.process.poll() is not None:
+            _running.pop(name, None)
 
         # Cooldown: don't retry within 10s of a failure
         fail_ts = _last_fail.get(name, 0)
@@ -239,11 +260,7 @@ def _forward_request(name, port, subpath):
     slow = subpath in ("cameras", "start") or str(subpath).startswith("cameras")
     timeout = 90 if slow else 30
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp_headers = {k: v for k, v in resp.headers.items()
-                            if k.lower() not in ('transfer-encoding',)}
-            return Response(resp.read(), status=resp.status,
-                            headers=resp_headers)
+        resp = urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         resp_headers = {k: v for k, v in e.headers.items()
                         if k.lower() not in ('transfer-encoding',)}
@@ -253,6 +270,27 @@ def _forward_request(name, port, subpath):
             'success': False,
             'error': f'Extension "{name}" is unavailable',
         }), 502
+
+    resp_headers = {k: v for k, v in resp.headers.items()
+                    if k.lower() not in ('transfer-encoding',)}
+    content_type = resp.headers.get('Content-Type', '')
+    if content_type.startswith('multipart/'):
+        def generate():
+            try:
+                while True:
+                    chunk = resp.read(16384)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                resp.close()
+        return Response(generate(), status=resp.status, headers=resp_headers)
+
+    try:
+        payload = resp.read()
+    finally:
+        resp.close()
+    return Response(payload, status=resp.status, headers=resp_headers)
 
 
 def register_proxy_route(app, name):

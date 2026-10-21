@@ -174,6 +174,8 @@ class DebugSession:
             blockly_site = CodeExecutor._prepare_blockly_packages()
 
             safe_globals = CodeExecutor._safe_globals()
+            from .preview_hub import submit as _preview_submit
+            safe_globals['__studiox_preview'] = _preview_submit
 
             # Patch serial.Serial to use the shared connection
             mgr = SerialManager.get_instance()
@@ -193,6 +195,8 @@ class DebugSession:
                     return _orig_import(name, *args, **kwargs)
                 safe_globals['__builtins__']['__import__'] = _patched_import
 
+            CodeExecutor._prepare_cv_proxy(safe_globals)
+
             sys.settrace(self._trace_dispatch)
             try:
                 exec(self._compiled, safe_globals)
@@ -208,6 +212,7 @@ class DebugSession:
             sys.stderr = old_stderr
             self.finished = True
             CodeExecutor._cleanup_blockly_packages(blockly_site)
+            CodeExecutor._release_cameras()
             try:
                 mgr = SerialManager.get_instance()
                 for conn in mgr.all_connected():

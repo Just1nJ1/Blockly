@@ -7,6 +7,7 @@ Uses Flask for better request handling.
 
 import argparse
 import logging
+import os
 from server.app import create_app
 
 
@@ -15,6 +16,8 @@ def run_server(host='127.0.0.1', port=5080, debug=False, extensions_dirs=None):
     # Suppress werkzeug request logs (GET/POST spam)
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
+    # Blockly blocks call extension backends on this port.
+    os.environ['STUDIOX_PORT'] = str(port)
 
     app = create_app(extensions_dirs=extensions_dirs, host=host, port=port)
     print(f"Starting StudioX Server at http://{host}:{port}")

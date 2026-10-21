@@ -14,10 +14,13 @@
  *     "sidebarTab": { "id", "label", "icon", "html", "js", "css" },
  *     "backend": { "main": "backend/main.py" },
  *     "workflows": [ "workflows/my_pipeline.json" ],
- *     "blocks": { "category": "Camera", "colour": "#4B8BBE", "files": ["blocks/blocks.json"] }
+ *     "blocks": { "category": "Camera", "colour": "#4B8BBE", "files": ["blocks/blocks.json"] },
+ *     "window": { "title": "Camera", "html": "frontend/window.html", "js": "frontend/window.js", "css": "frontend/window.css" }
  *   },
  *   "depends": ["camera"]
  * }
+ *
+ * sidebarTab is optional. A window contribution does not add a sidebar icon.
  *
  * Workflow templates are registered with WorkflowRegistry as soon as the
  * extension is discovered (not lazy on tab click), so they appear in the

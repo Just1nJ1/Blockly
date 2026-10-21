@@ -117,6 +117,8 @@ def load_extensions(app, extensions_dirs, main_server_url='http://127.0.0.1:5080
         parts.append(f'{len(loaded_subprocess)} subprocess: {", ".join(loaded_subprocess)}')
     if parts:
         print(f'[Extensions] {" | ".join(parts)}')
+    if loaded_subprocess:
+        ext_process.warm_registered()
 
 
 def _dependency_site_packages(name, manifests):

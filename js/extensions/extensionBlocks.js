@@ -197,6 +197,13 @@ function _fillBlockTemplate(block, generator, template, args) {
     var fieldType = spec && spec.type ? String(spec.type) : '';
     if (fieldType.indexOf('field_') === 0) {
       var val = block.getFieldValue(name);
+      if (fieldType === 'field_variable') {
+        if (generator && typeof generator.getVariableName === 'function') {
+          return generator.getVariableName(val);
+        }
+        var varField = block.getField(name);
+        return (varField && varField.getText) ? varField.getText() : String(val || 'cap');
+      }
       if (fieldType === 'field_number' || fieldType === 'field_checkbox') {
         var n = Number(val);
         return isFinite(n) ? String(n) : '0';

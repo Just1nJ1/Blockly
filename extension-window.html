@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Extension</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    (function () {
+      var fs = require('fs');
+      var path = require('path');
+      var params = new URLSearchParams(location.search || '');
+      var title = params.get('title') || 'Extension';
+      var basePath = params.get('basePath') || '';
+      var htmlRel = params.get('html') || '';
+      var jsRel = params.get('js') || '';
+      var cssRel = params.get('css') || '';
+      document.title = title;
+      window.STUDIOX_PORT = params.get('serverPort') || '5080';
+      window.EXTENSION_NAME = params.get('extensionName') || '';
+
+      function readRel(rel) {
+        if (!rel || !basePath) return '';
+        return fs.readFileSync(path.join(basePath, rel), 'utf8');
+      }
+
+      if (cssRel) {
+        var style = document.createElement('style');
+        style.textContent = readRel(cssRel);
+        document.head.appendChild(style);
+      }
+      if (htmlRel) {
+        document.getElementById('root').innerHTML = readRel(htmlRel);
+      }
+      if (jsRel) {
+        var script = document.createElement('script');
+        script.textContent = readRel(jsRel);
+        document.body.appendChild(script);
+      }
+    })();
+  </script>
+</body>
+</html>
