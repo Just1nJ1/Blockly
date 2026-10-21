@@ -1898,12 +1898,16 @@ def env_install_requirements():
         data = request.get_json() or {}
         env_name = data.get('env', '').strip()
         requirements = data.get('requirements', '').strip()
+        share_from = data.get('share_from') or []
+        if isinstance(share_from, str):
+            share_from = [share_from]
 
         if not env_name or not requirements:
             return jsonify({'success': False,
                             'error': 'env and requirements are required'}), 400
 
-        return jsonify(environments.install_requirements(env_name, requirements))
+        return jsonify(environments.install_requirements(
+            env_name, requirements, share_from=share_from))
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

@@ -449,8 +449,16 @@ function _fetchExtensionList(listEl) {
           installPkgs.style.marginRight = '6px';
           installPkgs.textContent = 'Install packages';
           installPkgs.addEventListener('click', function() {
-            _setupExtensionEnv(ext.name, ext.requirements, {});
+            _beginExtensionSetup(ext);
           });
+          if (ext.missingDepends && ext.missingDepends.length) {
+            var need = document.createElement('div');
+            need.className = 'ext-dep-need';
+            need.textContent = 'Needs ' + ext.missingDepends.map(function (dep) {
+              return dep.displayName || dep.name || dep;
+            }).join(', ');
+            tdName.appendChild(need);
+          }
           tdAct.appendChild(installPkgs);
         }
         if (ext.removable) {
@@ -493,77 +501,215 @@ function _installExtension(mode) {
     }
     var listEl = document.getElementById('ext-list-container');
     if (listEl) _fetchExtensionList(listEl);
-
-    if (result.missingDepends && result.missingDepends.length) {
-      alert(
-        'Extension "' + result.name + '" requires: ' +
-        result.missingDepends.join(', ') +
-        '.\nInstall those extensions before using it.'
-      );
-    }
-    var depReqs = result.dependencyRequirements || {};
-    var depNames = Object.keys(depReqs);
-    var hasOwnReqs = result.requirements && String(result.requirements).trim();
-    if (hasOwnReqs || depNames.length) {
-      _setupExtensionEnv(result.name, result.requirements || '', depReqs);
-    } else {
-      alert('Extension "' + result.name + '" installed.\nRestart the app to load it.');
-    }
+    _beginExtensionSetup(result);
   }).catch(function(err) {
     alert('Install error: ' + err.message);
   });
 }
 
-/**
- * After installing an extension that has requirements.txt, show a
- * full-screen loading overlay while creating the venv and installing deps.
- */
-function _setupExtensionEnv(extName, requirementsText, dependencyRequirements) {
-  // Build modal overlay — start with confirmation prompt
+function _orderSetupSteps(steps) {
+  var byName = {};
+  steps.forEach(function (step) { byName[step.name] = step; });
+  var ordered = [];
+  var placed = {};
+  var guard = 0;
+  var remaining = steps.slice();
+  while (remaining.length && guard < steps.length + 2) {
+    guard += 1;
+    var next = [];
+    remaining.forEach(function (step) {
+      var deps = step.shareFrom || [];
+      var ready = deps.every(function (dep) { return !byName[dep] || placed[dep]; });
+      if (ready) {
+        ordered.push(step);
+        placed[step.name] = true;
+      } else {
+        next.push(step);
+      }
+    });
+    remaining = next;
+  }
+  return ordered.concat(remaining);
+}
+
+function _beginExtensionSetup(info) {
+  info = info || {};
+  var missing = info.missingDepends || [];
+  var hasOwnReqs = info.requirements && String(info.requirements).trim();
+  var ready = info.readySetups || [];
+  if (!missing.length && !hasOwnReqs && !ready.length) {
+    alert('Extension "' + (info.displayName || info.name) + '" installed.\nRestart the app to load it.');
+    return;
+  }
+  if (missing.length) {
+    _askInstallDependencies(info);
+    return;
+  }
+  info.steps = info.steps || info.readySetups || [];
+  _setupExtensionEnv(info);
+}
+
+function _askInstallDependencies(info) {
+  var missing = info.missingDepends || [];
+  var label = info.displayName || info.name || 'This extension';
   var overlay = document.createElement('div');
   overlay.id = 'ext-setup-overlay';
   overlay.className = 'ctrl-modal-overlay';
   overlay.style.display = 'flex';
+  overlay.setAttribute('data-ext-setup', 'ask');
 
   var dialog = document.createElement('div');
-  dialog.className = 'ctrl-modal-dialog';
-  dialog.style.width = '380px';
+  dialog.className = 'ctrl-modal-dialog ext-dep-dialog';
 
-  var depMap = dependencyRequirements || {};
-  var previewLines = [];
-  Object.keys(depMap).forEach(function (depName) {
-    String(depMap[depName] || '').split('\n').forEach(function (line) {
-      var trimmed = line.trim();
-      if (trimmed && trimmed.charAt(0) !== '#') {
-        previewLines.push(depName + ': ' + trimmed);
-      }
-    });
-  });
-  String(requirementsText || '').split('\n').forEach(function (line) {
-    var trimmed = line.trim();
-    if (trimmed && trimmed.charAt(0) !== '#') previewLines.push(trimmed);
-  });
-  var pkgPreview = previewLines.join(', ');
+  var items = missing.map(function (dep) {
+    var name = _escHtml(dep.displayName || dep.name || 'Extension');
+    var url = dep.url ? '<div class="ext-dep-url">' + _escHtml(dep.url) + '</div>' : '<div class="ext-dep-url">No download link in the extension manifest.</div>';
+    return '<li><div class="ext-dep-name">' + name + '</div>' + url + '</li>';
+  }).join('');
+  var blocked = missing.some(function (dep) { return !dep.url; });
 
   dialog.innerHTML =
-    '<div style="padding:24px;">' +
-      '<div class="progress-stage" style="margin-bottom:8px;">Install dependencies?</div>' +
-      '<div class="progress-detail" style="margin-bottom:4px;">"' + _escHtml(extName) + '" requires Python packages:</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary);font-family:monospace;margin-bottom:16px;">' + _escHtml(pkgPreview) + '</div>' +
-      '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
-        '<button id="ext-setup-skip" class="app-settings-btn">Skip</button>' +
-        '<button id="ext-setup-go" class="app-settings-btn app-settings-btn-primary">Install</button>' +
-      '</div>' +
+    '<div class="ctrl-modal-header">' +
+      '<div class="ctrl-modal-title">Install required extensions</div>' +
+      '<button type="button" class="ctrl-modal-close" id="ext-dep-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="ctrl-modal-body">' +
+      '<p class="ext-dep-lead">' + _escHtml(label) + ' needs ' +
+        (missing.length === 1 ? 'an extension that is' : 'extensions that are') +
+        ' not installed. Install will download ' +
+        (missing.length === 1 ? 'it' : 'them') +
+        ' and set up packages before ' + _escHtml(label) + '.</p>' +
+      '<ul class="ext-dep-list">' + items + '</ul>' +
+      '<p class="ext-dep-note">Not now leaves the extension files in place. It will not run until the required extensions are installed.</p>' +
+    '</div>' +
+    '<div class="ctrl-modal-footer">' +
+      '<button type="button" class="ctrl-modal-btn ctrl-modal-btn-cancel" id="ext-dep-cancel">Not now</button>' +
+      '<button type="button" class="ctrl-modal-btn ctrl-modal-btn-save" id="ext-dep-confirm"' +
+        (blocked ? ' disabled' : '') + '>Install</button>' +
     '</div>';
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
 
-  // Wait for user choice
-  document.getElementById('ext-setup-skip').addEventListener('click', function() {
-    overlay.remove();
-  });
+  function closeAsk() {
+    if (overlay.parentNode) overlay.remove();
+  }
+  document.getElementById('ext-dep-close').addEventListener('click', closeAsk);
+  document.getElementById('ext-dep-cancel').addEventListener('click', closeAsk);
+  document.getElementById('ext-dep-confirm').addEventListener('click', function () {
+    var confirmBtn = document.getElementById('ext-dep-confirm');
+    var cancelBtn = document.getElementById('ext-dep-cancel');
+    if (confirmBtn) confirmBtn.disabled = true;
+    if (cancelBtn) cancelBtn.disabled = true;
+    overlay.setAttribute('data-ext-setup', 'progress');
+    dialog.innerHTML =
+      '<div class="app-settings-progress" style="padding:32px 24px;">' +
+        '<div class="progress-spinner"></div>' +
+        '<div class="progress-stage">Downloading required extensions\u2026</div>' +
+        '<div class="progress-detail">' + _escHtml(missing.map(function (dep) {
+          return dep.displayName || dep.name;
+        }).join(', ')) + '</div>' +
+      '</div>';
 
-  document.getElementById('ext-setup-go').addEventListener('click', _doInstall);
+    var ipcRenderer = null;
+    try { ipcRenderer = require('electron').ipcRenderer; } catch (e) {}
+    if (!ipcRenderer) {
+      closeAsk();
+      return;
+    }
+    ipcRenderer.invoke('extensions:installDependencies', missing).then(function (result) {
+      closeAsk();
+      if (!result || !result.success) {
+        alert('Could not install the required extensions: ' + ((result && result.error) || 'Unknown error'));
+        return;
+      }
+      var downloaded = result.setup || [];
+      var seen = {};
+      downloaded.forEach(function (step) { seen[step.name] = true; });
+      var steps = (info.readySetups || []).filter(function (step) { return !seen[step.name]; });
+      _setupExtensionEnv({
+        name: info.name,
+        displayName: info.displayName || info.name,
+        requirements: info.requirements || '',
+        steps: steps.concat(downloaded),
+        shareFrom: info.shareFrom || [],
+        autoStart: true,
+      });
+    }).catch(function (err) {
+      closeAsk();
+      alert('Could not install the required extensions: ' + (err && err.message ? err.message : err));
+    });
+  });
+}
+
+/**
+ * Create extension environments and install requirements.
+ * Dependency environments are prepared first. Packages they already
+ * provide are not installed again into this extension.
+ */
+function _setupExtensionEnv(info) {
+  info = info || {};
+  var extName = info.displayName || info.name || 'extension';
+  var extId = info.name;
+  var steps = _orderSetupSteps(info.steps || info.readySetups || []);
+  var shareFrom = info.shareFrom || [];
+
+  function _reqLines(text) {
+    return String(text || '').split('\n').filter(function (line) {
+      var trimmed = line.trim();
+      return trimmed && trimmed.charAt(0) !== '#';
+    });
+  }
+
+  var overlay = document.createElement('div');
+  overlay.id = 'ext-setup-overlay';
+  overlay.className = 'ctrl-modal-overlay';
+  overlay.style.display = 'flex';
+  overlay.setAttribute('data-ext-setup', info.autoStart ? 'progress' : 'packages');
+
+  var dialog = document.createElement('div');
+  dialog.className = 'ctrl-modal-dialog ext-dep-dialog';
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  if (!info.autoStart) {
+    var preview = [];
+    steps.forEach(function (step) {
+      _reqLines(step.requirements).forEach(function (line) {
+        preview.push(step.name + ': ' + line.trim());
+      });
+    });
+    _reqLines(info.requirements).forEach(function (line) {
+      preview.push(line.trim());
+    });
+    var shareLabels = shareFrom.map(function (depName) {
+      var match = (info.depends || []).filter(function (dep) { return dep.name === depName; })[0];
+      return match && match.displayName ? match.displayName : depName;
+    });
+    var shareNote = shareLabels.length
+      ? '<p class="ext-dep-note">Packages already installed for ' +
+        _escHtml(shareLabels.join(', ')) +
+        ' are reused. Only packages that are not already there are added, and their versions have to match.</p>'
+      : '';
+    dialog.innerHTML =
+      '<div class="ctrl-modal-header">' +
+        '<div class="ctrl-modal-title">Install Python packages</div>' +
+        '<button type="button" class="ctrl-modal-close" id="ext-setup-skip" aria-label="Close">&times;</button>' +
+      '</div>' +
+      '<div class="ctrl-modal-body">' +
+        '<p class="ext-dep-lead">Set up "' + _escHtml(extName) + '".</p>' +
+        '<div class="ext-dep-packages">' + _escHtml(preview.join('\n')) + '</div>' +
+        shareNote +
+      '</div>' +
+      '<div class="ctrl-modal-footer">' +
+        '<button type="button" class="ctrl-modal-btn ctrl-modal-btn-cancel" id="ext-setup-cancel">Skip</button>' +
+        '<button type="button" class="ctrl-modal-btn ctrl-modal-btn-save" id="ext-setup-go">Install</button>' +
+      '</div>';
+    document.getElementById('ext-setup-skip').addEventListener('click', function () { overlay.remove(); });
+    document.getElementById('ext-setup-cancel').addEventListener('click', function () { overlay.remove(); });
+    document.getElementById('ext-setup-go').addEventListener('click', _doInstall);
+  } else {
+    _doInstall();
+  }
 
   function _doInstall() {
     // Switch to progress view
@@ -598,13 +744,16 @@ function _setupExtensionEnv(extName, requirementsText, dependencyRequirements) {
     }
 
     function showDone(message, isError) {
+      overlay.setAttribute('data-ext-setup', isError ? 'error' : 'done');
       dialog.innerHTML =
-        '<div class="app-settings-progress" style="padding:32px 24px;">' +
-          '<div style="font-size:28px;margin-bottom:12px;">' + (isError ? '\u26A0' : '\u2705') + '</div>' +
-          '<div class="progress-stage">' + _escHtml(message) + '</div>' +
-          '<div style="margin-top:16px;">' +
-            '<button id="ext-setup-close-btn" class="app-settings-btn app-settings-btn-primary" style="min-width:100px;">OK</button>' +
-          '</div>' +
+        '<div class="ctrl-modal-header">' +
+          '<div class="ctrl-modal-title">' + (isError ? 'Setup failed' : 'Extension ready') + '</div>' +
+        '</div>' +
+        '<div class="ctrl-modal-body">' +
+          '<div class="ext-setup-message">' + _escHtml(message) + '</div>' +
+        '</div>' +
+        '<div class="ctrl-modal-footer">' +
+          '<button type="button" id="ext-setup-close-btn" class="ctrl-modal-btn ctrl-modal-btn-save">OK</button>' +
         '</div>';
       document.getElementById('ext-setup-close-btn').addEventListener('click', function() {
         closeOverlay();
@@ -638,7 +787,7 @@ function _setupExtensionEnv(extName, requirementsText, dependencyRequirements) {
         });
     }
 
-    function installReqs(name, text) {
+    function installReqs(name, text, shareFromNames) {
       var body = String(text || '').trim();
       if (!body) return Promise.resolve();
       var pkgs = body.split('\n').filter(function (l) {
@@ -649,10 +798,15 @@ function _setupExtensionEnv(extName, requirementsText, dependencyRequirements) {
       return fetch(serverUrl + '/env/install-requirements', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ env: name, requirements: body })
+        body: JSON.stringify({
+          env: name,
+          requirements: body,
+          share_from: shareFromNames || [],
+        })
       })
         .then(function (r) { return r.json(); })
         .then(function (installData) {
+          (installData.log || []).forEach(appendLog);
           if (!installData.success) {
             throw new Error(installData.error || 'Package install failed for ' + name);
           }
@@ -661,21 +815,21 @@ function _setupExtensionEnv(extName, requirementsText, dependencyRequirements) {
     }
 
     var chain = Promise.resolve();
-    Object.keys(depMap).forEach(function (depName) {
+    steps.forEach(function (step) {
       chain = chain.then(function () {
-        setStage('Preparing ' + depName + '\u2026', 'Dependency of ' + extName);
-        return ensureEnv(depName).then(function () {
-          return installReqs(depName, depMap[depName]);
+        setStage('Preparing ' + step.name + '\u2026', 'Required by ' + extName);
+        return ensureEnv(step.name).then(function () {
+          return installReqs(step.name, step.requirements, step.shareFrom || []);
         });
       });
     });
     chain
       .then(function () {
         setStage('Creating environment\u2026', 'Setting up "' + extName + '"');
-        return ensureEnv(extName);
+        return ensureEnv(extId);
       })
       .then(function () {
-        return installReqs(extName, requirementsText);
+        return installReqs(extId, info.requirements, shareFrom);
       })
       .then(function () {
         showDone('Extension "' + extName + '" is ready. Restart the app to load it.', false);
@@ -719,8 +873,8 @@ function _buildSettingsEnvironmentsPage(container) {
     '<strong>Blockly</strong> uses the reserved environment named <code>blockly</code> ' +
     'for <em>import</em> blocks and Run/Debug. Install libraries there ' +
     '(e.g. <code>numpy</code>), then import them in Blockly.<br>' +
-    '<strong>Extensions</strong> each get their own venv (named after the extension) — ' +
-    'package versions do not conflict across extensions.';
+    '<strong>Extensions</strong> each get their own environment. One that depends on ' +
+    'another reuses that environment\'s packages instead of installing them again.';
   container.appendChild(hint);
 
   var topBar = document.createElement('div');

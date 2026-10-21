@@ -13,8 +13,13 @@ import those libraries without repeating them in its own requirements.txt.
 from __future__ import annotations
 
 
-def normalize_depends(manifest):
-    """Return a list of extension names this manifest depends on."""
+def depend_entries(manifest):
+    """Return ``[{name, url, displayName}, ...]`` for a manifest.
+
+    A dependency may be a name or ``{"name": "camera", "url": "https://..."}``.
+    ``url`` is the GitHub repository (or a zip) used when that extension
+    is not installed yet.
+    """
     if not isinstance(manifest, dict):
         return []
     raw = manifest.get('depends')
@@ -26,15 +31,32 @@ def normalize_depends(manifest):
         raw = [raw]
     if not isinstance(raw, list):
         return []
-    names = []
+    entries = []
     seen = set()
     for item in raw:
-        name = str(item or '').strip()
+        name = ''
+        url = ''
+        display = ''
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            name = str(item.get('name') or item.get('extension') or '').strip()
+            url = str(item.get('url') or item.get('source') or '').strip()
+            display = str(item.get('displayName') or item.get('display_name') or '').strip()
         if not name or name in seen:
             continue
         seen.add(name)
-        names.append(name)
-    return names
+        entries.append({
+            'name': name,
+            'url': url,
+            'displayName': display or name,
+        })
+    return entries
+
+
+def normalize_depends(manifest):
+    """Return a list of extension names this manifest depends on."""
+    return [entry['name'] for entry in depend_entries(manifest)]
 
 
 def _missing_transitive(name, manifests, stack, seen_missing):

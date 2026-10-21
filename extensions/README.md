@@ -163,19 +163,28 @@ repo.
 List other extensions this one requires:
 
 ```json
-"depends": ["camera"]
+"depends": [
+  {
+    "name": "camera",
+    "displayName": "Camera",
+    "url": "https://github.com/wlkata/WLKATA-StudioX-camera.git"
+  }
+]
 ```
 
-StudioX does not load the extension until every dependency is installed.
-Each dependency keeps its own virtual environment. When this extension's
-backend starts, those environments' `site-packages` directories are added
-to `sys.path` (after this extension's own packages). Shared libraries such
-as OpenCV stay in the dependency's `requirements.txt`. This extension's
-`requirements.txt` lists only the packages it owns (for example
-`ultralytics`).
+A plain name (`"depends": ["camera"]`) still works when that extension is
+already installed. `url` is a GitHub repository or a zip file. StudioX asks
+before downloading a missing dependency, then installs that extension and
+its packages first.
 
-Installing this extension also offers to create the dependency environments
-and install their requirements first.
+Each dependency keeps its own virtual environment. This extension's
+environment only receives packages that are not already provided. The
+installer picks a release that satisfies this extension's `requirements.txt`
+and the versions already installed for the dependencies (for example an
+`ultralytics` release that accepts Camera's OpenCV). At runtime those
+dependency `site-packages` directories are added to `sys.path`.
+
+StudioX does not load the extension until every dependency is installed.
 
 ### `contributes.blocks`
 

@@ -17,7 +17,7 @@
  *     "blocks": { "category": "Camera", "colour": "#4B8BBE", "files": ["blocks/blocks.json"] },
  *     "window": { "title": "Camera", "html": "frontend/window.html", "js": "frontend/window.js", "css": "frontend/window.css" }
  *   },
- *   "depends": ["camera"]
+ *   "depends": [{ "name": "camera", "url": "https://github.com/org/camera.git" }]
  * }
  *
  * sidebarTab is optional. A window contribution does not add a sidebar icon.
@@ -54,6 +54,9 @@ function _normalizeDepends(manifest) {
   if (!manifest) return [];
   var raw = manifest.depends;
   if (raw == null) raw = manifest.dependencies;
+  if (typeof parseDependEntries === 'function') {
+    return parseDependEntries(raw).map(function (entry) { return entry.name; });
+  }
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     raw = raw.extensions || [];
   }
@@ -62,7 +65,10 @@ function _normalizeDepends(manifest) {
   var out = [];
   var seen = {};
   for (var i = 0; i < raw.length; i++) {
-    var name = String(raw[i] || '').trim();
+    var item = raw[i];
+    var name = '';
+    if (typeof item === 'string') name = item.trim();
+    else if (item && typeof item === 'object') name = String(item.name || item.extension || '').trim();
     if (!name || seen[name]) continue;
     seen[name] = true;
     out.push(name);
