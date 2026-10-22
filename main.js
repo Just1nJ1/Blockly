@@ -575,6 +575,8 @@ async function openExtensionWindow(spec) {
     const result = await ensureMediaPermission(permission, spec.displayName);
     if (!result || !result.granted) return;
   }
+  // A file:// URL inside app.asar with a query string is blocked after packaging
+  // ("Not allowed to load local resource"). Pass the window settings on argv.
   const win = new BrowserWindow({
     width: 960,
     height: 640,
@@ -583,23 +585,22 @@ async function openExtensionWindow(spec) {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      additionalArguments: ['--studiox-extension-window=' + encodeURIComponent(JSON.stringify({
+        title: spec.title,
+        basePath: spec.basePath,
+        html: spec.html,
+        js: spec.js,
+        css: spec.css,
+        serverPort: String(serverPort),
+        extensionName: spec.name,
+      }))],
     },
   });
   _extensionWindows.set(spec.name, win);
   win.on('closed', () => {
     if (_extensionWindows.get(spec.name) === win) _extensionWindows.delete(spec.name);
   });
-  await win.loadFile(path.join(__dirname, 'extension-window.html'), {
-    query: {
-      title: spec.title,
-      basePath: spec.basePath,
-      html: spec.html,
-      js: spec.js,
-      css: spec.css,
-      serverPort: String(serverPort),
-      extensionName: spec.name,
-    },
-  });
+  await win.loadFile(path.join(__dirname, 'extension-window.html'));
 }
 
 function finishAppClose(fromQuit) {

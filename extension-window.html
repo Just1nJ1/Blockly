@@ -10,15 +10,25 @@
     (function () {
       var fs = require('fs');
       var path = require('path');
-      var params = new URLSearchParams(location.search || '');
-      var title = params.get('title') || 'Extension';
-      var basePath = params.get('basePath') || '';
-      var htmlRel = params.get('html') || '';
-      var jsRel = params.get('js') || '';
-      var cssRel = params.get('css') || '';
+      var arg = (process.argv || []).filter(function (item) {
+        return item.indexOf('--studiox-extension-window=') === 0;
+      })[0] || '';
+      var opts = {};
+      if (arg) {
+        try {
+          opts = JSON.parse(decodeURIComponent(arg.slice('--studiox-extension-window='.length)));
+        } catch (e) {
+          opts = {};
+        }
+      }
+      var title = opts.title || 'Extension';
+      var basePath = opts.basePath || '';
+      var htmlRel = opts.html || '';
+      var jsRel = opts.js || '';
+      var cssRel = opts.css || '';
       document.title = title;
-      window.STUDIOX_PORT = params.get('serverPort') || '5080';
-      window.EXTENSION_NAME = params.get('extensionName') || '';
+      window.STUDIOX_PORT = opts.serverPort || '5080';
+      window.EXTENSION_NAME = opts.extensionName || '';
 
       function readRel(rel) {
         if (!rel || !basePath) return '';
