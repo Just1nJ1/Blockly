@@ -209,8 +209,13 @@ def execute_input():
 def preview_frames():
     """Newest preview image for each slot. Served from this process."""
     from .preview_hub import snapshot
-    rev, frames = snapshot()
-    return jsonify({'success': True, 'rev': rev, 'frames': frames})
+    rev, frames, error = snapshot()
+    return jsonify({
+        'success': True,
+        'rev': rev,
+        'frames': frames,
+        'error': error,
+    })
 
 
 @app.route('/execute/abort', methods=['POST'])

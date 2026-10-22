@@ -11,10 +11,43 @@ _latest = {}
 _jpeg = {}
 _rev = 0
 _started = False
+_error = ''
+
+
+def _import_cv2():
+    """Load OpenCV from this process, then from the camera or blockly env."""
+    global _error
+    try:
+        import cv2
+        return cv2
+    except Exception as first:
+        last = first
+    import sys
+    try:
+        from .environments import get_site_packages
+    except Exception:
+        from server.environments import get_site_packages
+    for name in ('camera', 'blockly'):
+        site = get_site_packages(name)
+        if site and site not in sys.path:
+            sys.path.append(site)
+    try:
+        import importlib
+        importlib.invalidate_caches()
+        import cv2
+        return cv2
+    except Exception as exc:
+        _error = (
+            'Preview could not load OpenCV (%s). '
+            'If Camera was installed by an older app, remove '
+            '~/.wlkata-studiox/environments/camera and install it again.'
+            % exc
+        )
+        raise
 
 
 def _encode_one(image):
-    import cv2
+    cv2 = _import_cv2()
     if image is None:
         return None
     view = image
@@ -34,7 +67,7 @@ def _encode_one(image):
 
 
 def _sender():
-    global _started, _rev
+    global _started, _rev, _error
     import time
     idle = 0
     while idle < 20:
@@ -55,10 +88,15 @@ def _sender():
         for slot, image in pending.items():
             try:
                 jpg = _encode_one(image)
-            except Exception:
+            except Exception as exc:
                 jpg = None
+                with _lock:
+                    if not _error:
+                        _error = 'Preview could not encode a frame (%s)' % exc
             if jpg:
                 encoded[slot] = jpg
+                with _lock:
+                    _error = ''
         if not encoded:
             continue
         with _lock:
@@ -95,4 +133,4 @@ def snapshot():
             for slot, image in sorted(_jpeg.items())
             if image
         ]
-        return _rev, frames
+        return _rev, frames, _error

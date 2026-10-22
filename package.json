@@ -50,6 +50,7 @@
       "node_modules/**/*",
       "resources/icons/**/*",
       "index.html",
+      "extension-window.html",
       "main.js"
     ],
     "extraResources": [

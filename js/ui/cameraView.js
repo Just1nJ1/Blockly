@@ -66,6 +66,10 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!started || token !== pollToken || !data || !data.success) return;
+        if (data.error && (!data.frames || !data.frames.length)) {
+          setEmpty(data.error);
+          return;
+        }
         if (data.rev === lastRev) return;
         lastRev = data.rev;
         if (!data.frames || !data.frames.length) {
