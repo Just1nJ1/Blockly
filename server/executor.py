@@ -97,12 +97,35 @@ class InteractiveSession:
         evt: Dict[str, Any] = {"type": event_type, "data": data}
         evt.update(extra)
         with self._cv:
-            self._history.append(evt)
-            if len(self._history) > 5000:
-                # Drop oldest; SSE clients use an index so they skip gaps only if
-                # they connected extremely late — rare for this app.
-                drop = len(self._history) - 2500
-                self._history = self._history[drop:]
+            self._append_locked(evt)
+            self._cv.notify_all()
+
+    def _append_locked(self, evt: dict) -> None:
+        self._history.append(evt)
+        if len(self._history) > 5000:
+            # Drop oldest; SSE clients use an index so they skip gaps only if
+            # they connected extremely late — rare for this app.
+            drop = len(self._history) - 2500
+            self._history = self._history[drop:]
+
+    def mark_finished(self, success: bool, traceback_text: Optional[str] = None) -> None:
+        """Publish ``done`` and mark the session finished in one step.
+
+        Cleanup must already be done. Waiters then see the event and
+        ``done`` together, so a new run cannot start before this one released
+        its cameras.
+        """
+        evt: Dict[str, Any] = {
+            "type": "done",
+            "data": "",
+            "success": bool(success),
+        }
+        if traceback_text:
+            evt["traceback"] = traceback_text
+        with self._cv:
+            self.success = bool(success)
+            self._append_locked(evt)
+            self.done = True
             self._cv.notify_all()
 
     def wait_events(self, index: int, timeout: float = 15.0) -> Tuple[List[dict], int]:
@@ -377,10 +400,10 @@ class CodeExecutor:
         safe_globals["__builtins__"]["__import__"] = _patched_import
 
     @staticmethod
-    def _release_cameras() -> None:
+    def _release_cameras(session_id: Optional[str] = None) -> None:
         try:
             from .camera_client import release_program_captures
-            release_program_captures()
+            release_program_captures(session_id)
         except Exception:
             pass
 
@@ -435,72 +458,100 @@ class CodeExecutor:
         return result
 
     @staticmethod
+    def _another_running_locked() -> Optional[dict]:
+        for s in CodeExecutor._sessions.values():
+            if not s.done:
+                return {
+                    "success": False,
+                    "error": "Another program is already running. Stop it first.",
+                }
+        return None
+
+    @staticmethod
     def execute(code: str) -> dict:
         """Batch-execute Python code and return full results (legacy API)."""
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         old_stdout, old_stderr = sys.stdout, sys.stderr
-
+        batch_id = "batch-%s" % uuid.uuid4().hex[:12]
+        sess = InteractiveSession(batch_id)
         blockly_site = None
+        outcome: Dict[str, Any] = {"success": False}
+        from .camera_client import bind_capture_session, unbind_capture_session
+        from .preview_hub import reset_for_execution, submit as _preview_submit
+
+        with CodeExecutor._sessions_lock:
+            busy = CodeExecutor._another_running_locked()
+            if busy:
+                return busy
+            CodeExecutor._sessions[sess.id] = sess
+            CodeExecutor._prune_sessions_locked()
+            # An interactive run that is still stopping still owns the flag.
+            CodeExecutor._abort_event.clear()
+
         try:
+            bind_capture_session(batch_id)
+            reset_for_execution()
             sys.stdout = stdout_buffer
             sys.stderr = stderr_buffer
             blockly_site = CodeExecutor._prepare_blockly_packages()
             safe_globals = CodeExecutor._safe_globals()
-            from .preview_hub import submit as _preview_submit
             safe_globals["__studiox_preview"] = _preview_submit
             CodeExecutor._prepare_serial_proxy(safe_globals)
             CodeExecutor._prepare_cv_proxy(safe_globals)
 
+            def _abort_trace(frame, event, arg):
+                CodeExecutor.raise_if_aborted()
+                return _abort_trace
+
+            compiled = compile(code, "<blockly>", "exec")
+            sys.settrace(_abort_trace)
             try:
-                CodeExecutor._abort_event.clear()
+                exec(compiled, safe_globals)
+            finally:
+                sys.settrace(None)
 
-                def _abort_trace(frame, event, arg):
-                    CodeExecutor.raise_if_aborted()
-                    return _abort_trace
-
-                compiled = compile(code, "<blockly>", "exec")
-                sys.settrace(_abort_trace)
-                try:
-                    exec(compiled, safe_globals)
-                finally:
-                    sys.settrace(None)
-
-                result = CodeExecutor._eval_last_expression(code, safe_globals)
-                return {
-                    "success": True,
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                    "result": repr(result) if result is not None else None,
-                }
-            except _AbortExecution:
-                return {
-                    "success": False,
-                    "error": "Execution aborted by emergency stop",
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                }
-            except SyntaxError as e:
-                return {
-                    "success": False,
-                    "error": f"Syntax Error: {e.msg} at line {e.lineno}",
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                }
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "traceback": traceback.format_exc(),
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                }
+            result = CodeExecutor._eval_last_expression(code, safe_globals)
+            outcome = {
+                "success": True,
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+                "result": repr(result) if result is not None else None,
+            }
+        except _AbortExecution:
+            outcome = {
+                "success": False,
+                "error": "Execution aborted by emergency stop",
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
+        except SyntaxError as e:
+            outcome = {
+                "success": False,
+                "error": f"Syntax Error: {e.msg} at line {e.lineno}",
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
+        except Exception as e:
+            outcome = {
+                "success": False,
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             CodeExecutor._cleanup_blockly_packages(blockly_site)
             CodeExecutor._release_serial()
-            CodeExecutor._release_cameras()
+            CodeExecutor._release_cameras(batch_id)
+            try:
+                unbind_capture_session()
+            except Exception:
+                pass
+            sess.mark_finished(bool(outcome.get("success")))
+        return outcome
 
     @classmethod
     def start_interactive(cls, code: str) -> dict:
@@ -508,27 +559,31 @@ class CodeExecutor:
         if not code or not str(code).strip():
             return {"success": False, "error": "No code provided"}
 
-        with cls._sessions_lock:
-            for s in cls._sessions.values():
-                if not s.done:
-                    return {
-                        "success": False,
-                        "error": "Another program is already running. Stop it first.",
-                    }
-
         session_id = uuid.uuid4().hex[:12]
         sess = InteractiveSession(session_id)
-        cls._register_session(sess)
-        cls._abort_event.clear()
+        with cls._sessions_lock:
+            busy = cls._another_running_locked()
+            if busy:
+                return busy
+            cls._sessions[sess.id] = sess
+            cls._prune_sessions_locked()
+            # Previous cleanup has finished (otherwise it would still be not done).
+            cls._abort_event.clear()
+
+        from .preview_hub import reset_for_execution
+        reset_for_execution()
 
         def runner():
+            from .camera_client import bind_capture_session, unbind_capture_session
             old_stdout, old_stderr = sys.stdout, sys.stderr
             live_out = _LiveStream(sess.emit, "stdout")
             live_err = _LiveStream(sess.emit, "stderr")
             blockly_site = None
+            tb_text = None
             try:
                 sys.stdout = live_out
                 sys.stderr = live_err
+                bind_capture_session(session_id)
                 blockly_site = CodeExecutor._prepare_blockly_packages()
 
                 def _ui_input(prompt: str = "") -> str:
@@ -564,39 +619,36 @@ class CodeExecutor:
                 if result is not None:
                     sess.emit("result", repr(result))
                 sess.success = True
-                sess.emit("done", "", success=True)
             except _AbortExecution:
                 sess.success = False
                 sess.error = "Execution aborted by emergency stop"
                 sess.emit("error", sess.error)
-                sess.emit("done", "", success=False)
             except SyntaxError as e:
                 sess.success = False
                 sess.error = f"Syntax Error: {e.msg} at line {e.lineno}"
                 sess.emit("error", sess.error)
-                sess.emit("done", "", success=False)
             except EOFError as e:
                 sess.success = False
                 sess.error = str(e) or "EOF while reading input"
                 sess.emit("error", sess.error)
-                sess.emit("done", "", success=False)
             except Exception as e:
                 sess.success = False
                 sess.error = str(e)
-                tb = traceback.format_exc()
-                sess.emit("stderr", tb)
+                tb_text = traceback.format_exc()
+                sess.emit("stderr", tb_text)
                 sess.emit("error", str(e))
-                sess.emit("done", "", success=False, traceback=tb)
             finally:
-                sess.done = True
-                # Wake any SSE waiters blocked on empty history tail
-                with sess._cv:
-                    sess._cv.notify_all()
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
                 CodeExecutor._cleanup_blockly_packages(blockly_site)
                 CodeExecutor._release_serial()
-                CodeExecutor._release_cameras()
+                CodeExecutor._release_cameras(session_id)
+                try:
+                    unbind_capture_session()
+                except Exception:
+                    pass
+                # done is published only after cameras and serial are released.
+                sess.mark_finished(bool(sess.success), tb_text)
 
         t = threading.Thread(target=runner, name=f"exec-{session_id}", daemon=True)
         t.start()

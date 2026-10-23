@@ -168,7 +168,15 @@ class DebugSession:
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         blockly_site = None
+        capture_session = 'debug-%s' % self.session_id
         try:
+            from .camera_client import bind_capture_session
+            from .preview_hub import reset_for_execution
+            with CodeExecutor._sessions_lock:
+                if all(s.done for s in CodeExecutor._sessions.values()):
+                    CodeExecutor._abort_event.clear()
+            bind_capture_session(capture_session)
+            reset_for_execution()
             sys.stdout = self.stdout_buffer
             sys.stderr = self.stderr_buffer
             blockly_site = CodeExecutor._prepare_blockly_packages()
@@ -210,9 +218,13 @@ class DebugSession:
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-            self.finished = True
             CodeExecutor._cleanup_blockly_packages(blockly_site)
-            CodeExecutor._release_cameras()
+            CodeExecutor._release_cameras(capture_session)
+            try:
+                from .camera_client import unbind_capture_session
+                unbind_capture_session()
+            except Exception:
+                pass
             try:
                 mgr = SerialManager.get_instance()
                 for conn in mgr.all_connected():
@@ -220,6 +232,7 @@ class DebugSession:
                 mgr.busy = False
             except Exception:
                 pass
+            self.finished = True
             # Signal state-ready so any waiting /step call unblocks
             self._state_ready.set()
 
