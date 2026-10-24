@@ -74,12 +74,12 @@
           </select>
           <button type="button" id="command-port-refresh" title="Hard refresh connection (disconnect + reconnect)">↻</button>
           <button id="command-port-remove" title="Remove manual port">✕</button>
-          <span style="flex:1;"></span>
+          <span class="toolbar-flex" style="flex:1;"></span>
           <button type="button" class="toolbar-btn" id="command-clear-btn" title="Clear screen">
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-clear"></use></svg>
             <span class="toolbar-btn-label">Clear</span>
           </button>
-          <button type="button" class="toolbar-btn toolbar-btn-danger" id="command-stop-all-btn" onclick="stopAllRobots()" title="Emergency stop all robots">
+          <button type="button" class="toolbar-btn toolbar-btn-danger toolbar-keep" id="command-stop-all-btn" onclick="stopAllRobots()" title="Emergency stop all robots">
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-estop"></use></svg>
             <span class="toolbar-btn-label">Stop</span>
           </button>
@@ -159,8 +159,8 @@
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-import"></use></svg>
             <span class="toolbar-btn-label">Import</span>
           </button>
-          <span style="flex:1;"></span>
-          <button type="button" class="toolbar-btn toolbar-btn-danger" id="teach-stop-all-btn" onclick="stopAllRobots()" title="Emergency stop all robots">
+          <span class="toolbar-flex" style="flex:1;"></span>
+          <button type="button" class="toolbar-btn toolbar-btn-danger toolbar-keep" id="teach-stop-all-btn" onclick="stopAllRobots()" title="Emergency stop all robots">
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-estop"></use></svg>
             <span class="toolbar-btn-label">Stop</span>
           </button>
@@ -345,8 +345,8 @@
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-import"></use></svg>
             <span class="toolbar-btn-label">Import</span>
           </button>
-          <span style="flex:1;"></span>
-          <button type="button" class="toolbar-btn toolbar-btn-danger" id="stopAllBtn" onclick="stopAllRobots()" title="Emergency stop all robots">
+          <span class="toolbar-flex" style="flex:1;"></span>
+          <button type="button" class="toolbar-btn toolbar-btn-danger toolbar-keep" id="stopAllBtn" onclick="stopAllRobots()" title="Emergency stop all robots">
             <svg class="toolbar-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-estop"></use></svg>
             <span class="toolbar-btn-label">Stop</span>
           </button>
@@ -642,6 +642,7 @@
   <script src="js/workspace/instanceMethods.js"></script>
   <script src="js/workspace/codePreview.js"></script>
   <script src="js/workspace/execution.js"></script>
+  <script src="js/ui/toolbarFit.js"></script>
   <script src="js/workspace/debugExecution.js"></script>
   <script src="js/workspace/workspaceManager.js"></script>
   <script src="js/workspace/savedFunctions.js"></script>

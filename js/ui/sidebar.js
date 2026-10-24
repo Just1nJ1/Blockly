@@ -57,6 +57,8 @@ function initSidebar() {
         // Trigger a status refresh by firing the change event logic
       }
     }
+
+    if (typeof window.fitToolbars === 'function') window.fitToolbars();
   }
 
   sidebar.addEventListener('click', function(e) {

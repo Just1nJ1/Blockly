@@ -250,6 +250,7 @@ body.platform-darwin .titlebar {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -258,6 +259,8 @@ body.platform-darwin .titlebar {
   display: none;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 .app-view.active {
@@ -346,7 +349,9 @@ body.platform-darwin .titlebar {
   box-sizing: border-box;
   /* Match Blockly / Teaching primary toolbar height */
   min-height: 64px;
+  min-width: 0;
   flex-shrink: 0;
+  overflow: hidden;
 }
 #command-port-select {
   background: var(--cmd-select-bg);
@@ -358,7 +363,9 @@ body.platform-darwin .titlebar {
   font-size: 13px;
   outline: none;
   cursor: pointer;
-  min-width: 200px;
+  min-width: 0;
+  flex: 1 1 160px;
+  max-width: 320px;
 }
 #command-port-select:hover {
   border-color: var(--text-muted);
@@ -421,6 +428,9 @@ body.platform-darwin .titlebar {
   box-sizing: border-box;
   /* 6+52+6 padding/buttons — keep both toolbars the same height */
   min-height: 64px;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 #toolbar {
@@ -521,6 +531,22 @@ body.platform-darwin .titlebar {
 /* Danger actions: same chrome, red icon/text only */
 .toolbar-btn-danger {
   color: #f63c3d;
+}
+/* Emergency stop is a sibling of the scrolling controls, so clipping the
+   other buttons cannot push it off the right edge. */
+.toolbar-main {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  gap: 4px;
+}
+#command-toolbar .toolbar-main {
+  gap: 8px;
+}
+.toolbar-keep {
+  flex: 0 0 auto;
 }
 .toolbar-btn-danger:hover {
   background: rgba(246, 60, 61, 0.08);
@@ -798,6 +824,14 @@ body.stage-splitting-v {
 }
 .output-line.output-chunk {
   display: inline;
+}
+/* Error, result, and system lines stay blocks. A raw chunk would otherwise
+   stay inline, and its background padding paints over the next line. */
+.console-log .output-line.output-error,
+.console-log .output-line.output-result,
+.console-log .output-line.output-system {
+  display: block;
+  line-height: 1.45;
 }
 .output-stdout {
   color: var(--output-stdout);
@@ -3735,7 +3769,7 @@ body.stage-splitting-v {
 .teach-toolbar {
   width: 100%;
   flex-wrap: nowrap;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 /* Teaching toolbar uses shared .toolbar-btn; separators only */

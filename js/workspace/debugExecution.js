@@ -360,7 +360,9 @@ function _setDebugMode(active) {
     stopAllBtn.disabled = false;
     stopAllBtn.style.display = '';
     stopAllBtn.hidden = false;
+    stopAllBtn.removeAttribute('data-toolbar-collapsed');
   }
+  if (typeof window.fitToolbars === 'function') window.fitToolbars();
 }
 
 /**

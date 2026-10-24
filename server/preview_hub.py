@@ -21,7 +21,7 @@ _logged = set()
 
 
 def _log_once(message):
-    """Print a diagnostic once per process. Frame loops must not flood this."""
+    """Record a diagnostic once. Never write it to the program console."""
     if not message:
         return
     with _log_lock:
@@ -30,7 +30,11 @@ def _log_once(message):
         if len(_logged) > 40:
             _logged.clear()
         _logged.add(message)
-    print('[preview] ' + message, flush=True)
+    import sys
+    stream = getattr(sys, '__stderr__', None)
+    if stream is None:
+        return
+    print('[preview] ' + message, file=stream, flush=True)
 
 
 def reset_for_execution():
@@ -74,12 +78,6 @@ def _import_cv2():
                 '~/.wlkata-studiox/environments/camera and install it again.'
                 % exc
             ) from first
-    _log_once(
-        'OpenCV %s (%s)' % (
-            getattr(cv2, '__version__', '?'),
-            getattr(cv2, '__file__', '?'),
-        )
-    )
     return cv2
 
 

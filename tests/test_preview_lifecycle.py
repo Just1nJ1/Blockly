@@ -1,5 +1,6 @@
 """Preview hub, execution cleanup, and camera-session ownership."""
 
+import io
 import os
 import sys
 import threading
@@ -26,6 +27,16 @@ class PreviewHubTests(unittest.TestCase):
     def setUp(self):
         preview_hub.reset_for_execution()
         preview_hub._logged.clear()
+
+    def test_opencv_load_is_not_program_output(self):
+        stdout = io.StringIO()
+        with mock.patch('sys.stdout', stdout):
+            try:
+                preview_hub._import_cv2()
+            except Exception:
+                pass
+        self.assertNotIn('[preview]', stdout.getvalue())
+        self.assertNotIn('OpenCV', stdout.getvalue())
 
     def test_reset_drops_previous_frames(self):
         with mock.patch.object(preview_hub, '_encode_one', lambda image: 'jpeg-%s' % image):

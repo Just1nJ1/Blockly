@@ -399,7 +399,7 @@ async function stopAllRobots() {
     return;
   }
 
-  appendOutput('\nEMERGENCY STOP — all operations cancelled.\n', 'error', true);
+  appendOutput('EMERGENCY STOP — all operations cancelled.', 'error');
   if (abortError) {
     appendOutput('Stop failed: ' + abortError, 'error');
   }
