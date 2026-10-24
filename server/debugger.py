@@ -174,7 +174,7 @@ class DebugSession:
             from .preview_hub import reset_for_execution
             with CodeExecutor._sessions_lock:
                 if all(s.done for s in CodeExecutor._sessions.values()):
-                    CodeExecutor._abort_event.clear()
+                    CodeExecutor._clear_abort()
             bind_capture_session(capture_session)
             reset_for_execution()
             sys.stdout = self.stdout_buffer

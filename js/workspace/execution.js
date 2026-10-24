@@ -174,6 +174,10 @@ function handleExecEvent(evt) {
     case 'done':
       if (evt.success) {
         appendOutput('\n— finished —\n', 'system', true);
+      } else if (evt.reason === 'stop') {
+        appendOutput('\n— Program stopped —\n', 'system', true);
+      } else if (evt.reason === 'emergency') {
+        // stopAllRobots already showed the emergency notification.
       } else {
         appendOutput('\n— stopped —\n', 'system', true);
       }
@@ -329,7 +333,7 @@ async function stopRunningProgram() {
     var resp = await fetch(serverUrl + '/execute/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ reason: 'stop' }),
       signal: AbortSignal.timeout(3000)
     });
     if (!resp.ok) throw new Error('Stop failed (' + resp.status + ')');
@@ -382,7 +386,7 @@ async function stopAllRobots() {
     var resp = await fetch(serverUrl + '/execute/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ reason: 'emergency' }),
       signal: AbortSignal.timeout(3000)
     });
     if (!resp.ok) abortError = 'Stop failed (' + resp.status + ')';

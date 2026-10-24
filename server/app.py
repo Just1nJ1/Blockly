@@ -220,9 +220,15 @@ def preview_frames():
 
 @app.route('/execute/abort', methods=['POST'])
 def execute_abort():
-    """Abort any running code execution."""
+    """Abort any running code execution.
+
+    ``reason`` is ``stop`` for the program Stop button and ``emergency``
+    for Emergency Stop. The reason is stored on the running session.
+    """
     try:
-        CodeExecutor.abort()
+        data = request.get_json(silent=True) or {}
+        reason = data.get('reason') or 'stop'
+        CodeExecutor.abort(reason)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})

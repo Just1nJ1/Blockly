@@ -21,12 +21,23 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .serial_manager import SerialManager
 
 
+ABORT_STOP = "stop"
+ABORT_EMERGENCY = "emergency"
+
+
 class _AbortExecution(BaseException):
     """Raised to stop a running program.
 
     A BaseException so ``except Exception`` cannot treat Stop as a failed
     camera frame. Catching it used to disable tracing and leave the loop running.
+
+    ``reason`` is ``stop`` for the program Stop button and ``emergency`` for
+    Emergency Stop. It is not a Python error message.
     """
+
+    def __init__(self, reason: str = ABORT_STOP):
+        self.reason = reason if reason in (ABORT_STOP, ABORT_EMERGENCY) else ABORT_STOP
+        super().__init__(self.reason)
 
 
 class _LiveStream(io.TextIOBase):
@@ -88,6 +99,7 @@ class InteractiveSession:
         self.done = False
         self.success: Optional[bool] = None
         self.error: Optional[str] = None
+        self.abort_reason: Optional[str] = None
         self.created_at = time.time()
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
@@ -108,12 +120,17 @@ class InteractiveSession:
             drop = len(self._history) - 2500
             self._history = self._history[drop:]
 
-    def mark_finished(self, success: bool, traceback_text: Optional[str] = None) -> None:
+    def mark_finished(
+        self,
+        success: bool,
+        traceback_text: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
         """Publish ``done`` and mark the session finished in one step.
 
         Cleanup must already be done. Waiters then see the event and
         ``done`` together, so a new run cannot start before this one released
-        its cameras.
+        its cameras. ``reason`` is set only when this run was stopped.
         """
         evt: Dict[str, Any] = {
             "type": "done",
@@ -122,6 +139,8 @@ class InteractiveSession:
         }
         if traceback_text:
             evt["traceback"] = traceback_text
+        if reason in (ABORT_STOP, ABORT_EMERGENCY):
+            evt["reason"] = reason
         with self._cv:
             self.success = bool(success)
             self._append_locked(evt)
@@ -167,7 +186,7 @@ class InteractiveSession:
         finally:
             self.waiting_for_input = False
         if line is None:
-            raise EOFError("Execution aborted while waiting for input")
+            raise _AbortExecution(self.abort_reason or ABORT_STOP)
         self.emit("stdin_echo", line + "\n")
         return line
 
@@ -176,27 +195,52 @@ class CodeExecutor:
     """Handles safe execution of Python code (batch + interactive)."""
 
     _abort_event = threading.Event()
+    _abort_reason: Optional[str] = None
     _sessions: Dict[str, InteractiveSession] = {}
     _sessions_lock = threading.Lock()
     _SESSION_TTL_S = 600
 
     @classmethod
-    def raise_if_aborted(cls):
-        """Raise if Stop was requested. Safe to call from traced program code."""
-        if cls._abort_event.is_set():
-            raise _AbortExecution("Execution aborted by emergency stop")
+    def _clear_abort(cls):
+        """Drop a finished run's stop flag. Caller must hold ``_sessions_lock``."""
+        cls._abort_event.clear()
+        cls._abort_reason = None
 
     @classmethod
-    def abort(cls):
-        """Signal running execution to abort and unblock any input() waiters."""
-        cls._abort_event.set()
+    def raise_if_aborted(cls):
+        """Raise if Stop was requested. Safe to call from traced program code."""
+        if not cls._abort_event.is_set():
+            return
+        reason = ABORT_STOP
         with cls._sessions_lock:
             for sess in cls._sessions.values():
+                if not sess.done and sess.abort_reason:
+                    reason = sess.abort_reason
+                    break
+            else:
+                if cls._abort_reason in (ABORT_STOP, ABORT_EMERGENCY):
+                    reason = cls._abort_reason
+        raise _AbortExecution(reason)
+
+    @classmethod
+    def abort(cls, reason: str = ABORT_STOP):
+        """Signal running execution to abort and unblock any input() waiters.
+
+        ``reason`` is stored on each session that is still running so a later
+        program does not inherit this stop.
+        """
+        if reason not in (ABORT_STOP, ABORT_EMERGENCY):
+            reason = ABORT_STOP
+        with cls._sessions_lock:
+            cls._abort_reason = reason
+            for sess in cls._sessions.values():
                 if not sess.done:
+                    sess.abort_reason = reason
                     try:
                         sess.stdin_queue.put_nowait(None)
                     except Exception:
                         pass
+            cls._abort_event.set()
 
     @classmethod
     def get_session(cls, session_id: str) -> Optional[InteractiveSession]:
@@ -487,7 +531,7 @@ class CodeExecutor:
             CodeExecutor._sessions[sess.id] = sess
             CodeExecutor._prune_sessions_locked()
             # An interactive run that is still stopping still owns the flag.
-            CodeExecutor._abort_event.clear()
+            CodeExecutor._clear_abort()
 
         try:
             bind_capture_session(batch_id)
@@ -518,13 +562,15 @@ class CodeExecutor:
                 "stderr": stderr_buffer.getvalue(),
                 "result": repr(result) if result is not None else None,
             }
-        except _AbortExecution:
+        except _AbortExecution as exc:
             outcome = {
                 "success": False,
-                "error": "Execution aborted by emergency stop",
+                "reason": exc.reason,
                 "stdout": stdout_buffer.getvalue(),
                 "stderr": stderr_buffer.getvalue(),
             }
+            if exc.reason == ABORT_EMERGENCY:
+                outcome["error"] = "Execution aborted by emergency stop"
         except SyntaxError as e:
             outcome = {
                 "success": False,
@@ -550,7 +596,11 @@ class CodeExecutor:
                 unbind_capture_session()
             except Exception:
                 pass
-            sess.mark_finished(bool(outcome.get("success")))
+            sess.mark_finished(
+                bool(outcome.get("success")),
+                None,
+                outcome.get("reason"),
+            )
         return outcome
 
     @classmethod
@@ -568,7 +618,7 @@ class CodeExecutor:
             cls._sessions[sess.id] = sess
             cls._prune_sessions_locked()
             # Previous cleanup has finished (otherwise it would still be not done).
-            cls._abort_event.clear()
+            cls._clear_abort()
 
         from .preview_hub import reset_for_execution
         reset_for_execution()
@@ -619,10 +669,10 @@ class CodeExecutor:
                 if result is not None:
                     sess.emit("result", repr(result))
                 sess.success = True
-            except _AbortExecution:
+            except _AbortExecution as exc:
                 sess.success = False
-                sess.error = "Execution aborted by emergency stop"
-                sess.emit("error", sess.error)
+                sess.abort_reason = exc.reason
+                sess.error = None
             except SyntaxError as e:
                 sess.success = False
                 sess.error = f"Syntax Error: {e.msg} at line {e.lineno}"
@@ -648,7 +698,11 @@ class CodeExecutor:
                 except Exception:
                     pass
                 # done is published only after cameras and serial are released.
-                sess.mark_finished(bool(sess.success), tb_text)
+                sess.mark_finished(
+                    bool(sess.success),
+                    tb_text,
+                    sess.abort_reason if not sess.success else None,
+                )
 
         t = threading.Thread(target=runner, name=f"exec-{session_id}", daemon=True)
         t.start()
