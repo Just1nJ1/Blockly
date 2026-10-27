@@ -106,7 +106,7 @@ jobs:
             build_cmd: npm run build:mac -- --arm64
             artifact_name: blockly-mac-arm64
 
-          - os: macos-latest-large
+          - os: macos-26-intel
             arch: x64
             python_url: https://github.com/astral-sh/python-build-standalone/releases/download/20260310/cpython-3.12.13+20260310-x86_64-apple-darwin-install_only.tar.gz
             pip: resources/python/bin/pip3
@@ -182,7 +182,7 @@ jobs:
     - name: Install wlkatapython SDK into embedded Python
       shell: bash
       run: |
-        ${{ matrix.pip }} install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ wlkatapython-dev[ble]==1.0.0.dev3
+        ${{ matrix.pip }} install --extra-index-url https://test.pypi.org/simple/ 'wlkatapython-dev[ble]'
 
     - name: Install Python dependencies into embedded Python
       shell: bash

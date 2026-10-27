@@ -21,9 +21,23 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .serial_manager import SerialManager
 
 
-class _AbortExecution(Exception):
-    """Raised when execution is aborted via emergency stop."""
-    pass
+ABORT_STOP = "stop"
+ABORT_EMERGENCY = "emergency"
+
+
+class _AbortExecution(BaseException):
+    """Raised to stop a running program.
+
+    A BaseException so ``except Exception`` cannot treat Stop as a failed
+    camera frame. Catching it used to disable tracing and leave the loop running.
+
+    ``reason`` is ``stop`` for the program Stop button and ``emergency`` for
+    Emergency Stop. It is not a Python error message.
+    """
+
+    def __init__(self, reason: str = ABORT_STOP):
+        self.reason = reason if reason in (ABORT_STOP, ABORT_EMERGENCY) else ABORT_STOP
+        super().__init__(self.reason)
 
 
 class _LiveStream(io.TextIOBase):
@@ -85,6 +99,7 @@ class InteractiveSession:
         self.done = False
         self.success: Optional[bool] = None
         self.error: Optional[str] = None
+        self.abort_reason: Optional[str] = None
         self.created_at = time.time()
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
@@ -94,12 +109,42 @@ class InteractiveSession:
         evt: Dict[str, Any] = {"type": event_type, "data": data}
         evt.update(extra)
         with self._cv:
-            self._history.append(evt)
-            if len(self._history) > 5000:
-                # Drop oldest; SSE clients use an index so they skip gaps only if
-                # they connected extremely late — rare for this app.
-                drop = len(self._history) - 2500
-                self._history = self._history[drop:]
+            self._append_locked(evt)
+            self._cv.notify_all()
+
+    def _append_locked(self, evt: dict) -> None:
+        self._history.append(evt)
+        if len(self._history) > 5000:
+            # Drop oldest; SSE clients use an index so they skip gaps only if
+            # they connected extremely late — rare for this app.
+            drop = len(self._history) - 2500
+            self._history = self._history[drop:]
+
+    def mark_finished(
+        self,
+        success: bool,
+        traceback_text: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Publish ``done`` and mark the session finished in one step.
+
+        Cleanup must already be done. Waiters then see the event and
+        ``done`` together, so a new run cannot start before this one released
+        its cameras. ``reason`` is set only when this run was stopped.
+        """
+        evt: Dict[str, Any] = {
+            "type": "done",
+            "data": "",
+            "success": bool(success),
+        }
+        if traceback_text:
+            evt["traceback"] = traceback_text
+        if reason in (ABORT_STOP, ABORT_EMERGENCY):
+            evt["reason"] = reason
+        with self._cv:
+            self.success = bool(success)
+            self._append_locked(evt)
+            self.done = True
             self._cv.notify_all()
 
     def wait_events(self, index: int, timeout: float = 15.0) -> Tuple[List[dict], int]:
@@ -141,7 +186,7 @@ class InteractiveSession:
         finally:
             self.waiting_for_input = False
         if line is None:
-            raise EOFError("Execution aborted while waiting for input")
+            raise _AbortExecution(self.abort_reason or ABORT_STOP)
         self.emit("stdin_echo", line + "\n")
         return line
 
@@ -150,21 +195,52 @@ class CodeExecutor:
     """Handles safe execution of Python code (batch + interactive)."""
 
     _abort_event = threading.Event()
+    _abort_reason: Optional[str] = None
     _sessions: Dict[str, InteractiveSession] = {}
     _sessions_lock = threading.Lock()
     _SESSION_TTL_S = 600
 
     @classmethod
-    def abort(cls):
-        """Signal running execution to abort and unblock any input() waiters."""
-        cls._abort_event.set()
+    def _clear_abort(cls):
+        """Drop a finished run's stop flag. Caller must hold ``_sessions_lock``."""
+        cls._abort_event.clear()
+        cls._abort_reason = None
+
+    @classmethod
+    def raise_if_aborted(cls):
+        """Raise if Stop was requested. Safe to call from traced program code."""
+        if not cls._abort_event.is_set():
+            return
+        reason = ABORT_STOP
         with cls._sessions_lock:
             for sess in cls._sessions.values():
+                if not sess.done and sess.abort_reason:
+                    reason = sess.abort_reason
+                    break
+            else:
+                if cls._abort_reason in (ABORT_STOP, ABORT_EMERGENCY):
+                    reason = cls._abort_reason
+        raise _AbortExecution(reason)
+
+    @classmethod
+    def abort(cls, reason: str = ABORT_STOP):
+        """Signal running execution to abort and unblock any input() waiters.
+
+        ``reason`` is stored on each session that is still running so a later
+        program does not inherit this stop.
+        """
+        if reason not in (ABORT_STOP, ABORT_EMERGENCY):
+            reason = ABORT_STOP
+        with cls._sessions_lock:
+            cls._abort_reason = reason
+            for sess in cls._sessions.values():
                 if not sess.done:
+                    sess.abort_reason = reason
                     try:
                         sess.stdin_queue.put_nowait(None)
                     except Exception:
                         pass
+            cls._abort_event.set()
 
     @classmethod
     def get_session(cls, session_id: str) -> Optional[InteractiveSession]:
@@ -403,98 +479,165 @@ class CodeExecutor:
         return result
 
     @staticmethod
-    def execute(code: str) -> dict:
+    def _another_running_locked() -> Optional[dict]:
+        for s in CodeExecutor._sessions.values():
+            if not s.done:
+                return {
+                    "success": False,
+                    "error": "Another program is already running. Stop it first.",
+                }
+        return None
+
+    @staticmethod
+    def prepare_runtime(session_id: str, extension_ids=None, abort_checker=None):
+        """Load this run's extension adapters. Does not open cameras or other hardware."""
+        from .extension_runtime import ExtensionRuntimeManager
+
+        return ExtensionRuntimeManager.create_for_session(
+            session_id=session_id,
+            extension_ids=list(extension_ids or []),
+            abort_checker=abort_checker or CodeExecutor.raise_if_aborted,
+        )
+
+    @staticmethod
+    def cleanup_runtime(runtime) -> None:
+        """Close adapters before the session is marked finished."""
+        if runtime is None:
+            return
+        try:
+            runtime.close_all()
+        except Exception:
+            pass
+
+    @staticmethod
+    def execute(code: str, extension_ids=None) -> dict:
         """Batch-execute Python code and return full results (legacy API)."""
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         old_stdout, old_stderr = sys.stdout, sys.stderr
-
+        batch_id = "batch-%s" % uuid.uuid4().hex[:12]
+        sess = InteractiveSession(batch_id)
         blockly_site = None
+        runtime = None
+        outcome: Dict[str, Any] = {"success": False}
+        from .extension_runtime import ExtensionRuntimeError
+        from .preview_hub import reset_for_execution, submit as _preview_submit
+
+        with CodeExecutor._sessions_lock:
+            busy = CodeExecutor._another_running_locked()
+            if busy:
+                return busy
+            CodeExecutor._sessions[sess.id] = sess
+            CodeExecutor._prune_sessions_locked()
+            # An interactive run that is still stopping still owns the flag.
+            CodeExecutor._clear_abort()
+
         try:
+            reset_for_execution()
             sys.stdout = stdout_buffer
             sys.stderr = stderr_buffer
             blockly_site = CodeExecutor._prepare_blockly_packages()
+            runtime = CodeExecutor.prepare_runtime(batch_id, extension_ids)
             safe_globals = CodeExecutor._safe_globals()
+            safe_globals["__studiox_preview"] = _preview_submit
+            safe_globals["__studiox_extensions"] = runtime.namespaces()
             CodeExecutor._prepare_serial_proxy(safe_globals)
 
+            def _abort_trace(frame, event, arg):
+                CodeExecutor.raise_if_aborted()
+                return _abort_trace
+
+            compiled = compile(code, "<blockly>", "exec")
+            sys.settrace(_abort_trace)
             try:
-                CodeExecutor._abort_event.clear()
+                exec(compiled, safe_globals)
+            finally:
+                sys.settrace(None)
 
-                def _abort_trace(frame, event, arg):
-                    if CodeExecutor._abort_event.is_set():
-                        raise _AbortExecution("Execution aborted by emergency stop")
-                    return _abort_trace
-
-                compiled = compile(code, "<blockly>", "exec")
-                sys.settrace(_abort_trace)
-                try:
-                    exec(compiled, safe_globals)
-                finally:
-                    sys.settrace(None)
-
-                result = CodeExecutor._eval_last_expression(code, safe_globals)
-                return {
-                    "success": True,
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                    "result": repr(result) if result is not None else None,
-                }
-            except _AbortExecution:
-                return {
-                    "success": False,
-                    "error": "Execution aborted by emergency stop",
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                }
-            except SyntaxError as e:
-                return {
-                    "success": False,
-                    "error": f"Syntax Error: {e.msg} at line {e.lineno}",
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                }
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "traceback": traceback.format_exc(),
-                    "stdout": stdout_buffer.getvalue(),
-                    "stderr": stderr_buffer.getvalue(),
-                }
+            result = CodeExecutor._eval_last_expression(code, safe_globals)
+            outcome = {
+                "success": True,
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+                "result": repr(result) if result is not None else None,
+            }
+        except _AbortExecution as exc:
+            outcome = {
+                "success": False,
+                "reason": exc.reason,
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
+            if exc.reason == ABORT_EMERGENCY:
+                outcome["error"] = "Execution aborted by emergency stop"
+        except ExtensionRuntimeError as exc:
+            outcome = {
+                "success": False,
+                "error": str(exc),
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
+        except SyntaxError as e:
+            outcome = {
+                "success": False,
+                "error": f"Syntax Error: {e.msg} at line {e.lineno}",
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
+        except Exception as e:
+            outcome = {
+                "success": False,
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "stdout": stdout_buffer.getvalue(),
+                "stderr": stderr_buffer.getvalue(),
+            }
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             CodeExecutor._cleanup_blockly_packages(blockly_site)
+            CodeExecutor.cleanup_runtime(runtime)
             CodeExecutor._release_serial()
+            sess.mark_finished(
+                bool(outcome.get("success")),
+                None,
+                outcome.get("reason"),
+            )
+        return outcome
 
     @classmethod
-    def start_interactive(cls, code: str) -> dict:
+    def start_interactive(cls, code: str, extension_ids=None) -> dict:
         """Start code in a background thread. Returns {success, session_id}."""
         if not code or not str(code).strip():
             return {"success": False, "error": "No code provided"}
 
-        with cls._sessions_lock:
-            for s in cls._sessions.values():
-                if not s.done:
-                    return {
-                        "success": False,
-                        "error": "Another program is already running. Stop it first.",
-                    }
-
         session_id = uuid.uuid4().hex[:12]
         sess = InteractiveSession(session_id)
-        cls._register_session(sess)
-        cls._abort_event.clear()
+        with cls._sessions_lock:
+            busy = cls._another_running_locked()
+            if busy:
+                return busy
+            cls._sessions[sess.id] = sess
+            cls._prune_sessions_locked()
+            # Previous cleanup has finished (otherwise it would still be not done).
+            cls._clear_abort()
+
+        from .preview_hub import reset_for_execution
+        reset_for_execution()
 
         def runner():
+            from .extension_runtime import ExtensionRuntimeError
             old_stdout, old_stderr = sys.stdout, sys.stderr
             live_out = _LiveStream(sess.emit, "stdout")
             live_err = _LiveStream(sess.emit, "stderr")
             blockly_site = None
+            runtime = None
+            tb_text = None
             try:
                 sys.stdout = live_out
                 sys.stderr = live_err
                 blockly_site = CodeExecutor._prepare_blockly_packages()
+                runtime = CodeExecutor.prepare_runtime(session_id, extension_ids)
 
                 def _ui_input(prompt: str = "") -> str:
                     return sess.interactive_input(prompt if prompt is not None else "")
@@ -509,11 +652,13 @@ class CodeExecutor:
                     "input": _ui_input,
                     "print": _ui_print,
                 })
+                from .preview_hub import submit as _preview_submit
+                safe_globals["__studiox_preview"] = _preview_submit
+                safe_globals["__studiox_extensions"] = runtime.namespaces()
                 CodeExecutor._prepare_serial_proxy(safe_globals)
 
                 def _abort_trace(frame, event, arg):
-                    if CodeExecutor._abort_event.is_set():
-                        raise _AbortExecution("Execution aborted by emergency stop")
+                    CodeExecutor.raise_if_aborted()
                     return _abort_trace
 
                 compiled = compile(code, "<blockly>", "exec")
@@ -527,38 +672,40 @@ class CodeExecutor:
                 if result is not None:
                     sess.emit("result", repr(result))
                 sess.success = True
-                sess.emit("done", "", success=True)
-            except _AbortExecution:
+            except _AbortExecution as exc:
                 sess.success = False
-                sess.error = "Execution aborted by emergency stop"
+                sess.abort_reason = exc.reason
+                sess.error = None
+            except ExtensionRuntimeError as exc:
+                sess.success = False
+                sess.error = str(exc)
                 sess.emit("error", sess.error)
-                sess.emit("done", "", success=False)
             except SyntaxError as e:
                 sess.success = False
                 sess.error = f"Syntax Error: {e.msg} at line {e.lineno}"
                 sess.emit("error", sess.error)
-                sess.emit("done", "", success=False)
             except EOFError as e:
                 sess.success = False
                 sess.error = str(e) or "EOF while reading input"
                 sess.emit("error", sess.error)
-                sess.emit("done", "", success=False)
             except Exception as e:
                 sess.success = False
                 sess.error = str(e)
-                tb = traceback.format_exc()
-                sess.emit("stderr", tb)
+                tb_text = traceback.format_exc()
+                sess.emit("stderr", tb_text)
                 sess.emit("error", str(e))
-                sess.emit("done", "", success=False, traceback=tb)
             finally:
-                sess.done = True
-                # Wake any SSE waiters blocked on empty history tail
-                with sess._cv:
-                    sess._cv.notify_all()
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
                 CodeExecutor._cleanup_blockly_packages(blockly_site)
+                CodeExecutor.cleanup_runtime(runtime)
                 CodeExecutor._release_serial()
+                # done is published only after extension runtimes and serial are released.
+                sess.mark_finished(
+                    bool(sess.success),
+                    tb_text,
+                    sess.abort_reason if not sess.success else None,
+                )
 
         t = threading.Thread(target=runner, name=f"exec-{session_id}", daemon=True)
         t.start()

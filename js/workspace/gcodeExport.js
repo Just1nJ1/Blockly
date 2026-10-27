@@ -106,7 +106,11 @@ async function exportGcode() {
 
   var code;
   try {
-    code = Blockly.Python.workspaceToCode(workspace);
+    if (window.ExtensionPython && typeof window.ExtensionPython.generate === 'function') {
+      code = window.ExtensionPython.generate(workspace, { target: 'studiox', purpose: 'export' });
+    } else {
+      code = Blockly.Python.workspaceToCode(workspace);
+    }
   } catch (e) {
     if (typeof appendOutput === 'function') {
       appendOutput('G-code export: failed to generate Python — ' + e, 'error');

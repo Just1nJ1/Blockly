@@ -25,11 +25,17 @@ function generateCodeWithMap(workspace) {
   // Temporarily set STATEMENT_PREFIX to inject markers
   var oldPrefix = Blockly.Python.STATEMENT_PREFIX;
   Blockly.Python.STATEMENT_PREFIX = '# __BLOCK__:%1\n';
+  var restoreGeneration = (window.ExtensionPython && typeof window.ExtensionPython.begin === 'function')
+    ? window.ExtensionPython.begin({ target: 'studiox', purpose: 'execute' })
+    : function () {};
 
-  var rawCode = Blockly.Python.workspaceToCode(workspace);
-
-  // Restore
-  Blockly.Python.STATEMENT_PREFIX = oldPrefix || null;
+  var rawCode;
+  try {
+    rawCode = Blockly.Python.workspaceToCode(workspace);
+  } finally {
+    Blockly.Python.STATEMENT_PREFIX = oldPrefix || null;
+    restoreGeneration();
+  }
 
   // Parse: split into lines, build map, strip markers
   var rawLines = rawCode.split('\n');

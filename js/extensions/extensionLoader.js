@@ -13,9 +13,14 @@
  *   "contributes": {
  *     "sidebarTab": { "id", "label", "icon", "html", "js", "css" },
  *     "backend": { "main": "backend/main.py" },
- *     "workflows": [ "workflows/my_pipeline.json" ]
- *   }
+ *     "workflows": [ "workflows/my_pipeline.json" ],
+ *     "blocks": { "category": "Camera", "colour": "#4B8BBE", "files": ["blocks/blocks.json"] },
+ *     "window": { "title": "Camera", "html": "frontend/window.html", "js": "frontend/window.js", "css": "frontend/window.css" }
+ *   },
+ *   "depends": [{ "name": "camera", "url": "https://github.com/org/camera.git" }]
  * }
+ *
+ * sidebarTab is optional. A window contribution does not add a sidebar icon.
  *
  * Workflow templates are registered with WorkflowRegistry as soon as the
  * extension is discovered (not lazy on tab click), so they appear in the
@@ -45,15 +50,140 @@ try {
  * Called by main process via executeJavaScript after extensions are discovered.
  * @param {Array} extensions - Array of { manifest, basePath }
  */
-async function loadExtensions(extensions) {
+function _normalizeDepends(manifest) {
+  if (!manifest) return [];
+  var raw = manifest.depends;
+  if (raw == null) raw = manifest.dependencies;
+  if (typeof parseDependEntries === 'function') {
+    return parseDependEntries(raw).map(function (entry) { return entry.name; });
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    raw = raw.extensions || [];
+  }
+  if (typeof raw === 'string') raw = [raw];
+  if (!Array.isArray(raw)) return [];
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < raw.length; i++) {
+    var item = raw[i];
+    var name = '';
+    if (typeof item === 'string') name = item.trim();
+    else if (item && typeof item === 'object') name = String(item.name || item.extension || '').trim();
+    if (!name || seen[name]) continue;
+    seen[name] = true;
+    out.push(name);
+  }
+  return out;
+}
+
+function _missingDepends(name, byName, stack) {
+  var manifest = byName[name];
+  if (!manifest) return [name];
+  var missing = [];
+  stack = stack || [];
+  if (stack.indexOf(name) !== -1) return missing;
+  stack.push(name);
+  var deps = _normalizeDepends(manifest);
+  for (var i = 0; i < deps.length; i++) {
+    if (!byName[deps[i]]) {
+      missing.push(deps[i]);
+    } else {
+      missing = missing.concat(_missingDepends(deps[i], byName, stack));
+    }
+  }
+  stack.pop();
+  var uniq = [];
+  var seen = {};
+  for (var j = 0; j < missing.length; j++) {
+    if (!seen[missing[j]]) {
+      seen[missing[j]] = true;
+      uniq.push(missing[j]);
+    }
+  }
+  return uniq;
+}
+
+function _orderExtensions(extensions) {
+  var byName = {};
   for (var i = 0; i < extensions.length; i++) {
-    var ext = extensions[i];
+    var name = extensions[i].manifest && extensions[i].manifest.name;
+    if (name) byName[name] = extensions[i].manifest;
+  }
+  var blocked = {};
+  extensions.forEach(function (ext) {
+    var name = ext.manifest && ext.manifest.name;
+    if (!name) return;
+    var deps = _normalizeDepends(ext.manifest);
+    var absent = [];
+    for (var d = 0; d < deps.length; d++) {
+      absent = absent.concat(_missingDepends(deps[d], byName));
+    }
+    var uniq = [];
+    var seen = {};
+    absent.forEach(function (dep) {
+      if (!seen[dep]) { seen[dep] = true; uniq.push(dep); }
+    });
+    if (uniq.length) blocked[name] = uniq;
+  });
+
+  var remaining = extensions.filter(function (ext) {
+    return ext.manifest && ext.manifest.name && !blocked[ext.manifest.name];
+  });
+  var ordered = [];
+  var placed = {};
+  var guard = 0;
+  while (remaining.length && guard < extensions.length + 2) {
+    guard += 1;
+    var next = [];
+    for (var r = 0; r < remaining.length; r++) {
+      var ext = remaining[r];
+      var deps = _normalizeDepends(ext.manifest);
+      var ready = deps.every(function (dep) { return placed[dep]; });
+      if (ready) {
+        ordered.push(ext);
+        placed[ext.manifest.name] = true;
+      } else {
+        next.push(ext);
+      }
+    }
+    if (next.length === remaining.length) {
+      next.forEach(function (ext) {
+        blocked[ext.manifest.name] = _normalizeDepends(ext.manifest);
+      });
+      break;
+    }
+    remaining = next;
+  }
+  return { ordered: ordered, blocked: blocked };
+}
+
+async function loadExtensions(extensions) {
+  var plan = _orderExtensions(extensions || []);
+  var blockedNames = Object.keys(plan.blocked);
+  for (var b = 0; b < blockedNames.length; b++) {
+    var missing = plan.blocked[blockedNames[b]].join(', ');
+    var msg = 'Extension "' + blockedNames[b] + '" requires: ' + missing;
+    console.error('[Extensions] ' + msg);
+    if (window.ExtensionAPI && typeof ExtensionAPI.showNotification === 'function') {
+      ExtensionAPI.showNotification(msg, 'error');
+    }
+  }
+
+  for (var i = 0; i < plan.ordered.length; i++) {
+    var ext = plan.ordered[i];
     try {
       await _loadSingleExtension(ext.manifest, ext.basePath);
       console.log('[Extensions] Loaded: ' + (ext.manifest.displayName || ext.manifest.name));
     } catch (err) {
       console.error('[Extensions] Failed to load ' + ext.manifest.name + ':', err);
     }
+  }
+
+  if (typeof refreshExtensionBlocksToolbox === 'function') {
+    refreshExtensionBlocksToolbox();
+  }
+  if (typeof recheckPreservedWorkspace === 'function') {
+    recheckPreservedWorkspace();
   }
 
   // Refresh Saved Functions panel if Blockly UI is already up
@@ -91,7 +221,15 @@ async function _loadSingleExtension(manifest, basePath) {
     await _loadExtensionWorkflows(manifest, basePath, contributes.workflows);
   }
 
-  // 5. Auto-scan functions/ for default saved-function JSON (optional)
+  // 5. Register this extension's Blockly block group
+  if (contributes.blocks && typeof registerExtensionBlocks === 'function') {
+    if (window.DynamicFields && contributes.dynamicFields) {
+      window.DynamicFields.registerAll(manifest.name, contributes.dynamicFields);
+    }
+    await registerExtensionBlocks(manifest, basePath, contributes.blocks);
+  }
+
+  // 6. Auto-scan functions/ for default saved-function JSON (optional)
   _scanExtensionFunctions(manifest, basePath);
 
   _loadedExtensions.get(name).status = 'ready';

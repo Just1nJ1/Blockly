@@ -1,0 +1,33 @@
+{
+  "manifestVersion": 2,
+  "extensionApiVersion": 1,
+  "name": "test-device",
+  "displayName": "Test Device",
+  "version": "1.0.0",
+  "description": "Fake device used to prove StudioX extensions are not camera-specific.",
+  "contributes": {
+    "backend": {
+      "main": "backend/main.py"
+    },
+    "blocks": {
+      "category": "Test Device",
+      "colour": "#6B7280",
+      "files": ["blocks/blocks.json"]
+    },
+    "dynamicFields": {
+      "ports": {
+        "kind": "httpOptions",
+        "path": "/ports",
+        "refreshPath": "/ports?refresh=1",
+        "itemsKey": "ports",
+        "labelKey": "name",
+        "valueKey": "id",
+        "refresh": "onOpen",
+        "cacheMs": 20000
+      }
+    },
+    "runtime": {
+      "python": "runtime/adapter.py"
+    }
+  }
+}

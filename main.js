@@ -3,9 +3,11 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const { parseDependEntries, githubMainZipUrl } = require('./js/extensions/dependSource.js');
 
 // Serve packaged extraResources (viewer + Three) to the renderer.
 // Must be registered before app ready. Maps studiox://app/<rel> → resourcesPath/<rel>
@@ -174,6 +176,11 @@ function getExtensionsDir() {
   return dir;
 }
 
+/** npm run start -- --user-extensions-only */
+function userExtensionsOnly() {
+  return process.argv.includes('--user-extensions-only');
+}
+
 /**
  * Wipe user venvs and comm logs when the packaged app is a new install
  * (version or embedded Python binary changed). Leaves extensions/ alone.
@@ -221,26 +228,82 @@ function resetRuntimeOnNewInstall() {
 }
 
 /**
+ * Install result plus dependency requirements already on disk.
+ * Missing dependency extensions are listed so the UI can refuse to
+ * treat the new extension as usable.
+ */
+function _readRequirements(dir) {
+  const reqPath = path.join(dir, 'requirements.txt');
+  return fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
+}
+
+function _extensionInstallPayload(dest, manifest) {
+  const requirements = _readRequirements(dest);
+  const depends = parseDependEntries(manifest.depends || manifest.dependencies);
+  const discovered = discoverExtensions();
+  const byName = new Map();
+  for (const ext of discovered) {
+    if (ext.manifest && ext.manifest.name) byName.set(ext.manifest.name, ext);
+  }
+  const missingDepends = [];
+  const dependencyRequirements = {};
+  const readySetups = [];
+  for (const dep of depends) {
+    const found = byName.get(dep.name);
+    if (!found) {
+      missingDepends.push(dep);
+      continue;
+    }
+    const depManifest = found.manifest || {};
+    const depDepends = parseDependEntries(depManifest.depends || depManifest.dependencies);
+    const depName = depManifest.name || dep.name;
+    dependencyRequirements[depName] = _readRequirements(found.path);
+    readySetups.push({
+      name: depName,
+      requirements: dependencyRequirements[depName],
+      shareFrom: depDepends.map((item) => item.name),
+    });
+  }
+  const name = manifest.name || path.basename(dest);
+  return {
+    success: true,
+    name: name,
+    displayName: manifest.displayName || name,
+    requirements: requirements,
+    depends: depends,
+    missingDepends: missingDepends,
+    dependencyRequirements: dependencyRequirements,
+    readySetups: readySetups,
+    shareFrom: depends.map((dep) => dep.name),
+  };
+}
+
+/**
  * Discover extensions in the extensions directories.
  * Checks user dir, dev dir, and packaged app resources.
  */
-function discoverExtensions() {
-  const extensionsDirs = [
-    // User extensions (always checked, highest priority)
-    getExtensionsDir(),
-    // Dev extensions (checked in development)
-    path.join(__dirname, 'extensions'),
+function extensionSearchRoots() {
+  const roots = [
+    { dir: getExtensionsDir(), source: 'user' },
   ];
-
-  // In packaged app, also check extraResources
-  if (isPackaged()) {
-    extensionsDirs.push(path.join(process.resourcesPath, 'extensions'));
+  // Installed copies only. Skips this repo's extensions/ and a packaged bundle.
+  if (userExtensionsOnly()) {
+    return roots;
   }
+  roots.push({ dir: path.join(__dirname, 'extensions'), source: 'project' });
+  if (isPackaged()) {
+    roots.push({ dir: path.join(process.resourcesPath, 'extensions'), source: 'bundled' });
+  }
+  return roots;
+}
 
+function discoverExtensions() {
+  const { validateManifest } = require('./js/extensions/manifestValidator.js');
   const extensions = [];
   const seen = new Set();
 
-  for (const dir of extensionsDirs) {
+  for (const root of extensionSearchRoots()) {
+    const dir = root.dir;
     if (!fs.existsSync(dir)) continue;
 
     let entries;
@@ -254,13 +317,21 @@ function discoverExtensions() {
 
       try {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-        const name = manifest.name || entry;
+        const checked = validateManifest(manifest, { directoryName: entry, root: extDir });
+        if (!checked.ok) {
+          logError('Rejected extension ' + entry + ': ' + checked.errors.join('; '));
+          continue;
+        }
+        const name = checked.normalized.name;
 
         // First one wins (user overrides bundled)
         if (seen.has(name)) continue;
         seen.add(name);
+        checked.warnings.forEach(function (warning) {
+          log('Extension ' + name + ': ' + warning);
+        });
 
-        extensions.push({ manifest: manifest, path: extDir });
+        extensions.push({ manifest: checked.normalized, path: extDir, source: root.source });
         log('Extension found: ' + (manifest.displayName || name) + ' (' + extDir + ')');
       } catch (err) {
         logError('Invalid extension manifest in ' + entry + ': ' + err.message);
@@ -449,7 +520,8 @@ function buildAppMenu() {
           { role: 'front' }
         ] : [
           { role: 'close' }
-        ])
+        ]),
+        ...extensionWindowMenuItems(),
       ]
     },
     // Help menu
@@ -466,6 +538,78 @@ function buildAppMenu() {
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+}
+
+const _extensionWindows = new Map();
+
+function extensionWindowSpecs() {
+  const specs = [];
+  for (const ext of _discoveredExtensions || []) {
+    const manifest = ext && ext.manifest;
+    const win = manifest && manifest.contributes && manifest.contributes.window;
+    if (!manifest || !win || typeof win !== 'object') continue;
+    specs.push({
+      name: manifest.name,
+      title: win.title || manifest.displayName || manifest.name,
+      displayName: manifest.displayName || manifest.name,
+      permissions: Array.isArray(manifest.permissions) ? manifest.permissions : [],
+      basePath: ext.path,
+      html: win.html || '',
+      js: win.js || '',
+      css: win.css || '',
+    });
+  }
+  return specs;
+}
+
+function extensionWindowMenuItems() {
+  const specs = extensionWindowSpecs();
+  if (!specs.length) return [];
+  return [
+    { type: 'separator' },
+    ...specs.map((spec) => ({
+      label: spec.title,
+      click: () => { openExtensionWindow(spec); },
+    })),
+  ];
+}
+
+async function openExtensionWindow(spec) {
+  const existing = _extensionWindows.get(spec.name);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return;
+  }
+  for (const permission of spec.permissions) {
+    const result = await ensureMediaPermission(permission, spec.displayName);
+    if (!result || !result.granted) return;
+  }
+  // A file:// URL inside app.asar with a query string is blocked after packaging
+  // ("Not allowed to load local resource"). Pass the window settings on argv.
+  const win = new BrowserWindow({
+    width: 960,
+    height: 640,
+    title: spec.title,
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+      additionalArguments: ['--studiox-extension-window=' + encodeURIComponent(JSON.stringify({
+        title: spec.title,
+        basePath: spec.basePath,
+        html: spec.html,
+        js: spec.js,
+        css: spec.css,
+        serverPort: String(serverPort),
+        extensionName: spec.name,
+      }))],
+    },
+  });
+  _extensionWindows.set(spec.name, win);
+  win.on('closed', () => {
+    if (_extensionWindows.get(spec.name) === win) _extensionWindows.delete(spec.name);
+  });
+  await win.loadFile(path.join(__dirname, 'extension-window.html'));
 }
 
 function finishAppClose(fromQuit) {
@@ -558,6 +702,42 @@ async function requestAppClose(fromQuit) {
 }
 
 let worldPopout = null;
+const viewPopouts = new Map();
+
+async function openViewPopoutWindow(view) {
+  const existing = viewPopouts.get(view);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return { ok: true, reused: true };
+  }
+  const titles = { workspace: 'Blockly', world: 'World', camera: 'Camera' };
+  const win = new BrowserWindow({
+    width: 960,
+    height: 720,
+    title: titles[view] || 'StudioX',
+    icon: path.join(__dirname, 'resources', 'icons', 'icon.png'),
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  attachRendererBoot(win);
+  viewPopouts.set(view, win);
+  const query = { viewPopout: view };
+  if (view === 'world') query.worldPopout = '1';
+  await win.loadFile('index.html', { query });
+  win.on('closed', () => {
+    if (viewPopouts.get(view) === win) viewPopouts.delete(view);
+    if (view === 'world') worldPopout = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('view:popout-closed', view);
+      if (view === 'world') mainWindow.webContents.send('world:popout-closed');
+    }
+  });
+  if (view === 'world') worldPopout = win;
+  return { ok: true };
+}
 
 function attachRendererBoot(win) {
   win.webContents.on('did-finish-load', () => {
@@ -567,31 +747,12 @@ function attachRendererBoot(win) {
   });
 }
 
+ipcMain.handle('view:open-popout', async (event, view) => {
+  return openViewPopoutWindow(view || 'world');
+});
+
 ipcMain.handle('world:open-popout', async () => {
-  if (worldPopout && !worldPopout.isDestroyed()) {
-    worldPopout.focus();
-    return { ok: true, reused: true };
-  }
-  worldPopout = new BrowserWindow({
-    width: 960,
-    height: 720,
-    title: 'World',
-    icon: path.join(__dirname, 'resources', 'icons', 'icon.png'),
-    autoHideMenuBar: true,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
-  attachRendererBoot(worldPopout);
-  await worldPopout.loadFile('index.html', { query: { worldPopout: '1' } });
-  worldPopout.on('closed', () => {
-    worldPopout = null;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('world:popout-closed');
-    }
-  });
-  return { ok: true };
+  return openViewPopoutWindow('world');
 });
 
 ipcMain.handle('world:focus-popout', () => {
@@ -683,6 +844,12 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    viewPopouts.forEach((win) => {
+      if (win && !win.isDestroyed()) win.close();
+    });
+    _extensionWindows.forEach((win) => {
+      if (win && !win.isDestroyed()) win.close();
+    });
     if (worldPopout && !worldPopout.isDestroyed()) {
       worldPopout.close();
     }
@@ -749,13 +916,9 @@ function startPythonServer() {
     const serverArgs = ['-u', serverPath, '--port', String(serverPort)];
 
     // Pass all extensions directories to the Flask server
-    const extDirs = [getExtensionsDir()];
-    const devExtDir = path.join(__dirname, 'extensions');
-    if (fs.existsSync(devExtDir)) extDirs.push(devExtDir);
-    if (isPackaged()) {
-      const bundledExtDir = path.join(process.resourcesPath, 'extensions');
-      if (fs.existsSync(bundledExtDir)) extDirs.push(bundledExtDir);
-    }
+    const extDirs = extensionSearchRoots()
+      .map(function (root) { return root.dir; })
+      .filter(function (dir) { return fs.existsSync(dir); });
     for (const d of extDirs) {
       serverArgs.push('--extensions-dir', d);
     }
@@ -848,6 +1011,9 @@ function waitForServer(maxAttempts = 50) {
 
 app.whenReady().then(async () => {
   try {
+    if (userExtensionsOnly()) {
+      log('User extensions only: ' + getExtensionsDir());
+    }
     log(`App is packaged: ${isPackaged()}`);
     log(`__dirname: ${__dirname}`);
     log(`resourcesPath: ${process.resourcesPath}`);
@@ -1086,13 +1252,10 @@ async function showPermissionBlockedDialog(meta, listText) {
   }
 }
 
-ipcMain.handle('permissions:ensure', async (event, payload) => {
-  const permission = payload && payload.permission;
+async function ensureMediaPermission(permission, openerName) {
   const meta = MEDIA_PERMISSIONS[permission];
   if (!meta) return { granted: true };
-
-  const opener = (payload && (payload.displayName || payload.extensionName)) || '';
-  const listText = permissionListText(permission, opener);
+  const listText = permissionListText(permission, openerName || '');
 
   // Electron can show the TCC prompt only on macOS.
   if (process.platform !== 'darwin') {
@@ -1136,6 +1299,12 @@ ipcMain.handle('permissions:ensure', async (event, payload) => {
     return { granted: false, status: 'denied' };
   }
   return { granted: true, status: 'granted' };
+}
+
+ipcMain.handle('permissions:ensure', async (event, payload) => {
+  const permission = payload && payload.permission;
+  const opener = (payload && (payload.displayName || payload.extensionName)) || '';
+  return ensureMediaPermission(permission, opener);
 });
 
 // ── Extension management (native OS) ────────────────────────────
@@ -1148,32 +1317,29 @@ ipcMain.handle('extensions:getDir', () => {
 });
 
 /**
- * List installed extensions from the user extensions directory.
- * Returns array of { name, displayName, version, description, path }.
+ * List every discovered extension: user installs, the project extensions
+ * folder, and bundled copies. User installs win when names collide.
  */
 ipcMain.handle('extensions:list', () => {
-  const dir = getExtensionsDir();
-  const results = [];
-  let entries;
-  try { entries = fs.readdirSync(dir); } catch (e) { return results; }
-  for (const entry of entries) {
-    const extDir = path.join(dir, entry);
-    const manifestPath = path.join(extDir, 'extension.json');
-    if (!fs.existsSync(manifestPath)) continue;
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      results.push({
-        name: manifest.name || entry,
-        displayName: manifest.displayName || manifest.name || entry,
-        version: manifest.version || '',
-        description: manifest.description || '',
-        path: extDir,
-      });
-    } catch (e) {
-      results.push({ name: entry, displayName: entry, version: '', description: 'Invalid manifest', path: extDir });
-    }
-  }
-  return results;
+  return discoverExtensions().map((ext) => {
+    const manifest = ext.manifest || {};
+    const payload = _extensionInstallPayload(ext.path, manifest);
+    return {
+      name: payload.name,
+      displayName: payload.displayName,
+      version: manifest.version || '',
+      description: manifest.description || '',
+      path: ext.path,
+      source: ext.source || 'project',
+      removable: ext.source === 'user',
+      requirements: payload.requirements,
+      depends: payload.depends,
+      missingDepends: payload.missingDepends,
+      dependencyRequirements: payload.dependencyRequirements,
+      readySetups: payload.readySetups,
+      shareFrom: payload.shareFrom,
+    };
+  });
 });
 
 /**
@@ -1207,9 +1373,7 @@ ipcMain.handle('extensions:installFolder', async () => {
   try {
     _copyDirSync(srcDir, dest);
     log('Extension installed from folder: ' + name);
-    const reqPath = path.join(dest, 'requirements.txt');
-    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : null;
-    return { success: true, name: name, requirements: requirements };
+    return _extensionInstallPayload(dest, manifest);
   } catch (e) {
     return { success: false, error: 'Copy failed: ' + e.message };
   }
@@ -1219,6 +1383,127 @@ ipcMain.handle('extensions:installFolder', async () => {
  * Install an extension from a .zip file (extracts into user extensions dir).
  * Returns { success, name } or { success: false, error }.
  */
+function _extractExtensionZip(zipPath) {
+  const AdmZip = require('adm-zip');
+  const zip = new AdmZip(zipPath);
+  const entries = zip.getEntries();
+
+  let manifestEntry = null;
+  for (const entry of entries) {
+    const parts = entry.entryName.replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts[parts.length - 1] === 'extension.json') {
+      if (!manifestEntry || parts.length < manifestEntry.depth) {
+        manifestEntry = { entry, depth: parts.length, prefix: parts.slice(0, -1).join('/') };
+      }
+    }
+  }
+  if (!manifestEntry) {
+    return { success: false, error: 'Zip does not contain an extension.json manifest.' };
+  }
+
+  const manifest = JSON.parse(manifestEntry.entry.getData().toString('utf-8'));
+  const name = manifest.name || path.basename(zipPath, '.zip');
+  const dest = path.join(getExtensionsDir(), name);
+  const prefix = manifestEntry.prefix ? manifestEntry.prefix + '/' : '';
+  const root = path.resolve(dest);
+
+  if (fs.existsSync(dest)) {
+    fs.rmSync(dest, { recursive: true, force: true });
+  }
+  fs.mkdirSync(dest, { recursive: true });
+
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    const entryPath = entry.entryName.replace(/\\/g, '/');
+    if (prefix && !entryPath.startsWith(prefix)) continue;
+    const relative = prefix ? entryPath.slice(prefix.length) : entryPath;
+    if (!relative || relative.split('/').includes('..')) continue;
+    const destFile = path.resolve(dest, relative);
+    if (destFile !== root && !destFile.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(destFile), { recursive: true });
+    fs.writeFileSync(destFile, entry.getData());
+  }
+
+  log('Extension installed from zip: ' + name);
+  return _extensionInstallPayload(dest, manifest);
+}
+
+function _downloadToFile(url, dest, redirectsLeft) {
+  const left = redirectsLeft == null ? 5 : redirectsLeft;
+  return new Promise((resolve, reject) => {
+    const lib = String(url).startsWith('https:') ? https : http;
+    const req = lib.get(url, {
+      headers: { 'User-Agent': 'WLKATA-StudioX', 'Accept': 'application/octet-stream' },
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (left <= 0) {
+          reject(new Error('Too many redirects downloading ' + url));
+          return;
+        }
+        resolve(_downloadToFile(new URL(res.headers.location, url).toString(), dest, left - 1));
+        return;
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error('Download failed (' + res.statusCode + ') for ' + url));
+        return;
+      }
+      const file = fs.createWriteStream(dest);
+      res.pipe(file);
+      file.on('finish', () => file.close(() => resolve(dest)));
+      file.on('error', (err) => reject(err));
+    });
+    req.on('error', (err) => reject(err));
+  });
+}
+
+async function _installMissingDependency(entry, seen, setup) {
+  const name = entry && entry.name;
+  if (!name) return { success: false, error: 'Missing dependency name.' };
+  if (seen.has(name)) return { success: true };
+  seen.add(name);
+
+  const discovered = discoverExtensions();
+  const found = discovered.find((ext) => ext.manifest && ext.manifest.name === name);
+  let payload;
+  if (!found) {
+    const zipUrl = githubMainZipUrl(entry.url);
+    if (!zipUrl) {
+      return {
+        success: false,
+        error: (entry.displayName || name) + ' is not installed and has no GitHub or zip link.',
+      };
+    }
+    const tmp = path.join(os.tmpdir(), 'studiox-ext-' + name + '-' + Date.now() + '.zip');
+    try {
+      log('Downloading ' + name + ' from ' + zipUrl);
+      await _downloadToFile(zipUrl, tmp);
+      payload = _extractExtensionZip(tmp);
+    } catch (err) {
+      return { success: false, error: err.message || String(err) };
+    } finally {
+      try { fs.rmSync(tmp, { force: true }); } catch (err) { /* ignore */ }
+    }
+    if (!payload.success) return payload;
+  } else {
+    payload = _extensionInstallPayload(found.path, found.manifest || {});
+  }
+
+  for (const dep of payload.missingDepends || []) {
+    const child = await _installMissingDependency(dep, seen, setup);
+    if (!child.success) return child;
+  }
+  if (!setup.some((step) => step.name === payload.name)) {
+    setup.push({
+      name: payload.name,
+      requirements: payload.requirements || '',
+      shareFrom: (payload.depends || []).map((dep) => dep.name),
+    });
+  }
+  return { success: true };
+}
+
 ipcMain.handle('extensions:installZip', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Select Extension Zip',
@@ -1228,56 +1513,27 @@ ipcMain.handle('extensions:installZip', async () => {
   });
   if (result.canceled || result.filePaths.length === 0) return null;
 
-  const zipPath = result.filePaths[0];
   try {
-    const AdmZip = require('adm-zip');
-    const zip = new AdmZip(zipPath);
-    const entries = zip.getEntries();
-
-    // Find extension.json to detect root folder inside zip
-    let manifestEntry = null;
-    for (const entry of entries) {
-      const parts = entry.entryName.replace(/\\/g, '/').split('/').filter(Boolean);
-      if (parts[parts.length - 1] === 'extension.json') {
-        if (!manifestEntry || parts.length < manifestEntry.depth) {
-          manifestEntry = { entry, depth: parts.length, prefix: parts.slice(0, -1).join('/') };
-        }
-      }
-    }
-    if (!manifestEntry) {
-      return { success: false, error: 'Zip does not contain an extension.json manifest.' };
-    }
-
-    const manifest = JSON.parse(manifestEntry.entry.getData().toString('utf-8'));
-    const name = manifest.name || path.basename(zipPath, '.zip');
-    const dest = path.join(getExtensionsDir(), name);
-    const prefix = manifestEntry.prefix ? manifestEntry.prefix + '/' : '';
-
-    if (fs.existsSync(dest)) {
-      fs.rmSync(dest, { recursive: true, force: true });
-    }
-    fs.mkdirSync(dest, { recursive: true });
-
-    for (const entry of entries) {
-      if (entry.isDirectory) continue;
-      const entryPath = entry.entryName.replace(/\\/g, '/');
-      if (prefix && !entryPath.startsWith(prefix)) continue;
-      const relative = prefix ? entryPath.slice(prefix.length) : entryPath;
-      if (!relative) continue;
-      const destFile = path.join(dest, relative);
-      fs.mkdirSync(path.dirname(destFile), { recursive: true });
-      fs.writeFileSync(destFile, entry.getData());
-    }
-
-    log('Extension installed from zip: ' + name);
-    const reqPath = path.join(dest, 'requirements.txt');
-    const requirements = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : null;
-    return { success: true, name: name, requirements: requirements };
+    return _extractExtensionZip(result.filePaths[0]);
   } catch (e) {
     if (e.code === 'MODULE_NOT_FOUND') {
       return { success: false, error: 'Zip support requires the adm-zip package. Install it with: npm install adm-zip' };
     }
     return { success: false, error: 'Zip extraction failed: ' + e.message };
+  }
+});
+
+ipcMain.handle('extensions:installDependencies', async (event, entries) => {
+  const setup = [];
+  const seen = new Set();
+  try {
+    for (const entry of entries || []) {
+      const result = await _installMissingDependency(entry, seen, setup);
+      if (!result.success) return result;
+    }
+    return { success: true, setup: setup };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
   }
 });
 

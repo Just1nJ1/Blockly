@@ -1,0 +1,44 @@
+[
+  {
+    "type": "test_device_setup",
+    "message0": "open test port %1",
+    "args0": [
+      {
+        "type": "field_dropdown",
+        "name": "PORT",
+        "options": [["Choose port", ""]],
+        "source": "ports"
+      }
+    ],
+    "previousStatement": null,
+    "nextStatement": null,
+    "colour": 120,
+    "tooltip": "Open a fake port. This does not touch a camera.",
+    "python": "__studiox_extensions['test-device'].open({PORT})\n"
+  },
+  {
+    "type": "test_device_mode",
+    "message0": "set test device %1",
+    "args0": [
+      {
+        "type": "field_dropdown",
+        "name": "POWER",
+        "options": [["on", "on"], ["off", "off"]],
+        "unquoted": true
+      }
+    ],
+    "previousStatement": null,
+    "nextStatement": null,
+    "colour": 120,
+    "tooltip": "Choose on or off for the fake device.",
+    "python": {
+      "select": {
+        "field": "POWER",
+        "cases": {
+          "on": "device.on()\n",
+          "off": "device.off()\n"
+        }
+      }
+    }
+  }
+]

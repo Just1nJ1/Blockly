@@ -231,10 +231,19 @@
   // Parse code to extract move sequence for a specific variable.
   // Prefers server dry-run recordings when available and fresh for the
   // current code; falls back to static literal parsing otherwise.
+  function simulationSource() {
+    var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
+    if (!workspace || !window.ExtensionPython || typeof window.ExtensionPython.generate !== 'function') {
+      return '';
+    }
+    return window.ExtensionPython.generate(workspace, {
+      target: 'studiox',
+      purpose: 'simulation'
+    });
+  }
+
   function parseMovesFromCode(variableName) {
-    const codeEl = document.getElementById('code-preview');
-    if (!codeEl) return [];
-    const code = codeEl.textContent || '';
+    const code = simulationSource();
 
     const rec = window.RobotCodeAnalysis.recordedMoves;
     const recCode = window.RobotCodeAnalysis.recordedMovesCode;
@@ -297,8 +306,7 @@
    * Debounced callers should use scheduleRecordedMovesRefresh().
    */
   function refreshRecordedMoves(codeOverride) {
-    var codeEl = document.getElementById('code-preview');
-    var code = (codeOverride != null) ? codeOverride : (codeEl ? (codeEl.textContent || '') : '');
+    var code = (codeOverride != null) ? codeOverride : simulationSource();
     if (!code.trim()) {
       window.RobotCodeAnalysis.recordedMoves = {};
       window.RobotCodeAnalysis.recordedSegments = [];
@@ -387,8 +395,7 @@
    * so viewers can restart animation with the unrolled sequence.
    */
   function scheduleRecordedMovesRefresh(delayMs) {
-    var codeEl = document.getElementById('code-preview');
-    var code = codeEl ? (codeEl.textContent || '') : '';
+    var code = simulationSource();
     _recordRefreshPendingCode = code;
     if (_recordRefreshTimer) clearTimeout(_recordRefreshTimer);
     _recordRefreshTimer = setTimeout(function() {
@@ -493,6 +500,7 @@
   window.analyzeRobotCode = analyzeRobotCode;
   window.normalizeRobotModelName = normalizeRobotModelName;
   window.extractMovesFromLines = extractMovesFromLines;
+  window.simulationSource = simulationSource;
   window.parseMovesFromCode = parseMovesFromCode;
   window.refreshRecordedMoves = refreshRecordedMoves;
   window.scheduleRecordedMovesRefresh = scheduleRecordedMovesRefresh;

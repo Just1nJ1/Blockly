@@ -356,6 +356,8 @@ class InstanceInspector:
                 import_lines.append(line)
 
         safe_globals = CodeExecutor._safe_globals()
+        from .extension_runtime import unavailable_extensions
+        safe_globals['__studiox_extensions'] = unavailable_extensions('inspection')
 
         # Patch serial.Serial to use the proxy if a managed port is connected
         mgr = SerialManager.get_instance()

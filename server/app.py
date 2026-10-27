@@ -102,6 +102,22 @@ def list_functions():
     })
 
 
+def _extension_ids_from_request(data):
+    """Optional extension ids. Omitted or null means none. The server revalidates them."""
+    if not isinstance(data, dict) or 'extension_ids' not in data or data.get('extension_ids') is None:
+        return []
+    raw = data.get('extension_ids')
+    if not isinstance(raw, list):
+        raise ValueError('extension_ids must be a list of strings.')
+    ids = []
+    for item in raw:
+        if not isinstance(item, str) or not item or item != item.strip():
+            raise ValueError('extension_ids must be a list of strings.')
+        if item not in ids:
+            ids.append(item)
+    return ids
+
+
 @app.route('/execute', methods=['POST'])
 def execute_code():
     """Batch-execute Python code (legacy: wait for completion, return full output)."""
@@ -114,7 +130,12 @@ def execute_code():
         if not code:
             return jsonify({'success': False, 'error': 'No code provided'}), 400
 
-        result = CodeExecutor.execute(code)
+        try:
+            extension_ids = _extension_ids_from_request(data)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
+        result = CodeExecutor.execute(code, extension_ids=extension_ids)
         return jsonify(result)
 
     except Exception as e:
@@ -135,7 +156,11 @@ def execute_start():
         code = data.get('code', '')
         if not code or not str(code).strip():
             return jsonify({'success': False, 'error': 'No code provided'}), 400
-        result = CodeExecutor.start_interactive(code)
+        try:
+            extension_ids = _extension_ids_from_request(data)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        result = CodeExecutor.start_interactive(code, extension_ids=extension_ids)
         status = 200 if result.get('success') else 409
         return jsonify(result), status
     except Exception as e:
@@ -205,11 +230,30 @@ def execute_input():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/preview-frames', methods=['GET'])
+def preview_frames():
+    """Newest preview image for each slot. Served from this process."""
+    from .preview_hub import snapshot
+    rev, frames, error = snapshot()
+    return jsonify({
+        'success': True,
+        'rev': rev,
+        'frames': frames,
+        'error': error,
+    })
+
+
 @app.route('/execute/abort', methods=['POST'])
 def execute_abort():
-    """Abort any running code execution."""
+    """Abort any running code execution.
+
+    ``reason`` is ``stop`` for the program Stop button and ``emergency``
+    for Emergency Stop. The reason is stored on the running session.
+    """
     try:
-        CodeExecutor.abort()
+        data = request.get_json(silent=True) or {}
+        reason = data.get('reason') or 'stop'
+        CodeExecutor.abort(reason)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -373,7 +417,12 @@ def debug_start():
         if not code:
             return jsonify({'success': False, 'error': 'No code provided'}), 400
 
-        result = StepDebugger.start(code)
+        try:
+            extension_ids = _extension_ids_from_request(data)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+
+        result = StepDebugger.start(code, extension_ids=extension_ids)
         return jsonify(result)
 
     except Exception as e:
@@ -1890,12 +1939,16 @@ def env_install_requirements():
         data = request.get_json() or {}
         env_name = data.get('env', '').strip()
         requirements = data.get('requirements', '').strip()
+        share_from = data.get('share_from') or []
+        if isinstance(share_from, str):
+            share_from = [share_from]
 
         if not env_name or not requirements:
             return jsonify({'success': False,
                             'error': 'env and requirements are required'}), 400
 
-        return jsonify(environments.install_requirements(env_name, requirements))
+        return jsonify(environments.install_requirements(
+            env_name, requirements, share_from=share_from))
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -1930,6 +1983,5 @@ def create_app(extensions_dirs=None, host='127.0.0.1', port=5080):
     if extensions_dirs:
         main_server_url = f'http://{host}:{port}'
         from .extensions import load_extensions
-        for ext_dir in extensions_dirs:
-            load_extensions(app, ext_dir, main_server_url=main_server_url)
+        load_extensions(app, extensions_dirs, main_server_url=main_server_url)
     return app

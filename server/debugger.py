@@ -13,16 +13,18 @@ import threading
 import traceback
 import uuid
 import copy
-from .executor import CodeExecutor
+from .executor import ABORT_STOP, CodeExecutor, _AbortExecution
+from .extension_runtime import ExtensionRuntimeError
 from .serial_manager import SerialManager
 
 
 class DebugSession:
     """Represents a single step-debug session."""
 
-    def __init__(self, code: str, session_id: str):
+    def __init__(self, code: str, session_id: str, extension_ids=None):
         self.session_id = session_id
         self.code = code
+        self.extension_ids = list(extension_ids or [])
 
         # Synchronisation primitives
         self._step_event = threading.Event()   # signalled by /step to advance
@@ -77,7 +79,10 @@ class DebugSession:
             self.stopped = True
             return {'success': False, 'error': 'Timeout waiting for first trace event'}
 
-        return self._build_state_response()
+        response = self._build_state_response()
+        if self.error and self.current_line is None:
+            response['success'] = False
+        return response
 
     def step(self) -> dict:
         """Advance execution by one line."""
@@ -168,12 +173,35 @@ class DebugSession:
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         blockly_site = None
+        runtime = None
+        capture_session = 'debug-%s' % self.session_id
         try:
+            from .preview_hub import reset_for_execution
+            with CodeExecutor._sessions_lock:
+                if all(s.done for s in CodeExecutor._sessions.values()):
+                    CodeExecutor._clear_abort()
+            reset_for_execution()
             sys.stdout = self.stdout_buffer
             sys.stderr = self.stderr_buffer
             blockly_site = CodeExecutor._prepare_blockly_packages()
 
+            def _debug_abort():
+                CodeExecutor.raise_if_aborted()
+                if self.stopped:
+                    raise _AbortExecution(ABORT_STOP)
+
+            try:
+                runtime = CodeExecutor.prepare_runtime(
+                    capture_session, self.extension_ids, abort_checker=_debug_abort,
+                )
+            except ExtensionRuntimeError as exc:
+                self.error = str(exc)
+                return
+
             safe_globals = CodeExecutor._safe_globals()
+            from .preview_hub import submit as _preview_submit
+            safe_globals['__studiox_preview'] = _preview_submit
+            safe_globals['__studiox_extensions'] = runtime.namespaces()
 
             # Patch serial.Serial to use the shared connection
             mgr = SerialManager.get_instance()
@@ -206,8 +234,8 @@ class DebugSession:
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-            self.finished = True
             CodeExecutor._cleanup_blockly_packages(blockly_site)
+            CodeExecutor.cleanup_runtime(runtime)
             try:
                 mgr = SerialManager.get_instance()
                 for conn in mgr.all_connected():
@@ -215,6 +243,7 @@ class DebugSession:
                 mgr.busy = False
             except Exception:
                 pass
+            self.finished = True
             # Signal state-ready so any waiting /step call unblocks
             self._state_ready.set()
 
@@ -284,10 +313,10 @@ class StepDebugger:
     _lock = threading.Lock()
 
     @classmethod
-    def start(cls, code: str) -> dict:
+    def start(cls, code: str, extension_ids=None) -> dict:
         """Create a new debug session and return initial state."""
         session_id = str(uuid.uuid4())
-        session = DebugSession(code, session_id)
+        session = DebugSession(code, session_id, extension_ids)
         with cls._lock:
             cls._sessions[session_id] = session
         return session.start()

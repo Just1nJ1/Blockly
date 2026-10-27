@@ -9,6 +9,8 @@ var _execSessionId = null;
 var _execEventSource = null;
 /** True while a program is running interactively */
 var _execRunning = false;
+/** True after Stop until the server finishes cleanup and sends done */
+var _execStopping = false;
 /** True when Python is blocked on input() */
 var _execAwaitingInput = false;
 
@@ -110,11 +112,15 @@ function appendOutput(text, type, raw) {
 }
 
 function setRunButtonRunning(running) {
+  var busy = !!running || _execStopping;
   var runBtn = document.getElementById('runBtn');
-  if (!runBtn) return;
-  runBtn.disabled = !!running;
-  setToolbarBtnLabel(runBtn, running ? '…' : 'Run');
-  runBtn.title = running ? 'Running…' : 'Run';
+  if (runBtn) {
+    runBtn.disabled = busy;
+    setToolbarBtnLabel(runBtn, busy ? '…' : 'Run');
+    runBtn.title = _execStopping ? 'Stopping…' : (running ? 'Running…' : 'Run');
+  }
+  var stopBtn = document.getElementById('stopProgramBtn');
+  if (stopBtn) stopBtn.disabled = !running || _execStopping;
 }
 
 function closeExecStream() {
@@ -126,6 +132,7 @@ function closeExecStream() {
 
 function finishExecution(ok) {
   _execRunning = false;
+  _execStopping = false;
   _execAwaitingInput = false;
   _execSessionId = null;
   closeExecStream();
@@ -167,6 +174,10 @@ function handleExecEvent(evt) {
     case 'done':
       if (evt.success) {
         appendOutput('\n— finished —\n', 'system', true);
+      } else if (evt.reason === 'stop') {
+        appendOutput('\n— Program stopped —\n', 'system', true);
+      } else if (evt.reason === 'emergency') {
+        // stopAllRobots already showed the emergency notification.
       } else {
         appendOutput('\n— stopped —\n', 'system', true);
       }
@@ -216,7 +227,7 @@ async function runCode() {
     ? getServerUrl()
     : 'http://127.0.0.1:5080';
 
-  if (_execRunning) {
+  if (_execRunning || _execStopping) {
     appendOutput('A program is already running. Stop it first.', 'error');
     return;
   }
@@ -240,7 +251,12 @@ async function runCode() {
     }
 
     var workspace = (typeof getWorkspace === 'function') ? getWorkspace() : null;
-    var pythonCode = workspace ? Blockly.Python.workspaceToCode(workspace) : '';
+    var pythonCode = '';
+    if (workspace && window.ExtensionPython && typeof window.ExtensionPython.generate === 'function') {
+      pythonCode = window.ExtensionPython.generate(workspace, { target: 'studiox', purpose: 'execute' });
+    } else if (workspace) {
+      pythonCode = Blockly.Python.workspaceToCode(workspace);
+    }
 
     if (!pythonCode.trim()) {
       appendOutput('No code to execute. Add some blocks first!', 'error');
@@ -252,7 +268,12 @@ async function runCode() {
     var startResp = await fetch(serverUrl + '/execute/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: pythonCode })
+      body: JSON.stringify({
+        code: pythonCode,
+        extension_ids: (window.ExtensionRegistry && workspace)
+          ? window.ExtensionRegistry.collectUsedExtensionIds(workspace)
+          : []
+      })
     });
     var startResult = await startResp.json();
     if (!startResult.success || !startResult.session_id) {
@@ -262,6 +283,11 @@ async function runCode() {
     }
 
     _execSessionId = startResult.session_id;
+    // Arm only after the server has reset the preview hub for this run.
+    if (pythonCode.indexOf('__studiox_preview') !== -1 &&
+        window.CameraView && typeof window.CameraView.arm === 'function') {
+      window.CameraView.arm();
+    }
     appendOutput('— running —\n', 'system', true);
 
     // Stream events (SSE)
@@ -297,6 +323,47 @@ async function runCode() {
 }
 
 /**
+ * Stop the running program, like Teaching's Stop. Does not emergency-stop robots.
+ */
+function _executionStreamClosed() {
+  if (!_execEventSource) return true;
+  var closed = (typeof EventSource !== 'undefined') ? EventSource.CLOSED : 2;
+  return _execEventSource.readyState === closed;
+}
+
+async function stopRunningProgram() {
+  if (_execStopping) return;
+  if (!_execRunning) return;
+  var serverUrl = (typeof getServerUrl === 'function')
+    ? getServerUrl()
+    : 'http://127.0.0.1:5080';
+  _execStopping = true;
+  setRunButtonRunning(true);
+  try {
+    var resp = await fetch(serverUrl + '/execute/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'stop' }),
+      signal: AbortSignal.timeout(3000)
+    });
+    if (!resp.ok) throw new Error('Stop failed (' + resp.status + ')');
+  } catch (e) {
+    appendOutput('Stop failed: ' + (e && e.message ? e.message : e), 'error');
+    if (_execRunning) {
+      _execStopping = false;
+      setRunButtonRunning(true);
+    }
+    return;
+  }
+  // The program may have finished and closed the stream while abort was in flight.
+  if (!_execRunning) return;
+  if (_executionStreamClosed()) {
+    appendOutput('\nConnection to execution stream lost.\n', 'error', true);
+    finishExecution(false);
+  }
+}
+
+/**
  * Emergency stop: cancel all robot movements, stop debug session,
  * and abort any running Blockly code.
  */
@@ -304,8 +371,13 @@ async function stopAllRobots() {
   var serverUrl = (typeof getServerUrl === 'function')
     ? getServerUrl()
     : 'http://127.0.0.1:5080';
+  var tracked = _execRunning || _execStopping;
+  if (tracked && !_execStopping) {
+    _execStopping = true;
+    setRunButtonRunning(true);
+  }
 
-  // 1. Cancel all robot movements
+  // Robot cancel is immediate. Run stays disabled until Python cleanup finishes.
   try {
     await fetch(serverUrl + '/cmd/cancel', {
       method: 'POST',
@@ -315,30 +387,42 @@ async function stopAllRobots() {
     });
   } catch (e) { /* ignore */ }
 
-  // 2. Stop debug session if active
   if (typeof window.debugStop === 'function') {
     try { window.debugStop(); } catch (e2) { /* ignore */ }
   }
 
-  // 3. Abort running execution (unblocks input() and sets abort flag)
+  var abortError = null;
   try {
-    await fetch(serverUrl + '/execute/abort', {
+    var resp = await fetch(serverUrl + '/execute/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ reason: 'emergency' }),
       signal: AbortSignal.timeout(3000)
     });
-  } catch (e3) { /* ignore */ }
-
-  // Unblock local UI immediately
-  if (_execRunning) {
-    appendOutput('\nEMERGENCY STOP — all operations cancelled.\n', 'error', true);
-    finishExecution(false);
-  } else {
-    appendOutput('EMERGENCY STOP — all operations cancelled.', 'error');
+    if (!resp.ok) abortError = 'Stop failed (' + resp.status + ')';
+  } catch (e3) {
+    abortError = e3 && e3.message ? e3.message : String(e3);
   }
 
-  setRunButtonRunning(false);
+  if (!tracked) {
+    appendOutput('EMERGENCY STOP — all operations cancelled.', 'error');
+    return;
+  }
+
+  appendOutput('EMERGENCY STOP — all operations cancelled.', 'error');
+  if (abortError) {
+    appendOutput('Stop failed: ' + abortError, 'error');
+  }
+  if (!_execRunning) return;
+  if (abortError) {
+    _execStopping = false;
+    setRunButtonRunning(true);
+    return;
+  }
+  if (_executionStreamClosed()) {
+    appendOutput('\nConnection to execution stream lost.\n', 'error', true);
+    finishExecution(false);
+  }
 }
 
 // Init console chrome when DOM is ready

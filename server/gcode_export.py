@@ -266,6 +266,8 @@ class GcodeExporter:
                 "gcode": "",
                 "stdout": "",
                 "stderr": "",
+                "warnings": [],
+                "device_opens": [],
             }
 
         try:
@@ -373,13 +375,24 @@ class GcodeExporter:
         builtins_dict = _safe_builtins()
         orig_import = __import__
 
+        from .extension_runtime import (
+            guard_imported_module,
+            simulation_extensions,
+            simulation_note,
+            simulation_placeholder,
+            simulation_unsupported,
+        )
+
+        warnings = []
+        device_opens = []
+
         def _patched_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name == "serial" or name.startswith("serial."):
                 return mock_serial
             if name == "time":
                 return mock_time
-            # Allow real wlkatapython + stdlib
-            return orig_import(name, globals, locals, fromlist, level)
+            module = orig_import(name, globals, locals, fromlist, level)
+            return guard_imported_module(name, module, device_opens)
 
         builtins_dict["__import__"] = _patched_import
 
@@ -387,6 +400,16 @@ class GcodeExporter:
             "__builtins__": builtins_dict,
             "serial": mock_serial,
             "time": mock_time,
+            "__studiox_extensions": simulation_extensions(warnings),
+            "__studiox_simulation_note": (
+                lambda message, value=None: simulation_note(warnings, message, value)
+            ),
+            "__studiox_simulation_placeholder": (
+                lambda extension_id, operation, *args: simulation_placeholder(
+                    warnings, extension_id, operation,
+                )
+            ),
+            "__studiox_simulation_unsupported": simulation_unsupported,
         }
 
         start = time.monotonic()
@@ -462,6 +485,8 @@ class GcodeExporter:
             "stderr": stderr_buf.getvalue(),
             "timed_out": timed_out,
             "truncated": truncated,
+            "warnings": list(warnings),
+            "device_opens": list(device_opens),
         }
         if error:
             result["error"] = error

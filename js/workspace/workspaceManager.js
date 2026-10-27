@@ -459,10 +459,56 @@ function loadWorldScene() {
   }
 }
 
+var _preservedBlocksXml = null;
+var _missingBlockTypes = [];
+
+function _definedBlockMap() {
+  var map = {};
+  if (window.Blockly && Blockly.Blocks) {
+    Object.keys(Blockly.Blocks).forEach(function (type) { map[type] = true; });
+  }
+  return map;
+}
+
+function _warnMissingBlocks(types) {
+  var message = window.MissingBlocks
+    ? window.MissingBlocks.missingBlockMessage(types)
+    : ('Missing extension block: ' + (types || []).join(', '));
+  console.warn('[WorkspaceManager] ' + message);
+  if (typeof showSaveToast === 'function') showSaveToast(message, 'error');
+  if (typeof appendOutput === 'function') appendOutput(message + '\n', 'error');
+}
+
+function recheckPreservedWorkspace() {
+  if (!_preservedBlocksXml || !window.MissingBlocks) return;
+  var missing = window.MissingBlocks.missingBlockTypes(_preservedBlocksXml, _definedBlockMap());
+  if (missing.length && missing.join('\n') === _missingBlockTypes.join('\n')) return;
+  if (missing.length) {
+    _missingBlockTypes = missing;
+    _warnMissingBlocks(missing);
+    return;
+  }
+  var xmlText = _preservedBlocksXml;
+  _preservedBlocksXml = null;
+  _missingBlockTypes = [];
+  var ws = getWorkspace ? getWorkspace() : null;
+  if (!ws) return;
+  withWorkspaceLoad(function () {
+    ws.clear();
+    Blockly.Xml.domToWorkspace(Blockly.utils.xml.textToDom(xmlText), ws);
+    if (typeof applyLoopBlockColours === 'function') applyLoopBlockColours(ws);
+    if (typeof updateCodePreview === 'function') updateCodePreview();
+  });
+}
+
 function saveWorkspaceBlocks(opts) {
   opts = opts || {};
   var ws = getWorkspace ? getWorkspace() : null;
   if (!ws || !_currentWorkspacePath) return false;
+  if (_preservedBlocksXml) {
+    if (!opts.silent) _warnMissingBlocks(_missingBlockTypes);
+    return false;
+  }
 
   try {
     var xml = Blockly.Xml.workspaceToDom(ws);
@@ -487,6 +533,8 @@ function saveWorkspaceBlocks(opts) {
 }
 
 function loadWorkspaceBlocks() {
+  _preservedBlocksXml = null;
+  _missingBlockTypes = [];
   var ws = getWorkspace ? getWorkspace() : null;
   if (!ws || !_currentWorkspacePath) return;
 
@@ -501,6 +549,12 @@ function loadWorkspaceBlocks() {
 
     try {
       var xmlText = _fs.readFileSync(filePath, 'utf8');
+      var missing = window.MissingBlocks
+        ? window.MissingBlocks.missingBlockTypes(xmlText, _definedBlockMap())
+        : [];
+      _preservedBlocksXml = missing.length ? xmlText : null;
+      _missingBlockTypes = missing;
+      if (missing.length) _warnMissingBlocks(missing);
       var xmlDom = Blockly.utils.xml.textToDom(xmlText);
       ws.clear();
       Blockly.Xml.domToWorkspace(xmlDom, ws);

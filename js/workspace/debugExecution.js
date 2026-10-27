@@ -40,6 +40,11 @@ async function debugStart() {
     return;
   }
 
+  if (pythonCode.indexOf('__studiox_preview') !== -1 &&
+      window.CameraView && typeof window.CameraView.arm === 'function') {
+    window.CameraView.arm();
+  }
+
   console.log('[Debug] Line-to-block map:', _debugLineToBlock);
 
   // Clear previous output
@@ -53,7 +58,12 @@ async function debugStart() {
     var response = await fetch(serverUrl + '/debug/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: pythonCode }),
+      body: JSON.stringify({
+        code: pythonCode,
+        extension_ids: (window.ExtensionRegistry && workspace)
+          ? window.ExtensionRegistry.collectUsedExtensionIds(workspace)
+          : []
+      }),
       signal: AbortSignal.timeout(15000)
     });
 
@@ -355,7 +365,9 @@ function _setDebugMode(active) {
     stopAllBtn.disabled = false;
     stopAllBtn.style.display = '';
     stopAllBtn.hidden = false;
+    stopAllBtn.removeAttribute('data-toolbar-collapsed');
   }
+  if (typeof window.fitToolbars === 'function') window.fitToolbars();
 }
 
 /**

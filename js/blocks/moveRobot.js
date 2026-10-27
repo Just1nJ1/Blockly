@@ -873,8 +873,7 @@ function getRobotModelForVarName(varName) {
   // 2. Generated-code analysis (includes factory functions like GetMirobot)
   var analysis = (window.RobotCodeAnalysis && window.RobotCodeAnalysis.lastAnalysis) || null;
   if (!analysis || !analysis.varModels || !analysis.varModels[varName]) {
-    var codeEl = document.getElementById('code-preview');
-    var code = codeEl ? (codeEl.textContent || '') : '';
+    var code = (typeof window.simulationSource === 'function') ? window.simulationSource() : '';
     if (code && typeof window.analyzeRobotCode === 'function') {
       analysis = window.analyzeRobotCode(code);
       if (window.RobotCodeAnalysis) {

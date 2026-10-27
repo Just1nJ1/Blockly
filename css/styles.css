@@ -250,6 +250,7 @@ body.platform-darwin .titlebar {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -258,6 +259,8 @@ body.platform-darwin .titlebar {
   display: none;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 .app-view.active {
@@ -346,7 +349,9 @@ body.platform-darwin .titlebar {
   box-sizing: border-box;
   /* Match Blockly / Teaching primary toolbar height */
   min-height: 64px;
+  min-width: 0;
   flex-shrink: 0;
+  overflow: hidden;
 }
 #command-port-select {
   background: var(--cmd-select-bg);
@@ -358,7 +363,9 @@ body.platform-darwin .titlebar {
   font-size: 13px;
   outline: none;
   cursor: pointer;
-  min-width: 200px;
+  min-width: 0;
+  flex: 1 1 160px;
+  max-width: 320px;
 }
 #command-port-select:hover {
   border-color: var(--text-muted);
@@ -421,6 +428,9 @@ body.platform-darwin .titlebar {
   box-sizing: border-box;
   /* 6+52+6 padding/buttons — keep both toolbars the same height */
   min-height: 64px;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 #toolbar {
@@ -522,6 +532,22 @@ body.platform-darwin .titlebar {
 .toolbar-btn-danger {
   color: #f63c3d;
 }
+/* Emergency stop is a sibling of the scrolling controls, so clipping the
+   other buttons cannot push it off the right edge. */
+.toolbar-main {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  gap: 4px;
+}
+#command-toolbar .toolbar-main {
+  gap: 8px;
+}
+.toolbar-keep {
+  flex: 0 0 auto;
+}
 .toolbar-btn-danger:hover {
   background: rgba(246, 60, 61, 0.08);
   border-color: rgba(246, 60, 61, 0.35);
@@ -604,16 +630,84 @@ body.stage-splitting-h {
 body.stage-splitting-v {
   cursor: row-resize;
 }
-#content-stage.split-h #workspace-area,
-#content-stage.split-h #model-area,
-#content-stage.split-v #workspace-area,
-#content-stage.split-v #model-area {
+#content-stage.split-h .dock-on,
+#content-stage.split-v .dock-on {
   display: flex !important;
   visibility: visible;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
+#camera-area {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: #000;
+  position: relative;
+}
+#camera-preview-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  overflow: auto;
+  background: #111;
+}
+.camera-slot {
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
+  background: #000;
+  border: 1px solid #2c3640;
+}
+.camera-slot span {
+  padding: 4px 8px;
+  color: #c5d0d8;
+  font-size: 12px;
+}
+.camera-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  flex: 1;
+  min-height: 0;
+}
+#camera-empty {
+  color: #9aabba;
+  font-size: 13px;
+  padding: 16px;
+  flex: 0 0 auto;
+}
+#content-stage {
+  position: relative;
+}
+#dock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+#dock-overlay[hidden] {
+  display: none;
+}
+.dock-zone {
+  position: absolute;
+  display: none;
+  background: rgba(17, 137, 212, 0.28);
+  border: 2px solid #1189d4;
+  box-sizing: border-box;
+}
+.dock-zone.active {
+  display: block;
+}
+.dock-zone[data-edge="left"] { top: 0; bottom: 0; left: 0; width: 50%; }
+.dock-zone[data-edge="right"] { top: 0; bottom: 0; right: 0; width: 50%; }
+.dock-zone[data-edge="top"] { left: 0; right: 0; top: 0; height: 50%; }
+.dock-zone[data-edge="bottom"] { left: 0; right: 0; bottom: 0; height: 50%; }
 #content-stage.split-h #model-area,
 #content-stage.split-v #model-area {
   flex: 1;
@@ -644,6 +738,24 @@ body.stage-splitting-v {
   background: var(--bg-header);
   font-weight: bold;
   border-bottom: 1px solid var(--border-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.output-header-btn {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.output-header-btn:hover {
+  border-color: var(--accent);
 }
 #code-preview {
   height: 150px;
@@ -656,6 +768,9 @@ body.stage-splitting-v {
   font-size: 12px;
   white-space: pre-wrap;
   word-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 #output-content,
 #output-content.console-root {
@@ -678,6 +793,9 @@ body.stage-splitting-v {
   white-space: pre-wrap;
   word-wrap: break-word;
   color: var(--output-stdout);
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 .console-log .output-stdout {
   color: var(--output-stdout);
@@ -731,6 +849,14 @@ body.stage-splitting-v {
 .output-line.output-chunk {
   display: inline;
 }
+/* Error, result, and system lines stay blocks. A raw chunk would otherwise
+   stay inline, and its background padding paints over the next line. */
+.console-log .output-line.output-error,
+.console-log .output-line.output-result,
+.console-log .output-line.output-system {
+  display: block;
+  line-height: 1.45;
+}
 .output-stdout {
   color: var(--output-stdout);
 }
@@ -781,10 +907,55 @@ body.stage-splitting-v {
 #view-tabs-bar {
   border-bottom: 1px solid var(--border-primary);
 }
+#view-tabs-bar,
 #view-tabs {
+  display: none;
   flex: 1;
   min-width: 0;
   border-bottom: none;
+}
+.view-pane {
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.view-pane.pane-open {
+  display: flex;
+}
+.pane-tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 0 4px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-primary);
+}
+.pane-tabbar.drop-target {
+  background: rgba(17, 137, 212, 0.14);
+}
+.pane-tabbar.drop-end {
+  box-shadow: inset -3px 0 0 #1189d4;
+}
+.view-tab-btn.drop-before {
+  box-shadow: inset 3px 0 0 #1189d4;
+}
+.pane-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.pane-host > #workspace-area,
+.pane-host > #model-area,
+.pane-host > #camera-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 #view-layout-actions {
   display: flex;
@@ -1234,6 +1405,7 @@ body.stage-splitting-v {
    G-code export stays visible but is disabled by JS (file-side action). */
 #toolbar.step-mode #runBtn,
 #toolbar.step-mode #debugBtn,
+#toolbar.step-mode #stopProgramBtn,
 #toolbar.step-mode #runSelectedBtn {
   display: none;
 }
@@ -1271,6 +1443,8 @@ body.stage-splitting-v {
   padding: 6px 10px;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .debug-var-row {
   display: flex;
@@ -1301,6 +1475,8 @@ body.stage-splitting-v {
   color: var(--debug-callstack-text);
   max-height: 80px;
   overflow: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .callstack-frame {
   padding: 2px 0;
@@ -2489,6 +2665,63 @@ body.stage-splitting-v {
   background: #c62828;
   color: #fff;
 }
+.ext-dep-dialog {
+  width: 460px;
+}
+.ext-dep-lead {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+.ext-dep-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+.ext-dep-list li {
+  padding: 8px 10px;
+  border: 1px solid var(--border-faint);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: var(--bg-secondary, transparent);
+}
+.ext-dep-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ext-dep-url,
+.ext-dep-note,
+.ext-dep-need {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.ext-dep-url { margin-top: 2px; word-break: break-all; }
+.ext-dep-note { margin: 0; }
+.ext-dep-need { margin-top: 2px; font-weight: 500; }
+.ext-dep-packages,
+.ext-setup-message {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  background: var(--bg-header);
+  border: 1px solid var(--border-faint);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  margin: 0 0 12px;
+}
+.ctrl-modal-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 /* ── Settings: package table (PyCharm-style) ── */
 .app-settings-pkg-section {
   margin-top: 16px;
@@ -3564,7 +3797,7 @@ body.stage-splitting-v {
 .teach-toolbar {
   width: 100%;
   flex-wrap: nowrap;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 /* Teaching toolbar uses shared .toolbar-btn; separators only */
@@ -3875,6 +4108,25 @@ body.world-popout #content-stage {
 }
 body.world-popout #blockly-view {
   display: flex !important;
+}
+body.view-popout .titlebar,
+body.view-popout #sidebar,
+body.view-popout #command-view,
+body.view-popout #teaching-view,
+body.view-popout #toolbar,
+body.view-popout #output-panel,
+body.view-popout .pane-tabbar,
+body.view-popout-camera #model-area,
+body.view-popout-camera #workspace-area,
+body.view-popout-workspace #model-area,
+body.view-popout-workspace #camera-area,
+body.view-popout #stage-splitter {
+  display: none !important;
+}
+body.view-popout-camera #camera-area,
+body.view-popout-workspace #workspace-area {
+  display: flex !important;
+  visibility: visible;
 }
 body.world-popout #model-area {
   flex: 1 !important;

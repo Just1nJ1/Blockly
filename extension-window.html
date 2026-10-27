@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Extension</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    (function () {
+      var fs = require('fs');
+      var path = require('path');
+      var arg = (process.argv || []).filter(function (item) {
+        return item.indexOf('--studiox-extension-window=') === 0;
+      })[0] || '';
+      var opts = {};
+      if (arg) {
+        try {
+          opts = JSON.parse(decodeURIComponent(arg.slice('--studiox-extension-window='.length)));
+        } catch (e) {
+          opts = {};
+        }
+      }
+      var title = opts.title || 'Extension';
+      var basePath = opts.basePath || '';
+      var htmlRel = opts.html || '';
+      var jsRel = opts.js || '';
+      var cssRel = opts.css || '';
+      document.title = title;
+      window.STUDIOX_PORT = opts.serverPort || '5080';
+      window.EXTENSION_NAME = opts.extensionName || '';
+
+      function readRel(rel) {
+        if (!rel || !basePath) return '';
+        return fs.readFileSync(path.join(basePath, rel), 'utf8');
+      }
+
+      if (cssRel) {
+        var style = document.createElement('style');
+        style.textContent = readRel(cssRel);
+        document.head.appendChild(style);
+      }
+      if (htmlRel) {
+        document.getElementById('root').innerHTML = readRel(htmlRel);
+      }
+      if (jsRel) {
+        var script = document.createElement('script');
+        script.textContent = readRel(jsRel);
+        document.body.appendChild(script);
+      }
+    })();
+  </script>
+</body>
+</html>

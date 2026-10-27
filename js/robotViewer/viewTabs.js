@@ -678,9 +678,7 @@
   // ── Tab management ────────────────────────────────────────────
 
   function updateRobotTabs() {
-    var codeEl = document.getElementById('code-preview');
-    if (!codeEl) return;
-    var code = codeEl.textContent || '';
+    var code = (typeof window.simulationSource === 'function') ? window.simulationSource() : '';
 
     var analysis = window.analyzeRobotCode(code);
     window.RobotCodeAnalysis.lastAnalysis = analysis;
@@ -734,41 +732,12 @@
     if (activeView.indexOf('var:') === 0 || currentMode === 'individual') {
       activeView = 'world';
     }
-    if (activeView !== 'workspace' && activeView !== 'world' && activeView !== 'split') {
+    if (activeView !== 'workspace' && activeView !== 'world' && activeView !== 'camera' && activeView !== 'split') {
       activeView = 'workspace';
     }
 
-    viewTabs.innerHTML = '';
-
-    // Blockly tab (always first)
-    var blocklyBtn = document.createElement('button');
-    blocklyBtn.className = 'view-tab-btn' + (activeView === 'workspace' || activeView === 'split' ? ' active' : '');
-    blocklyBtn.dataset.view = 'workspace';
-    blocklyBtn.textContent = 'Blockly';
-    viewTabs.appendChild(blocklyBtn);
-
-    // World tab always shown (0, 1, or many robots — all listed when present)
-    var worldBtn = document.createElement('button');
-    worldBtn.className = 'view-tab-btn' + (activeView === 'world' || activeView === 'split' ? ' active' : '');
-    worldBtn.dataset.view = 'world';
-    worldBtn.textContent = 'World';
-    worldBtn.title = 'World view — drag out to open in a new window';
-    viewTabs.appendChild(worldBtn);
-
-    attachViewTabHandlers();
-
-    // Keep canvas/mode aligned with the active tab after rebuilds
-    if (!isSplit && !isPoppedMain) {
-      var newActive = viewTabs.querySelector('.view-tab-btn.active');
-      if (newActive) {
-        var want = newActive.dataset.view;
-        var needSwitch = false;
-        if (want === 'workspace' && currentMode !== 'workspace') needSwitch = true;
-        else if (want === 'world' && currentMode !== 'world') needSwitch = true;
-        if (needSwitch) {
-          handleViewTabClick(newActive);
-        }
-      }
+    if (window.ViewSplit && window.ViewSplit.renderTabs && !document.body.classList.contains('world-popout')) {
+      window.ViewSplit.renderTabs();
     }
 
     console.log('[RobotTabs] Detected variables:', uniqueVars,
@@ -823,6 +792,8 @@
   function showExclusive(view) {
     ensureRA();
     if (view === 'workspace') {
+      showCameraPane(false);
+      modelArea.style.display = '';
       if (currentMode !== 'workspace') leaveCurrentMode();
       currentMode = 'workspace';
       currentVariableName = null;
@@ -834,6 +805,8 @@
       updatePlaybackButtons();
       restoreBlocklyView();
     } else if (view === 'world') {
+      showCameraPane(false);
+      modelArea.style.display = '';
       if (currentMode !== 'world') leaveCurrentMode();
       currentMode = 'world';
       currentVariableName = null;
@@ -844,7 +817,28 @@
       showWorldRobotsSection(true);
       enterWorldMode();
       setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 80);
+    } else if (view === 'camera') {
+      if (currentMode !== 'camera') leaveCurrentMode();
+      currentMode = 'camera';
+      currentVariableName = null;
+      workspaceArea.style.display = 'none';
+      workspaceArea.classList.add('hidden');
+      modelArea.classList.remove('visible');
+      modelArea.style.display = 'none';
+      hideAllCanvases();
+      showWorldRobotsSection(false);
+      updatePlaybackButtons();
+      showCameraPane(true);
+      if (window.CameraView) window.CameraView.start();
     }
+    if (view !== 'camera' && window.CameraView) window.CameraView.stop();
+  }
+
+  function showCameraPane(on) {
+    var cam = document.getElementById('camera-area');
+    if (!cam) return;
+    cam.style.display = on ? 'flex' : 'none';
+    cam.classList.toggle('visible', !!on);
   }
 
   function showSplit() {
@@ -882,7 +876,7 @@
 
     markActiveTab(view);
 
-    if (view === 'workspace' || view === 'world') {
+    if (view === 'workspace' || view === 'world' || view === 'camera') {
       showExclusive(view);
       return;
     }
@@ -960,22 +954,6 @@
 
   window.updateRobotTabs = updateRobotTabs;
 
-  // Observe #code-preview for changes and update tabs + dry-run moves
-  var codePreviewEl = document.getElementById('code-preview');
-  if (codePreviewEl) {
-    var observer = new MutationObserver(function() {
-      updateRobotTabs();
-      // Invalidate recorded moves for old code; re-simulate shortly
-      if (window.RobotCodeAnalysis) {
-        window.RobotCodeAnalysis.recordedMovesCode = null;
-      }
-      if (typeof window.scheduleRecordedMovesRefresh === 'function') {
-        window.scheduleRecordedMovesRefresh(400);
-      }
-    });
-    observer.observe(codePreviewEl, { childList: true, characterData: true, subtree: true });
-  }
-
   // When dry-run finishes, restart animation if moves changed for the active var
   window.addEventListener('robotMovesRecorded', function(ev) {
     ensureRA();
@@ -1016,11 +994,61 @@
     }
   }, 500);
 
+  function showDock(first, second) {
+    ensureRA();
+    if (currentMode === 'workspace') saveBlocklyView();
+    var show = {};
+    show[first] = true;
+    show[second] = true;
+    if (show.world) {
+      currentMode = 'world';
+      currentVariableName = null;
+      showWorldCanvas();
+      showWorldRobotsSection(true);
+      enterWorldMode();
+    } else if (currentMode === 'world') {
+      leaveCurrentMode();
+      currentMode = show.workspace ? 'workspace' : 'camera';
+      showWorldRobotsSection(false);
+    } else {
+      currentMode = show.workspace ? 'workspace' : 'camera';
+    }
+    workspaceArea.style.display = show.workspace ? 'flex' : 'none';
+    workspaceArea.classList.toggle('hidden', !show.workspace);
+    modelArea.style.display = show.world ? 'flex' : 'none';
+    if (show.world) modelArea.classList.add('visible');
+    else modelArea.classList.remove('visible');
+    showCameraPane(!!show.camera);
+    if (show.camera && window.CameraView) window.CameraView.start();
+    else if (window.CameraView) window.CameraView.stop();
+    if (show.workspace) restoreBlocklyView();
+    setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 80);
+    document.querySelectorAll('.view-tab-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.view === first || b.dataset.view === second);
+    });
+  }
+
   window.ViewTabs = {
     showExclusive: showExclusive,
     showSplit: showSplit,
+    showDock: showDock,
     resizeBlockly: restoreBlocklyView,
     ensureWorldScene: enterWorldMode,
+    showWorldSurface: function() {
+      showWorldCanvas();
+      showWorldRobotsSection(true);
+      if (currentMode !== 'world') {
+        currentMode = 'world';
+        enterWorldMode();
+      }
+    },
+    hideWorldSurface: function() {
+      if (currentMode === 'world') {
+        leaveCurrentMode();
+        currentMode = 'workspace';
+      }
+      showWorldRobotsSection(false);
+    },
     getMode: function() { return currentMode; }
   };
 

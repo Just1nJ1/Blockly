@@ -50,6 +50,7 @@
       "node_modules/**/*",
       "resources/icons/**/*",
       "index.html",
+      "extension-window.html",
       "main.js"
     ],
     "extraResources": [
@@ -124,22 +125,16 @@
         "NSCameraUsageDescription": "StudioX uses the camera when an extension requests it.",
         "NSMicrophoneUsageDescription": "StudioX uses the microphone when an extension requests it."
       },
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
+      "target": "dmg",
       "artifactName": "WLKATA-StudioX-Mac-${arch}.${ext}",
       "extraResources": [
         {
           "from": "resources/python",
           "to": "python",
           "filter": [
-            "**/*"
+            "**/*",
+            "!**/__pycache__/**",
+            "!**/*.pyc"
           ]
         },
         {
@@ -166,7 +161,9 @@
           "from": "resources/python",
           "to": "python",
           "filter": [
-            "**/*"
+            "**/*",
+            "!**/__pycache__/**",
+            "!**/*.pyc"
           ]
         },
         {
@@ -213,7 +210,9 @@
           "from": "resources/python",
           "to": "python",
           "filter": [
-            "**/*"
+            "**/*",
+            "!**/__pycache__/**",
+            "!**/*.pyc"
           ]
         },
         {

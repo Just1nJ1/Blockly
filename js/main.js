@@ -13,8 +13,10 @@ var _blocklyInitialized = false;
 var _appliedWorkspaceInset = false;
 
 /**
- * Blockly's minimap focus-region update divides by content size. On first
- * inject / hidden workspace those metrics are 0 and it writes translate(NaN,NaN).
+ * The minimap focus rectangle is an SVG rect. Its width is the main view
+ * size times the minimap scale. Opening the preview pane resizes the
+ * workspace, and zoom-to-fit can set a negative scale when the minimap
+ * has no real block bounds yet. A negative width is invalid on a rect.
  */
 function attachBlocklyMinimap(workspace) {
   if (typeof PositionedMinimap !== 'function' || !workspace) return;
@@ -24,19 +26,29 @@ function attachBlocklyMinimap(workspace) {
     }
     var minimap = new PositionedMinimap(workspace);
     minimap.init();
+    var mm = minimap.minimapWorkspace;
+    if (mm && typeof mm.zoomToFit === 'function') {
+      var origZoom = mm.zoomToFit.bind(mm);
+      mm.zoomToFit = function() {
+        var box = mm.getBlocksBoundingBox && mm.getBlocksBoundingBox();
+        if (!box || !(box.right > box.left) || !(box.bottom > box.top)) return;
+        origZoom();
+      };
+    }
     var fr = minimap.focusRegion;
     if (fr && typeof fr.update === 'function') {
       var origUpdate = fr.update.bind(fr);
       fr.update = function() {
         try {
-          var mm = minimap.minimapWorkspace;
-          if (!mm) return;
+          var mini = minimap.minimapWorkspace;
+          if (!mini || !(mini.scale > 0)) return;
           var primaryM = workspace.getMetricsManager().getContentMetrics(true);
-          var miniM = mm.getMetricsManager().getContentMetrics(true);
-          if (!primaryM || !miniM ||
-              !primaryM.width || !miniM.width ||
-              !isFinite(primaryM.width) || !isFinite(miniM.width) ||
-              !isFinite(primaryM.height) || !isFinite(miniM.height)) {
+          var miniM = mini.getMetricsManager().getContentMetrics(true);
+          var viewM = workspace.getMetricsManager().getViewMetrics(true);
+          if (!primaryM || !miniM || !viewM ||
+              !(primaryM.width > 0) || !(miniM.width > 0) ||
+              !(primaryM.height > 0) || !(miniM.height > 0) ||
+              !(viewM.width > 0) || !(viewM.height > 0)) {
             return;
           }
           origUpdate();

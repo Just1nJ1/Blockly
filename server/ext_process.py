@@ -20,6 +20,8 @@ import urllib.error
 
 from flask import request, Response, jsonify
 
+from .http_reuse import close_host, forward_http
+
 
 # ---------------------------------------------------------------------------
 # State
@@ -56,12 +58,31 @@ def _find_free_port():
         return s.getsockname()[1]
 
 
-def register_ext(name, ext_dir, env_python, main_server_url):
+def warm_registered():
+    """Start subprocess extensions during app launch.
+
+    The first preview used to be the request that booted the camera
+    process. That request often timed out, so the camera light came on
+    in the Blockly program while no preview slot was ever stored.
+    """
+    def _run():
+        for name in list(_launch_configs):
+            try:
+                _ensure_running(name)
+            except Exception as exc:
+                print(f'[ext_process] Warm start failed for {name}: {exc}',
+                      flush=True)
+    threading.Thread(target=_run, name='ext-warm', daemon=True).start()
+
+
+def register_ext(name, ext_dir, env_python, main_server_url,
+                 dep_site_packages=None):
     """Store launch config for lazy startup (called during load_extensions)."""
     _launch_configs[name] = {
         'ext_dir': ext_dir,
         'env_python': env_python,
         'main_server_url': main_server_url,
+        'dep_site_packages': list(dep_site_packages or []),
     }
     _start_locks[name] = threading.Lock()
 
@@ -74,8 +95,11 @@ def _ensure_running(name):
     Returns the port, or None on failure.
     """
     info = _running.get(name)
-    if info and info.healthy:
+    if info and info.healthy and info.process.poll() is None:
         return info.port
+    if info and info.process.poll() is not None:
+        _running.pop(name, None)
+        close_host('127.0.0.1', info.port)
 
     lock = _start_locks.get(name)
     if not lock:
@@ -84,8 +108,11 @@ def _ensure_running(name):
     with lock:
         # Re-check after acquiring lock (another thread may have started it)
         info = _running.get(name)
-        if info and info.healthy:
+        if info and info.healthy and info.process.poll() is None:
             return info.port
+        if info and info.process.poll() is not None:
+            _running.pop(name, None)
+            close_host('127.0.0.1', info.port)
 
         # Cooldown: don't retry within 10s of a failure
         fail_ts = _last_fail.get(name, 0)
@@ -111,7 +138,8 @@ def _drain_stdout(proc, buf):
         pass
 
 
-def _start_and_wait(name, ext_dir, env_python, main_server_url):
+def _start_and_wait(name, ext_dir, env_python, main_server_url,
+                    dep_site_packages=None):
     """Spawn the subprocess and block until it responds to /health."""
     port = _find_free_port()
 
@@ -128,6 +156,8 @@ def _start_and_wait(name, ext_dir, env_python, main_server_url):
         '--main-server', main_server_url,
         '--server-root', _SERVER_ROOT,
     ]
+    for site in dep_site_packages or []:
+        cmd.extend(['--dep-site', site])
 
     print(f'[ext_process] Spawning {name}: {" ".join(cmd)}', flush=True)
 
@@ -190,6 +220,7 @@ def stop_ext_subprocess(name):
     info = _running.pop(name, None)
     if info is None:
         return
+    close_host('127.0.0.1', info.port)
     try:
         info.process.terminate()
         info.process.wait(timeout=5)
@@ -213,41 +244,75 @@ atexit.register(stop_all)
 # Reverse proxy
 # ---------------------------------------------------------------------------
 
+_FORWARD_SKIP = frozenset({
+    'host', 'content-length', 'connection', 'keep-alive',
+    'transfer-encoding', 'upgrade', 'proxy-connection', 'te', 'trailer',
+})
+
+
+def _proxy_timeout(subpath):
+    # First camera list/start can include OpenCV warmup well past 30s.
+    # A short timeout becomes "Could not list cameras" in the UI.
+    slow = subpath in ('cameras', 'start') or str(subpath).startswith('cameras')
+    return 90 if slow else 30
+
+
 def _forward_request(name, port, subpath):
     """Forward the current Flask request to the subprocess."""
-    target = f'http://127.0.0.1:{port}/{subpath}'
+    target = '/' + str(subpath or '')
     if request.query_string:
         target += '?' + request.query_string.decode()
-
     body = request.get_data() or None
     headers = {}
     for key, value in request.headers:
-        if key.lower() in ('host', 'content-length'):
+        if key.lower() in _FORWARD_SKIP:
             continue
         headers[key] = value
-
-    req = urllib.request.Request(
-        target, data=body, headers=headers, method=request.method,
-    )
-    # First camera list/start can include OpenCV warmup well past 30s;
-    # a short timeout becomes "Could not list cameras" in the UI.
-    slow = subpath in ("cameras", "start") or str(subpath).startswith("cameras")
-    timeout = 90 if slow else 30
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp_headers = {k: v for k, v in resp.headers.items()
-                            if k.lower() not in ('transfer-encoding',)}
-            return Response(resp.read(), status=resp.status,
-                            headers=resp_headers)
-    except urllib.error.HTTPError as e:
-        resp_headers = {k: v for k, v in e.headers.items()
-                        if k.lower() not in ('transfer-encoding',)}
-        return Response(e.read(), status=e.code, headers=resp_headers)
+        result = forward_http(
+            '127.0.0.1', port, request.method, target, body, headers,
+            _proxy_timeout(subpath),
+        )
     except Exception:
         return jsonify({
             'success': False,
             'error': f'Extension "{name}" is unavailable',
         }), 502
+    if result.stream:
+        return Response(result.body, status=result.status, headers=result.headers)
+    return Response(result.body, status=result.status, headers=result.headers)
+
+
+def local_extension_request(extension_id, method, relative, body, headers, timeout):
+    """Serve an adapter call without a second TCP connection back to this process.
+
+    Returns None when this process is not hosting that extension, so the
+    caller can fall back to HTTP. The remaining hop, to the extension
+    process, reuses a connection when the extension server allows it.
+    """
+    if extension_id not in _launch_configs and extension_id not in _running:
+        return None
+    path, _, query = str(relative or '').partition('?')
+    target = '/' + path.lstrip('/')
+    if query:
+        target += '?' + query
+    port = _ensure_running(extension_id)
+    if port is None:
+        message = (
+            '{"success": false, "error": "Extension \\"%s\\" failed to start"}'
+            % extension_id
+        ).encode()
+        return 502, {'Content-Type': 'application/json'}, message
+    forwarded = forward_http(
+        '127.0.0.1', port, method, target, body, headers,
+        30 if timeout is None else timeout,
+    )
+    if forwarded.stream:
+        chunks = []
+        for chunk in forwarded.body:
+            chunks.append(chunk)
+        return forwarded.status, forwarded.headers, b''.join(chunks)
+    return forwarded.status, forwarded.headers, forwarded.body
 
 
 def register_proxy_route(app, name):

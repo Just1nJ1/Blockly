@@ -4,8 +4,10 @@ Environment manager for StudioX.
 Creates and manages Python virtual environments under
 ~/.wlkata-studiox/environments/ for:
 
-  * **Extensions** — one venv per extension name (isolated; no cross-extension
-    package version conflicts). Base packages flask/flask-cors for backends.
+  * **Extensions** — one venv per extension name. An extension that lists
+    ``depends`` does not reinstall those libraries; at runtime the dependency
+    environment's site-packages are added to its ``sys.path``. Base packages
+    flask/flask-cors for backends.
   * **Blockly** — a single reserved env named ``blockly`` used when the user
     runs Blockly-generated code (import blocks). Packages installed there are
     visible to ``import`` during Run / Debug.
@@ -115,7 +117,7 @@ def _collect_orphan_deps(pip, env, initial_deps):
 
 
 def _find_uv():
-    """Locate the uv binary (installed via pip as a project dependency)."""
+    """Locate uv next to this interpreter, or anywhere on PATH."""
     base = os.path.dirname(sys.executable)
     for candidate in [
         os.path.join(base, 'uv'),
@@ -123,9 +125,9 @@ def _find_uv():
         os.path.join(base, 'Scripts', 'uv.exe'),
         os.path.join(base, 'Scripts', 'uv'),
     ]:
-        if os.path.isfile(candidate):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    return None
+    return shutil.which('uv')
 
 
 def _ensure_base_dir():
@@ -266,15 +268,17 @@ def create_environment(name, python_version=None, install_base_packages=True):
         return {'success': False, 'error': f'Environment "{name}" already exists'}
 
     uv = _find_uv()
-    if not uv:
+    # An explicit Python version needs uv to download it. The default
+    # interpreter can still create a venv with the standard library.
+    if python_version and not uv:
         return {'success': False,
-                'error': 'uv not found. It should be installed as a project dependency.'}
+                'error': 'uv was not found, so another Python version cannot be downloaded. '
+                         'Install uv, or leave the Python version empty to use the app interpreter.'}
 
-    cmd = [uv, 'venv', '--seed']
-    # Default: the embedded interpreter running this server. An explicit
-    # python_version (Settings UI) still lets uv fetch that version instead.
-    cmd += ['--python', python_version or sys.executable]
-    cmd.append(env_dir)
+    if uv:
+        cmd = [uv, 'venv', '--seed', '--python', python_version or sys.executable, env_dir]
+    else:
+        cmd = [sys.executable, '-m', 'venv', env_dir]
 
     env = _clean_env()
     try:
@@ -413,7 +417,7 @@ def uninstall_package(env_name, package, remove_deps=False):
     return {'success': True, 'removed': removed}
 
 
-def install_requirements(env_name, requirements_text):
+def _install_requirements_direct(env_name, requirements_text):
     """Install packages from requirements.txt content using ``pip install -r``."""
     env_dir = os.path.join(_ENVS_BASE, env_name)
     pip = _find_pip(env_dir)
@@ -431,17 +435,155 @@ def install_requirements(env_name, requirements_text):
             env=env, capture_output=True, text=True, timeout=600,
         )
         if result.returncode == 0:
-            return {'success': True, 'output': result.stdout}
-        return {'success': False, 'error': result.stderr or result.stdout}
+            return {'success': True, 'output': result.stdout, 'log': []}
+        return {'success': False, 'error': result.stderr or result.stdout, 'log': []}
     except subprocess.TimeoutExpired:
-        return {'success': False, 'error': 'Installation timed out (10 min)'}
+        return {'success': False, 'error': 'Installation timed out (10 min)', 'log': []}
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': str(e), 'log': []}
     finally:
         try:
             os.unlink(req_path)
         except OSError:
             pass
+
+
+def _provided_from_envs(env_names, target_env):
+    """Packages visible from dependency envs, then packages already in target.
+
+    Dependency versions win when both have the same package, so a copy that
+    was previously installed into the extension env cannot hide the shared one.
+    """
+    provided = {}
+    log = []
+    for env_name in env_names:
+        listed = list_packages(env_name)
+        if not listed.get('success'):
+            log.append('%s has no package list (%s)' % (
+                env_name, listed.get('error') or 'environment missing'))
+            continue
+        for pkg in listed.get('packages') or []:
+            norm = _normalize_pkg_name(pkg.get('name') or '')
+            if not norm or norm in provided:
+                continue
+            provided[norm] = {
+                'name': pkg.get('name') or norm,
+                'version': str(pkg.get('version') or ''),
+                'env': env_name,
+                'shared': True,
+            }
+    own = list_packages(target_env)
+    if own.get('success'):
+        for pkg in own.get('packages') or []:
+            norm = _normalize_pkg_name(pkg.get('name') or '')
+            if not norm or norm in provided:
+                continue
+            provided[norm] = {
+                'name': pkg.get('name') or norm,
+                'version': str(pkg.get('version') or ''),
+                'env': target_env,
+                'shared': False,
+            }
+    return provided, log
+
+
+_PYPI_CACHE = {}
+
+
+def _pypi_json(url):
+    if url in _PYPI_CACHE:
+        return _PYPI_CACHE[url]
+    req = urllib.request.Request(url, headers={'User-Agent': 'WLKATA-StudioX'})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode())
+    _PYPI_CACHE[url] = data
+    return data
+
+
+def _pypi_versions(name):
+    quoted = urllib.parse.quote(name)
+    data = _pypi_json('https://pypi.org/pypi/%s/json' % quoted)
+    versions = []
+    for version, files in (data.get('releases') or {}).items():
+        if not files:
+            continue
+        if all(item.get('yanked') for item in files):
+            continue
+        versions.append(version)
+    return versions
+
+
+def _pypi_requires(name, version):
+    quoted = urllib.parse.quote(name)
+    ver = urllib.parse.quote(version)
+    data = _pypi_json('https://pypi.org/pypi/%s/%s/json' % (quoted, ver))
+    return (data.get('info') or {}).get('requires_dist') or []
+
+
+def _pip_install_exact(pip, name, version):
+    env = _clean_env()
+    result = subprocess.run(
+        [pip, 'install', '--disable-pip-version-check',
+         '%s==%s' % (name, version), '--no-deps'],
+        env=env, capture_output=True, text=True, timeout=600,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or 'pip install failed').strip()
+        raise RuntimeError(detail)
+
+
+def install_requirements(env_name, requirements_text, share_from=None):
+    """Install requirements into ``env_name``.
+
+    Without ``share_from``, this is a normal ``pip install -r``.
+    With dependency environment names, packages those environments already
+    provide are reused. Each other package is pinned to a release whose
+    own requirements match those installed versions and this file.
+    """
+    if not share_from:
+        return _install_requirements_direct(env_name, requirements_text)
+
+    from .req_resolve import ResolveError, plan_install
+
+    env_dir = os.path.join(_ENVS_BASE, env_name)
+    pip = _find_pip(env_dir)
+    if not pip:
+        return {'success': False, 'error': 'Environment not found or invalid', 'log': []}
+
+    names = []
+    for item in share_from:
+        text = str(item or '').strip()
+        if text and text not in names and text != env_name:
+            names.append(text)
+
+    provided, log = _provided_from_envs(names, env_name)
+    try:
+        actions = plan_install(
+            requirements_text, provided, _pypi_versions, _pypi_requires)
+    except ResolveError as exc:
+        return {'success': False, 'error': str(exc), 'log': log}
+    except Exception as exc:
+        return {'success': False, 'error': 'Could not resolve packages: %s' % exc, 'log': log}
+
+    installed = []
+    try:
+        for action in actions:
+            if action['op'] == 'use':
+                log.append('Using %s %s from %s' % (
+                    action['name'], action['version'], action['env']))
+                continue
+            log.append('Installing %s==%s' % (action['name'], action['version']))
+            _pip_install_exact(pip, action['name'], action['version'])
+            installed.append('%s==%s' % (action['name'], action['version']))
+    except Exception as exc:
+        return {'success': False, 'error': str(exc), 'log': log, 'installed': installed}
+
+    return {
+        'success': True,
+        'log': log,
+        'installed': installed,
+        'output': '\n'.join(log),
+    }
 
 
 def search_pypi(query):
