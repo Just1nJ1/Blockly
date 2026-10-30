@@ -13,6 +13,24 @@ var _execRunning = false;
 var _execStopping = false;
 /** True when Python is blocked on input() */
 var _execAwaitingInput = false;
+/** One Code-tab switch per run, so an error event and its traceback do not switch twice. */
+var _executionErrorShown = false;
+
+function shouldRevealExecutionFailure(evt) {
+  return !!(evt && evt.type === 'error');
+}
+
+function resetExecutionErrorReveal() {
+  _executionErrorShown = false;
+}
+
+function revealExecutionError() {
+  if (_executionErrorShown) return;
+  _executionErrorShown = true;
+  if (typeof window !== 'undefined' && typeof window.showOutputPanel === 'function') {
+    window.showOutputPanel('code-output');
+  }
+}
 
 /** Update only the label under a toolbar icon button (preserve SVG). */
 function setToolbarBtnLabel(btn, label) {
@@ -170,6 +188,7 @@ function handleExecEvent(evt) {
       break;
     case 'error':
       appendOutput('Error: ' + (evt.data || 'Unknown error'), 'error');
+      if (shouldRevealExecutionFailure(evt)) revealExecutionError();
       break;
     case 'done':
       if (evt.success) {
@@ -232,6 +251,7 @@ async function runCode() {
     return;
   }
 
+  resetExecutionErrorReveal();
   ensureConsoleUi();
   clearConsole();
   setRunButtonRunning(true);
@@ -246,6 +266,7 @@ async function runCode() {
       if (!healthCheck.ok) throw new Error('Server health check failed');
     } catch (healthError) {
       appendOutput('Python server is not running. Please restart the application.', 'error');
+      revealExecutionError();
       finishExecution(false);
       return;
     }
@@ -260,6 +281,7 @@ async function runCode() {
 
     if (!pythonCode.trim()) {
       appendOutput('No code to execute. Add some blocks first!', 'error');
+      revealExecutionError();
       finishExecution(false);
       return;
     }
@@ -278,6 +300,7 @@ async function runCode() {
     var startResult = await startResp.json();
     if (!startResult.success || !startResult.session_id) {
       appendOutput('Error: ' + (startResult.error || 'Could not start'), 'error');
+      revealExecutionError();
       finishExecution(false);
       return;
     }
@@ -312,12 +335,14 @@ async function runCode() {
       // If the stream dies mid-run, surface a message once
       if (es.readyState === EventSource.CLOSED) {
         appendOutput('\nConnection to execution stream lost.\n', 'error', true);
+        revealExecutionError();
         finishExecution(false);
       }
     };
   } catch (error) {
     appendOutput('Connection Error: ' + error.message, 'error');
     appendOutput('Make sure the Python server is running.', 'stderr');
+    revealExecutionError();
     finishExecution(false);
   }
 }
@@ -423,6 +448,10 @@ async function stopAllRobots() {
     appendOutput('\nConnection to execution stream lost.\n', 'error', true);
     finishExecution(false);
   }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { shouldRevealExecutionFailure: shouldRevealExecutionFailure };
 }
 
 // Init console chrome when DOM is ready

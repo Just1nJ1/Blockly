@@ -1207,9 +1207,12 @@
       }
     }
 
+    if (typeof resetExecutionErrorReveal === 'function') resetExecutionErrorReveal();
+
     if (blockCodeParts.length === 0) {
       restoreGeneration();
       appendOutput('Selected blocks produce no code.', 'error');
+      if (typeof revealExecutionError === 'function') revealExecutionError();
       return;
     }
 
@@ -1249,9 +1252,11 @@
       } else {
         appendOutput('Error: ' + result.error, 'error');
         if (result.traceback) appendOutput(result.traceback, 'stderr');
+        if (typeof revealExecutionError === 'function') revealExecutionError();
       }
     } catch (error) {
       appendOutput('Connection Error: ' + error.message, 'error');
+      if (typeof revealExecutionError === 'function') revealExecutionError();
     }
 
     // Mark control panel as stale

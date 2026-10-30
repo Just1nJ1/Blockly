@@ -37,6 +37,10 @@ async function debugStart() {
 
   if (!pythonCode.trim()) {
     appendOutput('No code to debug. Add some blocks first!', 'error');
+    if (typeof revealExecutionError === 'function') {
+      resetExecutionErrorReveal();
+      revealExecutionError();
+    }
     return;
   }
 
@@ -46,6 +50,8 @@ async function debugStart() {
   }
 
   console.log('[Debug] Line-to-block map:', _debugLineToBlock);
+
+  if (typeof resetExecutionErrorReveal === 'function') resetExecutionErrorReveal();
 
   // Clear previous output
   var outputContent = document.getElementById('output-content');
@@ -74,10 +80,12 @@ async function debugStart() {
       _applyDebugState(result);
     } else {
       appendOutput('Debug error: ' + (result.error || 'Unknown error'), 'error');
+      if (typeof revealExecutionError === 'function') revealExecutionError();
       _setDebugMode(false);
     }
   } catch (error) {
     appendOutput('Debug connection error: ' + error.message, 'error');
+    if (typeof revealExecutionError === 'function') revealExecutionError();
     _setDebugMode(false);
   }
 }
@@ -134,10 +142,12 @@ async function debugStep() {
       }
     } else {
       appendOutput('Step error: ' + (result.error || 'Unknown error'), 'error');
+      if (typeof revealExecutionError === 'function') revealExecutionError();
       _endDebugSession();
     }
   } catch (error) {
     appendOutput('Step error: ' + error.message, 'error');
+    if (typeof revealExecutionError === 'function') revealExecutionError();
     _endDebugSession();
   } finally {
     if (stepBtn) stepBtn.disabled = false;
@@ -167,11 +177,18 @@ async function debugContinue() {
       // Show any remaining output
       if (result.stdout) appendOutput(result.stdout, 'stdout');
       if (result.stderr) appendOutput(result.stderr, 'stderr');
-      if (result.error) appendOutput('Error: ' + result.error, 'error');
+      if (result.error) {
+        appendOutput('Error: ' + result.error, 'error');
+        if (typeof revealExecutionError === 'function') revealExecutionError();
+      }
+    } else if (result.error) {
+      appendOutput('Error: ' + result.error, 'error');
+      if (typeof revealExecutionError === 'function') revealExecutionError();
     }
     _endDebugSession('Execution completed.');
   } catch (error) {
     appendOutput('Continue error: ' + error.message, 'error');
+    if (typeof revealExecutionError === 'function') revealExecutionError();
     _endDebugSession();
   }
 }
@@ -278,6 +295,7 @@ function _applyDebugState(state) {
     if (state.traceback) {
       appendOutput(state.traceback, 'stderr');
     }
+    if (typeof revealExecutionError === 'function') revealExecutionError();
   }
 }
 

@@ -182,52 +182,6 @@ function userExtensionsOnly() {
 }
 
 /**
- * Wipe user venvs and comm logs when the packaged app is a new install
- * (version or embedded Python binary changed). Leaves extensions/ alone.
- * Dev (`electron .`) never does this.
- */
-function resetRuntimeOnNewInstall() {
-  if (!isPackaged()) return;
-
-  const home = getStudioxHome();
-  const stampPath = path.join(home, '.install-id');
-
-  let pythonId = '';
-  try {
-    const pythonCmd = findPython();
-    if (pythonCmd && fs.existsSync(pythonCmd)) {
-      const st = fs.statSync(pythonCmd);
-      pythonId = [pythonCmd, st.size, Math.trunc(st.mtimeMs)].join('|');
-    }
-  } catch (e) { /* ignore */ }
-
-  const currentId = `${app.getVersion()}|${pythonId}`;
-  let previous = '';
-  try {
-    previous = fs.readFileSync(stampPath, 'utf8').trim();
-  } catch (e) { /* first launch or missing stamp */ }
-
-  if (previous === currentId) return;
-
-  ['environments', 'logs'].forEach((name) => {
-    const dir = path.join(home, name);
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      log(`Cleared ${dir} (new install)`);
-    } catch (err) {
-      logError(`Failed to clear ${dir}: ${err.message}`);
-    }
-  });
-
-  try {
-    fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(stampPath, currentId);
-  } catch (err) {
-    logError('Failed to write install stamp: ' + err.message);
-  }
-}
-
-/**
  * Install result plus dependency requirements already on disk.
  * Missing dependency extensions are listed so the UI can refuse to
  * treat the new extension as usable.
@@ -1029,8 +983,6 @@ app.whenReady().then(async () => {
     log(`App is packaged: ${isPackaged()}`);
     log(`__dirname: ${__dirname}`);
     log(`resourcesPath: ${process.resourcesPath}`);
-
-    resetRuntimeOnNewInstall();
 
     // Viewer + Three live in extraResources (like server.py); expose to renderer
     registerStudioxResourceProtocol();

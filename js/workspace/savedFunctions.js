@@ -579,24 +579,34 @@ function initSavedFunctionsDragDrop() {
 
 // ── Panel tab switching ─────────────────────────────────────────
 
+function showOutputPanel(panel) {
+  var panelBtns = document.querySelectorAll('#output-tabs .panel-tab-btn');
+  panelBtns.forEach(function(b) {
+    b.classList.toggle('active', b.dataset.panel === panel);
+  });
+  var contents = document.querySelectorAll('#output-panel .panel-tab-content');
+  contents.forEach(function(pc) { pc.classList.remove('active'); });
+  var target = document.getElementById('panel-content-' + panel);
+  if (target) target.classList.add('active');
+  if (panel === 'control-panel' && typeof window.controlPanelCheckAndRefresh === 'function') {
+    window.controlPanelCheckAndRefresh();
+  }
+}
+
 function initOutputPanelTabs() {
   var panelBtns = document.querySelectorAll('#output-tabs .panel-tab-btn');
   panelBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
-      var panel = btn.dataset.panel;
-      panelBtns.forEach(function(b) { b.classList.remove('active'); });
-      btn.classList.add('active');
-      var contents = document.querySelectorAll('#output-panel .panel-tab-content');
-      contents.forEach(function(pc) { pc.classList.remove('active'); });
-      var target = document.getElementById('panel-content-' + panel);
-      if (target) target.classList.add('active');
-
-      // Refresh control panel when its tab becomes active (only if stale)
-      if (panel === 'control-panel' && typeof window.controlPanelCheckAndRefresh === 'function') {
-        window.controlPanelCheckAndRefresh();
-      }
+      showOutputPanel(btn.dataset.panel);
     });
   });
+}
+
+if (typeof window !== 'undefined') {
+  window.showOutputPanel = showOutputPanel;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { showOutputPanel: showOutputPanel };
 }
 
 // ── Initialization ──────────────────────────────────────────────
