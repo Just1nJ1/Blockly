@@ -59,6 +59,8 @@
       errors = errors.concat(checkPaths(name || options.directoryName, options.root, contributes));
     }
     errors = errors.concat(checkDynamicFields(name, contributes.dynamicFields));
+    var blocklyDeps = blocklyRequirements(manifest);
+    if (blocklyDeps.error) errors.push(blocklyDeps.error);
     var normalized = {};
     Object.keys(manifest).forEach(function (key) { normalized[key] = manifest[key]; });
     normalized.manifestVersion = version;
@@ -162,6 +164,56 @@
     return errors;
   }
 
+  function blocklyRequirements(manifest) {
+    if (!manifest || manifest.pythonDependencies == null) return { lines: [], error: '' };
+    var spec = manifest.pythonDependencies;
+    var label = (manifest && manifest.name) || 'extension';
+    if (typeof spec !== 'object' || Array.isArray(spec)) {
+      return { lines: [], error: label + ' pythonDependencies must be an object.' };
+    }
+    var error = '';
+    Object.keys(spec).forEach(function (key) {
+      if (key !== 'blockly') {
+        error = label + ' pythonDependencies key ' + JSON.stringify(key) +
+          ' is not supported. Use "blockly" for the Blockly environment.';
+      }
+    });
+    if (error) return { lines: [], error: error };
+    if (spec.blockly == null) return { lines: [], error: '' };
+    if (!Array.isArray(spec.blockly)) {
+      return { lines: [], error: label + ' pythonDependencies.blockly must be a list of requirement strings.' };
+    }
+    var lines = [];
+    for (var i = 0; i < spec.blockly.length; i++) {
+      var line = spec.blockly[i];
+      if (typeof line !== 'string' || !line.trim()) {
+        return { lines: [], error: label + ' pythonDependencies.blockly entries must be requirement strings.' };
+      }
+      var problem = requirementLineError(line.trim());
+      if (problem) return { lines: [], error: label + ' pythonDependencies.blockly: ' + problem };
+      lines.push(line.trim());
+    }
+    return { lines: lines, error: '' };
+  }
+
+  function requirementLineError(line) {
+    if (line.charAt(0) === '-' || line.indexOf('://') >= 0 || line.indexOf('git+') >= 0 || line.indexOf('@') >= 0) {
+      return 'requirement ' + JSON.stringify(line) + ' must be a package name and version, not a URL or pip option.';
+    }
+    var body = line.split('#')[0].trim();
+    var semi = body.indexOf(';');
+    if (semi >= 0) body = body.slice(0, semi).trim();
+    var match = body.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]+\])?\s*(.*)$/);
+    if (!match) return 'could not parse requirement ' + JSON.stringify(line) + '.';
+    var spec = (match[3] || '').trim();
+    if (!spec) return '';
+    var bad = spec.split(',').some(function (part) {
+      return !/^(===|==|!=|<=|>=|~=|<|>)\s*\S+$/.test(part.trim());
+    });
+    if (bad) return 'unsupported version specifier in ' + JSON.stringify(line) + '.';
+    return '';
+  }
+
   function safeHttpPath(value) {
     if (typeof value !== 'string' || value.charAt(0) !== '/' || value.indexOf('//') === 0) return false;
     if (value.indexOf('://') >= 0 || value.indexOf('\\') >= 0) return false;
@@ -171,7 +223,8 @@
   var api = {
     HOST_EXTENSION_API: HOST_EXTENSION_API,
     validateManifest: validateManifest,
-    containedPath: containedPath
+    containedPath: containedPath,
+    blocklyRequirements: blocklyRequirements
   };
   if (typeof module !== 'undefined' && module.exports && typeof window === 'undefined') {
     module.exports = api;

@@ -1942,13 +1942,15 @@ def env_install_requirements():
         share_from = data.get('share_from') or []
         if isinstance(share_from, str):
             share_from = [share_from]
+        only_missing = bool(data.get('only_missing'))
 
         if not env_name or not requirements:
             return jsonify({'success': False,
                             'error': 'env and requirements are required'}), 400
 
         return jsonify(environments.install_requirements(
-            env_name, requirements, share_from=share_from))
+            env_name, requirements, share_from=share_from,
+            only_missing=only_missing))
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

@@ -237,8 +237,17 @@ function _readRequirements(dir) {
   return fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
 }
 
+function _blocklyRequirementsText(manifest) {
+  const { blocklyRequirements } = require('./js/extensions/manifestValidator.js');
+  const parsed = blocklyRequirements(manifest || {});
+  if (parsed.error) return { text: '', error: parsed.error };
+  return { text: parsed.lines.join('\n'), error: '' };
+}
+
 function _extensionInstallPayload(dest, manifest) {
   const requirements = _readRequirements(dest);
+  const blocklyReqs = _blocklyRequirementsText(manifest);
+  if (blocklyReqs.error) return { success: false, error: blocklyReqs.error };
   const depends = parseDependEntries(manifest.depends || manifest.dependencies);
   const discovered = discoverExtensions();
   const byName = new Map();
@@ -257,10 +266,12 @@ function _extensionInstallPayload(dest, manifest) {
     const depManifest = found.manifest || {};
     const depDepends = parseDependEntries(depManifest.depends || depManifest.dependencies);
     const depName = depManifest.name || dep.name;
+    const depBlockly = _blocklyRequirementsText(depManifest);
     dependencyRequirements[depName] = _readRequirements(found.path);
     readySetups.push({
       name: depName,
       requirements: dependencyRequirements[depName],
+      blocklyRequirements: depBlockly.error ? '' : depBlockly.text,
       shareFrom: depDepends.map((item) => item.name),
     });
   }
@@ -270,6 +281,7 @@ function _extensionInstallPayload(dest, manifest) {
     name: name,
     displayName: manifest.displayName || name,
     requirements: requirements,
+    blocklyRequirements: blocklyReqs.text,
     depends: depends,
     missingDepends: missingDepends,
     dependencyRequirements: dependencyRequirements,
@@ -1333,6 +1345,7 @@ ipcMain.handle('extensions:list', () => {
       source: ext.source || 'project',
       removable: ext.source === 'user',
       requirements: payload.requirements,
+      blocklyRequirements: payload.blocklyRequirements || '',
       depends: payload.depends,
       missingDepends: payload.missingDepends,
       dependencyRequirements: payload.dependencyRequirements,
@@ -1366,6 +1379,8 @@ ipcMain.handle('extensions:installFolder', async () => {
   } catch (e) {
     return { success: false, error: 'Invalid extension.json: ' + e.message };
   }
+  const blocklyReqs = _blocklyRequirementsText(manifest);
+  if (blocklyReqs.error) return { success: false, error: blocklyReqs.error };
 
   const name = manifest.name || path.basename(srcDir);
   const dest = path.join(getExtensionsDir(), name);
@@ -1402,6 +1417,8 @@ function _extractExtensionZip(zipPath) {
   }
 
   const manifest = JSON.parse(manifestEntry.entry.getData().toString('utf-8'));
+  const blocklyReqs = _blocklyRequirementsText(manifest);
+  if (blocklyReqs.error) return { success: false, error: blocklyReqs.error };
   const name = manifest.name || path.basename(zipPath, '.zip');
   const dest = path.join(getExtensionsDir(), name);
   const prefix = manifestEntry.prefix ? manifestEntry.prefix + '/' : '';
@@ -1498,6 +1515,7 @@ async function _installMissingDependency(entry, seen, setup) {
     setup.push({
       name: payload.name,
       requirements: payload.requirements || '',
+      blocklyRequirements: payload.blocklyRequirements || '',
       shareFrom: (payload.depends || []).map((dep) => dep.name),
     });
   }

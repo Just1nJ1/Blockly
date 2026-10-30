@@ -39,6 +39,21 @@ class ManifestSchemaTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertTrue(any('API version' in error for error in result['errors']))
 
+    def test_blockly_python_dependencies_are_optional_and_checked(self):
+        plain = validate_manifest(CAMERA_V1, directory_name='camera')
+        self.assertTrue(plain['ok'], plain['errors'])
+
+        declared = dict(CAMERA_V1)
+        declared['pythonDependencies'] = {'blockly': ['opencv-python>=4.8', 'numpy>=1.26']}
+        ok = validate_manifest(declared, directory_name='camera')
+        self.assertTrue(ok['ok'], ok['errors'])
+
+        unsafe = dict(CAMERA_V1)
+        unsafe['pythonDependencies'] = {'blockly': ['git+https://example.com/opencv.git']}
+        rejected = validate_manifest(unsafe, directory_name='camera')
+        self.assertFalse(rejected['ok'])
+        self.assertTrue(any('pythonDependencies' in error for error in rejected['errors']))
+
     def test_unknown_permission_is_rejected(self):
         manifest = dict(CAMERA_V1)
         manifest['permissions'] = ['camera', 'not-a-permission']

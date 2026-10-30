@@ -20,6 +20,6 @@ The script copies the checkout, skips `.git` and `tests`, and prints the git SHA
 
 `npm run build:mac` was not run for this migration. A packaged app still needs a rebuild before it contains this adapter. Until then, a previously installed app keeps the Camera files that were packaged with it.
 
-Extension Python environments live under `~/.wlkata-studiox/environments/<name>`. The Camera backend uses the `camera` environment. The Blockly program and the Camera runtime adapter use the StudioX process, which can see the `blockly` environment's site-packages. Those are different Pythons. Installing OpenCV into `camera` does not by itself install it for the adapter.
+Extension Python environments live under `~/.wlkata-studiox/environments/<name>`. The Camera backend uses the `camera` environment. The Blockly program and the Camera runtime adapter use the StudioX process, which can see the `blockly` environment's site-packages. Those are different Pythons. Installing OpenCV into `camera` does not by itself install it for the adapter. An extension that needs a library for its blocks declares it in `pythonDependencies.blockly`. StudioX installs that list into the Blockly environment during extension setup, and does not install it into the bundled application Python.
 
 Changing an extension's files on disk does not reload a backend that is already running. Restart StudioX after install, upgrade, disable, or uninstall.

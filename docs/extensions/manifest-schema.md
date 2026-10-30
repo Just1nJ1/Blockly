@@ -44,6 +44,8 @@ The first discovered directory wins when two copies share a `name`. Search order
 }
 ```
 
-`depends` lists other extension ids. It is not a pip requirement list. Pip dependencies belong in `requirements.txt` and are installed into that extension's own environment, separate from the Blockly process.
+`depends` lists other extension ids. It is not a pip requirement list. Packages for the extension's own process belong in `requirements.txt` and are installed into that extension's environment.
+
+`pythonDependencies.blockly` lists packages for the reserved Blockly environment, which is what blocks and saved functions import. Those lines are name and version specifiers such as `opencv-python>=4.8`. URLs and pip options are rejected. On install, StudioX creates the Blockly environment if needed and installs only lines that are missing or too old. Packages already installed there are left in place. Removing the extension does not uninstall them. This field is optional.
 
 A rejected manifest is logged and skipped. Other extensions still load.

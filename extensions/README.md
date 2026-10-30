@@ -451,6 +451,17 @@ after the extension (powered by `uv`), and installs all listed packages. Users
 can also manage environments and packages manually via **Settings >
 Environments**.
 
+Packages that blocks and saved functions import, rather than the extension
+backend, go in `extension.json` under `pythonDependencies.blockly`. StudioX
+installs those into the reserved `blockly` environment and skips a package
+that is already new enough. Removing the extension does not uninstall them.
+
+```json
+"pythonDependencies": {
+  "blockly": ["opencv-python>=4.8"]
+}
+```
+
 ---
 
 ## Blockly Workflow Templates

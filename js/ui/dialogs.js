@@ -443,7 +443,8 @@ function _fetchExtensionList(listEl) {
 
         var tdAct = document.createElement('td');
         tdAct.className = 'pkg-col-act';
-        if (ext.requirements && String(ext.requirements).trim()) {
+        var hasBlocklyPkgs = ext.blocklyRequirements && String(ext.blocklyRequirements).trim();
+        if ((ext.requirements && String(ext.requirements).trim()) || hasBlocklyPkgs) {
           var installPkgs = document.createElement('button');
           installPkgs.className = 'app-settings-btn';
           installPkgs.style.marginRight = '6px';
@@ -536,8 +537,9 @@ function _beginExtensionSetup(info) {
   info = info || {};
   var missing = info.missingDepends || [];
   var hasOwnReqs = info.requirements && String(info.requirements).trim();
+  var hasBlocklyReqs = info.blocklyRequirements && String(info.blocklyRequirements).trim();
   var ready = info.readySetups || [];
-  if (!missing.length && !hasOwnReqs && !ready.length) {
+  if (!missing.length && !hasOwnReqs && !hasBlocklyReqs && !ready.length) {
     alert('Extension "' + (info.displayName || info.name) + '" installed.\nRestart the app to load it.');
     return;
   }
@@ -630,6 +632,7 @@ function _askInstallDependencies(info) {
         name: info.name,
         displayName: info.displayName || info.name,
         requirements: info.requirements || '',
+        blocklyRequirements: info.blocklyRequirements || '',
         steps: steps.concat(downloaded),
         shareFrom: info.shareFrom || [],
         autoStart: true,
@@ -660,6 +663,19 @@ function _setupExtensionEnv(info) {
     });
   }
 
+  function collectBlocklyText() {
+    var lines = [];
+    function add(text) {
+      _reqLines(text).forEach(function (line) {
+        var trimmed = line.trim();
+        if (lines.indexOf(trimmed) < 0) lines.push(trimmed);
+      });
+    }
+    add(info.blocklyRequirements);
+    steps.forEach(function (step) { add(step.blocklyRequirements); });
+    return lines.join('\n');
+  }
+
   var overlay = document.createElement('div');
   overlay.id = 'ext-setup-overlay';
   overlay.className = 'ctrl-modal-overlay';
@@ -680,6 +696,9 @@ function _setupExtensionEnv(info) {
     });
     _reqLines(info.requirements).forEach(function (line) {
       preview.push(line.trim());
+    });
+    _reqLines(collectBlocklyText()).forEach(function (line) {
+      preview.push('Blockly: ' + line.trim());
     });
     var shareLabels = shareFrom.map(function (depName) {
       var match = (info.depends || []).filter(function (dep) { return dep.name === depName; })[0];
@@ -814,6 +833,50 @@ function _setupExtensionEnv(info) {
         });
     }
 
+    function ensureBlocklyEnv() {
+      setStage('Preparing Blockly environment\u2026', 'Packages used by blocks');
+      return fetch(serverUrl + '/env/ensure-blockly', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.success) {
+            throw new Error(data.error || 'Could not prepare the Blockly environment');
+          }
+          appendLog(data.created ? 'Created the Blockly environment.' : 'Blockly environment is ready.');
+          return data.name || 'blockly';
+        });
+    }
+
+    function installBlocklyReqs(text) {
+      var body = String(text || '').trim();
+      if (!body) return Promise.resolve();
+      return ensureBlocklyEnv().then(function (envName) {
+        var pkgs = _reqLines(body).map(function (line) { return line.trim(); });
+        setStage('Installing Blockly packages\u2026', pkgs.join(', '));
+        appendLog('Checking Blockly environment: ' + pkgs.join(', '));
+        return fetch(serverUrl + '/env/install-requirements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            env: envName,
+            requirements: body,
+            only_missing: true,
+          })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (installData) {
+            (installData.log || []).forEach(appendLog);
+            if (!installData.success) {
+              throw new Error(installData.error || 'Could not install Blockly packages');
+            }
+            if ((installData.installed || []).length) {
+              appendLog('Installed into the Blockly environment: ' + installData.installed.join(', '));
+            } else {
+              appendLog('Blockly packages already satisfy this extension.');
+            }
+          });
+      });
+    }
+
     var chain = Promise.resolve();
     steps.forEach(function (step) {
       chain = chain.then(function () {
@@ -825,11 +888,15 @@ function _setupExtensionEnv(info) {
     });
     chain
       .then(function () {
+        if (!extId || (!_reqLines(info.requirements).length && !shareFrom.length)) return;
         setStage('Creating environment\u2026', 'Setting up "' + extName + '"');
         return ensureEnv(extId);
       })
       .then(function () {
         return installReqs(extId, info.requirements, shareFrom);
+      })
+      .then(function () {
+        return installBlocklyReqs(collectBlocklyText());
       })
       .then(function () {
         showDone('Extension "' + extName + '" is ready. Restart the app to load it.', false);
@@ -874,7 +941,8 @@ function _buildSettingsEnvironmentsPage(container) {
     'for <em>import</em> blocks and Run/Debug. Install libraries there ' +
     '(e.g. <code>numpy</code>), then import them in Blockly.<br>' +
     '<strong>Extensions</strong> each get their own environment. One that depends on ' +
-    'another reuses that environment\'s packages instead of installing them again.';
+    'another reuses that environment\'s packages instead of installing them again. ' +
+    'Packages declared for blocks are installed in <code>blockly</code>.';
   container.appendChild(hint);
 
   var topBar = document.createElement('div');

@@ -76,6 +76,7 @@ def validate_manifest(manifest: Any, directory_name: str = '', root: str = '') -
     if root and isinstance(contributes, dict):
         errors.extend(_check_paths(name or directory_name, root, contributes))
         errors.extend(_check_dynamic_fields(name, contributes.get('dynamicFields')))
+    errors.extend(_check_python_dependencies(name or directory_name, manifest.get('pythonDependencies')))
 
     normalized = dict(manifest)
     normalized['manifestVersion'] = version
@@ -180,6 +181,71 @@ def _check_dynamic_fields(name: str, fields: Any) -> list:
         if spec.get('refresh') not in (None, 'onOpen', 'explicit'):
             errors.append('%s field %s refresh must be onOpen or explicit.' % (name, provider_id))
     return errors
+
+
+def blockly_requirement_lines(manifest: Any) -> list:
+    """Requirement lines declared for the Blockly environment, or []."""
+    if not isinstance(manifest, dict):
+        return []
+    spec = manifest.get('pythonDependencies')
+    if not isinstance(spec, dict):
+        return []
+    raw = spec.get('blockly') or []
+    if not isinstance(raw, list):
+        return []
+    lines = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            lines.append(item.strip())
+    return lines
+
+
+def _check_python_dependencies(name: str, spec: Any) -> list:
+    if spec is None:
+        return []
+    label = name or 'extension'
+    if not isinstance(spec, dict):
+        return ['%s pythonDependencies must be an object.' % label]
+    errors = []
+    for key in spec:
+        if key != 'blockly':
+            errors.append(
+                '%s pythonDependencies key %r is not supported. Use "blockly" for the Blockly environment.'
+                % (label, key)
+            )
+    raw = spec.get('blockly')
+    if raw is None:
+        return errors
+    if not isinstance(raw, list):
+        errors.append('%s pythonDependencies.blockly must be a list of requirement strings.' % label)
+        return errors
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            errors.append('%s pythonDependencies.blockly entries must be requirement strings.' % label)
+            continue
+        message = _requirement_line_error(item.strip())
+        if message:
+            errors.append('%s pythonDependencies.blockly: %s' % (label, message))
+    return errors
+
+
+def _requirement_line_error(line: str) -> str:
+    from .req_resolve import ResolveError, _spec_parts, parse_requirement_line
+
+    if '://' in line or 'git+' in line or '@' in line or line.startswith('-'):
+        return 'requirement %r must be a package name and version, not a URL or pip option.' % line
+    try:
+        parsed = parse_requirement_line(line)
+    except ResolveError as exc:
+        return str(exc)
+    if parsed is None:
+        return 'requirement %r is empty.' % line
+    _name, specifier, _marker = parsed
+    try:
+        _spec_parts(specifier)
+    except ResolveError as exc:
+        return str(exc)
+    return ''
 
 
 def _safe_http_path(value: Any) -> bool:

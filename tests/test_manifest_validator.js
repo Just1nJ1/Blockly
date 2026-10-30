@@ -26,6 +26,20 @@ const badPerm = validator.validateManifest(
 );
 assert.strictEqual(badPerm.ok, false);
 
+const blocklyDeps = validator.validateManifest(Object.assign({}, camera, {
+  pythonDependencies: { blockly: ['opencv-python>=4.8'] },
+}), { directoryName: 'camera' });
+assert.strictEqual(blocklyDeps.ok, true, blocklyDeps.errors.join('; '));
+assert.deepStrictEqual(
+  validator.blocklyRequirements(blocklyDeps.normalized).lines,
+  ['opencv-python>=4.8']
+);
+
+const unsafeDeps = validator.validateManifest(Object.assign({}, camera, {
+  pythonDependencies: { blockly: ['-r other.txt'] },
+}), { directoryName: 'camera' });
+assert.strictEqual(unsafeDeps.ok, false);
+
 const escape = validator.validateManifest({
   name: 'badext',
   version: '1.0.0',

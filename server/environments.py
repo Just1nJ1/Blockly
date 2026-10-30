@@ -532,15 +532,77 @@ def _pip_install_exact(pip, name, version):
         raise RuntimeError(detail)
 
 
-def install_requirements(env_name, requirements_text, share_from=None):
+def requirements_not_satisfied(env_name, requirements_text):
+    """Requirement lines whose installed version is missing or too old.
+
+    Packages that already match are listed in ``satisfied`` and are not
+    returned for installation. A missing environment is an error, not a
+    request to install into the application Python.
+    """
+    from .req_resolve import ResolveError, marker_applies, parse_requirement_line, version_satisfies
+
+    listed = list_packages(env_name)
+    if not listed.get('success'):
+        return {
+            'success': False,
+            'error': listed.get('error') or 'Environment not found or invalid',
+        }
+    installed = {}
+    for pkg in listed.get('packages') or []:
+        norm = _normalize_pkg_name(pkg.get('name') or '')
+        if norm:
+            installed[norm] = str(pkg.get('version') or '')
+    missing = []
+    satisfied = []
+    try:
+        for raw in str(requirements_text or '').splitlines():
+            parsed = parse_requirement_line(raw)
+            if parsed is None:
+                continue
+            name, specifier, marker = parsed
+            if not marker_applies(marker):
+                continue
+            current = installed.get(_normalize_pkg_name(name))
+            if current and version_satisfies(current, specifier):
+                satisfied.append('%s %s' % (name, current))
+                continue
+            missing.append(raw.split('#', 1)[0].strip())
+    except ResolveError as exc:
+        return {'success': False, 'error': str(exc)}
+    return {'success': True, 'missing': missing, 'satisfied': satisfied}
+
+
+def install_requirements(env_name, requirements_text, share_from=None, only_missing=False):
     """Install requirements into ``env_name``.
 
     Without ``share_from``, this is a normal ``pip install -r``.
+    ``only_missing`` skips lines the environment already satisfies and does
+    not remove packages that are too new or shared with another extension.
     With dependency environment names, packages those environments already
     provide are reused. Each other package is pinned to a release whose
     own requirements match those installed versions and this file.
     """
     if not share_from:
+        if only_missing:
+            checked = requirements_not_satisfied(env_name, requirements_text)
+            if not checked.get('success'):
+                return checked
+            log = ['Already satisfied: %s' % item for item in checked.get('satisfied') or []]
+            if not checked.get('missing'):
+                return {
+                    'success': True,
+                    'installed': [],
+                    'skipped': checked.get('satisfied') or [],
+                    'log': log,
+                    'output': '\n'.join(log),
+                }
+            result = _install_requirements_direct(env_name, '\n'.join(checked['missing']))
+            result['log'] = log + list(result.get('log') or [])
+            result['skipped'] = checked.get('satisfied') or []
+            if result.get('success'):
+                result['installed'] = list(checked['missing'])
+                result['log'].append('Installed ' + ', '.join(checked['missing']))
+            return result
         return _install_requirements_direct(env_name, requirements_text)
 
     from .req_resolve import ResolveError, plan_install
